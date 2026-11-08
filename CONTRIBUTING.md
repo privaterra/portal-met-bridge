@@ -15,7 +15,7 @@ Thanks for looking. This is a small, vibe-coded tool (see "How this was built" i
 npm start                 # http://localhost:8787  (or: node serve.mjs)
 npm test                  # unit tests: analysis maths, calibration pools, packet parser, CSV, hand-off round-trip
 npm i -D playwright socket.io
-npm run test:e2e          # Chrome + simulated Portal + mock machine, 20 checks; add --headed to watch
+npm run test:e2e          # Chrome + simulated Portal + mock machine, 28 checks; add --headed to watch
 npm run mock              # mock machine on :8080 (PORT=… to change); point the app at localhost:8080
 ```
 
@@ -23,7 +23,7 @@ Web Bluetooth needs Chrome or Edge and a `localhost` origin. `window.__pb` expos
 
 To work without hardware: *Add a demo shot* / *Replay a demo live* in the app; `tests/mock-meticulous.mjs` for the machine; and `tests/fake-bluetooth.js` for the Portal — paste it into the console before clicking *Connect over Bluetooth* and the app connects to a simulated Portal that emits the real 13-byte packets.
 
-When you do have a Portal, the **Connection check** panel is the thing to screenshot for a bug report: it shows which GATT step failed and the raw bytes of the last packet.
+When you do have a Portal, turn on **Settings → Logging and debug** before connecting, then attach *Download log (txt)* and a screenshot of the **Connection check** panel to the bug report: together they show which GATT step failed, the raw bytes of the last packet, and what the recorder did.
 
 ## Code shape
 
@@ -33,6 +33,7 @@ Please keep these invariants:
 
 - EC is never displayed as TDS without a calibration, and estimates always carry their flags — including which pool (bean / roaster / roast level / all) they were borrowed from.
 - `js/export.js` and `js/analysis.js` stay free of DOM access beyond canvases, so exports can be scripted.
+- New user-facing options go through the `SETTINGS` table in `js/main.js` (one line: key, default, input id), so they are persisted, exported, imported and reset together.
 - Nothing is sent anywhere but the machine on the LAN and the Portal over BLE.
 - The app never sends `/api/v1/action/*` commands unless a future feature explicitly adds a control panel with confirmation.
 

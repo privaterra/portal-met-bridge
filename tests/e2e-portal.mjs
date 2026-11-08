@@ -72,6 +72,7 @@ try {
   const browser = await chromium.launch(launch);
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, acceptDownloads: true });
   await context.addInitScript({ content: readFileSync(join(here, 'fake-bluetooth.js'), 'utf8') });
+  await context.addInitScript({ content: readFileSync(join(here, 'fake-folder.js'), 'utf8') });
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
@@ -86,7 +87,23 @@ try {
   await page.selectOption('#ctx-roast', 'light');
   await page.fill('#ctx-dose', '18');
   await page.dispatchEvent('#ctx-dose', 'change');
+  // Machine address lives under Settings; test connection there, then connect from the rail.
+  await page.click('.view-tab[data-view="settings"]');
   await page.fill('#meticulous-host', `localhost:${MOCK_PORT}`);
+  await page.dispatchEvent('#meticulous-host', 'change');
+  await page.click('#meticulous-test');
+  await page.waitForFunction(() => /OK in|No answer/.test(document.querySelector('#meticulous-test-result').textContent), null, { timeout: 10000 });
+  check('Settings → Test connection reaches the machine', /OK in \d+ ms/.test(await page.textContent('#meticulous-test-result')), (await page.textContent('#meticulous-test-result')).trim());
+  // Turn the debug log on and point it at a (fake) folder
+  await page.check('#log-enabled');
+  await page.dispatchEvent('#log-enabled', 'change');
+  await page.click('#log-pick-folder');
+  await page.waitForTimeout(300);
+  check('log folder chosen and writable', /writable/.test(await page.textContent('#log-folder')), (await page.textContent('#log-folder')).trim());
+  await page.check('#log-save-exports');
+  await page.dispatchEvent('#log-save-exports', 'change');
+  await page.click('.view-tab[data-view="shots"]');
+  check('rail shows the configured address', (await page.textContent('#meticulous-addr')).includes(`localhost:${MOCK_PORT}`));
   await page.click('#meticulous-connect');
 
   // Portal: connect through the fake
@@ -115,7 +132,8 @@ try {
   check('recording started on the machine’s extracting flag', true);
   await page.waitForTimeout(2000);
   const writes = await page.evaluate(() => window.__fakePortalWrites || []);
-  check('show-graph command written at shot start (40 00 01 2D)', JSON.stringify(writes).includes('[64,0,1,45]'), JSON.stringify(writes));
+  const dbg = await page.evaluate(() => ({ autoGraph: window.__pb.settings.autoGraph, connected: window.__pb.portal.connected, cmd: !!window.__pb.portal.command, log: window.__pb.log.ring.filter((e) => /graph|command/i.test(e.msg)).map((e) => e.msg) }));
+  check('show-graph command written at shot start (40 00 01 2D)', JSON.stringify(writes).includes('[64,0,1,45]'), JSON.stringify(writes) + ' ' + JSON.stringify(dbg));
   await page.waitForFunction(() => document.querySelector('#rec-indicator')?.dataset.state === 'idle' && document.querySelectorAll('#shot-list li').length >= 1, null, { timeout: 90000 });
   await page.waitForTimeout(6000); // machine-record swap
   const writes2 = await page.evaluate(() => window.__fakePortalWrites || []);
@@ -137,6 +155,28 @@ try {
   await page.waitForTimeout(500);
   const basis = await page.textContent('#est-flags');
   check('estimate after one reading is flagged preliminary and excludes the shot itself', /Preliminary|No refractometer/.test(basis), basis.trim().slice(0, 80));
+
+  // Exports with "save to folder" on: files land in the fake folder, no browser download
+  await page.click('#dl-csv');
+  await page.waitForTimeout(800);
+  let folderFiles = await page.evaluate(() => Object.keys(window.__fakeFolderFiles || {}));
+  check('CSV saved into the chosen folder', folderFiles.some((f) => /portal-met-bridge\/exports\/shot-.*\.csv$/.test(f)), folderFiles.join(', '));
+  await page.click('.view-tab[data-view="settings"]');
+  await page.click('#log-download');
+  await page.waitForTimeout(800);
+  folderFiles = await page.evaluate(() => Object.keys(window.__fakeFolderFiles || {}));
+  check('log file written to the folder (dated .log) and the download copy', folderFiles.some((f) => /logs\/\d{4}-\d{2}-\d{2}\.log$/.test(f)) && folderFiles.some((f) => /logs\/portal-met-bridge-log-.*\.txt$/.test(f)), folderFiles.filter((f) => f.includes('logs')).join(', '));
+  const logText = await page.evaluate(() => { const k = Object.keys(window.__fakeFolderFiles).find((f) => /\.log$/.test(f)); return window.__fakeFolderFiles[k]; });
+  check('log contains Portal GATT steps and recorder transitions', /\[portal\] state connected/.test(logText) && /\[recorder\] → recording/.test(logText) && /\[recorder\] saved shot/.test(logText), logText.split('\n').slice(0, 3).join(' | '));
+  // Settings export round-trip
+  await page.click('#settings-export');
+  await page.waitForTimeout(500);
+  const settingsDoc = await page.evaluate(() => { const k = Object.keys(window.__fakeFolderFiles).find((f) => /backups\/portal-met-bridge-settings-.*\.json$/.test(f)); return k ? JSON.parse(window.__fakeFolderFiles[k]) : null; });
+  check('settings export has the machine address and recording options', settingsDoc?.app === 'portal-met-bridge-settings' && settingsDoc.settings.meticulousHost === `localhost:${MOCK_PORT}` && 'settleSec' in settingsDoc.settings && 'logEnabled' in settingsDoc.settings, JSON.stringify(settingsDoc?.settings || {}).slice(0, 120));
+  // Back to browser downloads for the rest
+  await page.uncheck('#log-save-exports');
+  await page.dispatchEvent('#log-save-exports', 'change');
+  await page.click('.view-tab[data-view="shots"]');
 
   // Exports: JPEG, PDF, summary CSV, zip
   const keep = process.env.E2E_OUT; // set to a folder to keep the exported files

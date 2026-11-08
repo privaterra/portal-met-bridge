@@ -14,9 +14,10 @@
 export const SETTLE_SEC_DEFAULT = 6;
 
 export class ShotRecorder extends EventTarget {
-  constructor({ settleSec = SETTLE_SEC_DEFAULT } = {}) {
+  constructor({ settleSec = SETTLE_SEC_DEFAULT, autoStart = true } = {}) {
     super();
     this.settleSec = settleSec;
+    this.autoStart = autoStart; // start on the machine's extracting flag (else manual only)
     this.reset();
     this.lastExtracting = false;
     this.lastStatusWall = 0;
@@ -43,7 +44,7 @@ export class ShotRecorder extends EventTarget {
     const falling = !s.extracting && this.lastExtracting;
     this.lastExtracting = s.extracting;
 
-    if (rising && this.state !== 'recording') {
+    if (rising && this.state !== 'recording' && this.autoStart) {
       if (this.state === 'settling') this._finalize(); // back-to-back shots
       this._start({ machineTimeMs: s.timeMs, profile: s.profile, manual: false, now });
     }

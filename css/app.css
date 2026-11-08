@@ -140,6 +140,35 @@ a { color: var(--cobalt); }
 .field span small { color: var(--ink-3); font-weight: 400; margin-left: 4px; }
 .field textarea { resize: vertical; }
 
+/* settings view */
+.addr { font-size: 13px; color: var(--ink-2); margin-bottom: 8px; }
+.addr code { background: #fff; border: 1px solid var(--rule); border-radius: 3px; padding: 1px 6px; font-size: 12px; }
+.linkish { border: 0; background: none; padding: 0; color: var(--cobalt); cursor: pointer; font-size: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.panel.settings { max-width: 860px; }
+.settings-grid { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.settings-grid h3 { margin-top: 12px; }
+.settings-grid .field.narrow { max-width: 420px; }
+.settings-grid code { font-size: 12px; background: var(--paper-2); padding: 1px 4px; border-radius: 3px; }
+.row.align-end { align-items: center; }
+.check.tall { align-items: center; margin-top: 18px; }
+.log-tail {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  background: #1c2430;
+  color: #d9e0e6;
+  font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  border-radius: 3px;
+}
+.log-tail .lvl-error { color: #ff8a8a; }
+.log-tail .lvl-warn { color: #f0c36a; }
+.log-tail .lvl-debug { color: #8a94a3; }
+.log-tail:empty::after { content: "Nothing logged yet."; color: #8a94a3; }
+.badge { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 3px; background: var(--amber); color: #fff; margin-left: 8px; vertical-align: middle; }
+
 /* connection check */
 .check-list { margin-top: 8px; font-size: 12px; }
 .check-list summary { cursor: pointer; color: var(--ink-2); }

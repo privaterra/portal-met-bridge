@@ -10,6 +10,7 @@ import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionY
 import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js';
 import { makeDemoShot } from './demo.js';
 import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug } from './export.js';
+import { log, Logger, formatLine } from './log.js';
 import qrcode from '../vendor/qrcode.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -23,14 +24,17 @@ const massChart = new MassChart($('chart-mass'));
 const calChart = new CalibrationChart($('chart-cal'));
 const machinePanel = new MachinePanel($('view-machine'));
 
+const VIEWS = ['shots', 'machine', 'settings'];
+
 function showView(name) {
-  for (const v of ['shots', 'machine']) $(`view-${v}`).hidden = v !== name;
+  if (!VIEWS.includes(name)) name = 'shots';
+  for (const v of VIEWS) $(`view-${v}`).hidden = v !== name;
   document.querySelectorAll('.view-tab').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.view === name)));
   if (name === 'machine') machinePanel.onShown();
-  else {
+  else if (name === 'shots') {
     timeChart.u.setSize({ width: Math.max(320, $('chart-time').clientWidth), height: 320 });
     massChart.u.setSize({ width: Math.max(320, $('chart-mass').clientWidth), height: 300 });
-  }
+  } else if (name === 'settings') renderLogTail();
   store.setSetting('view', name);
   try {
     history.replaceState(null, '', '#' + name);
@@ -50,21 +54,171 @@ const state = {
   autoGraphSent: false,
 };
 
+// ---------------------------------------------------------------- settings --
+
+/** Every user setting, its default, and the input it is bound to. */
+const SETTINGS = {
+  meticulousHost: { def: DEFAULT_HOST, el: 'meticulous-host' },
+  autoConnectMeticulous: { def: false, el: 'set-autoconnect', bool: true },
+  autoAttach: { def: true, el: 'set-autoattach', bool: true },
+  attachDelaySec: { def: 4, el: 'set-attach-delay', num: true, min: 1, max: 60 },
+  autoRecord: { def: true, el: 'set-autorecord', bool: true },
+  settleSec: { def: 6, el: 'settle-sec', num: true, min: 0, max: 60 },
+  lagSec: { def: 0, el: 'lag-sec', num: true, min: -2, max: 3 },
+  minShotSec: { def: 5, el: 'set-min-shot', num: true, min: 0, max: 60 },
+  autoGraph: { def: true, el: 'portal-auto-graph', bool: true },
+  minCalibrationShots: { def: 5, el: 'set-min-cal', num: true, min: 2, max: 20 },
+  estimatePool: { def: 'auto', el: 'est-pool' },
+  logEnabled: { def: false, el: 'log-enabled', bool: true },
+  logLevel: { def: 'info', el: 'log-level' },
+  logPackets: { def: false, el: 'log-packets', bool: true },
+  logSaveExports: { def: false, el: 'log-save-exports', bool: true },
+  logShowTail: { def: true, el: 'log-show', bool: true },
+};
+const settings = {}; // live values
+
+async function loadSettings() {
+  for (const [key, spec] of Object.entries(SETTINGS)) {
+    let v = await store.getSetting(key, spec.def);
+    if (key === 'meticulousHost' && v === 'meticulous.local:8080') v = DEFAULT_HOST; // v0.1 default
+    settings[key] = v;
+  }
+  writeSettings();
+}
+
+/** Push the live values into the inputs. */
+function writeSettings() {
+  for (const [key, spec] of Object.entries(SETTINGS)) {
+    const el = $(spec.el);
+    if (!el) continue;
+    if (spec.bool) el.checked = !!settings[key];
+    else el.value = settings[key] ?? '';
+  }
+  $('meticulous-addr').textContent = settings.meticulousHost || DEFAULT_HOST;
+}
+
+/** Read one input, clamp, persist, apply. Returns the stored value. */
+async function settingChanged(key) {
+  const spec = SETTINGS[key];
+  const el = $(spec.el);
+  let v = spec.bool ? el.checked : el.value;
+  if (spec.num) {
+    v = Number(v);
+    if (!Number.isFinite(v)) v = spec.def;
+    v = Math.min(spec.max, Math.max(spec.min, v));
+    el.value = v;
+  }
+  if (typeof v === 'string') v = v.trim();
+  if (settings[key] === v) return v; // e.g. a second 'change' event for the same value
+  settings[key] = v;
+  await store.setSetting(key, v);
+  applySetting(key, v);
+  log.info('settings', `${key} = ${JSON.stringify(v)}`);
+  return v;
+}
+
+/** Side effects of a setting taking a new value. */
+function applySetting(key, v) {
+  switch (key) {
+    case 'meticulousHost':
+      $('meticulous-addr').textContent = v || DEFAULT_HOST;
+      if (meticulous) {
+        try {
+          const url = normalizeBaseUrl(v);
+          if (url !== meticulous.baseUrl) connectMeticulous();
+        } catch {
+          /* bad address; leave the connection alone */
+        }
+      }
+      break;
+    case 'settleSec':
+      recorder.settleSec = v;
+      break;
+    case 'autoRecord':
+      recorder.autoStart = v;
+      $('meticulous-hint').textContent = v ? 'Shots start recording on their own when the machine begins extracting.' : 'Automatic recording is off; use "Start recording now".';
+      break;
+    case 'lagSec':
+      if (state.selected) {
+        state.selected.lagSec = v;
+        store.putShot(state.selected).then(() => renderShot());
+      }
+      break;
+    case 'estimatePool':
+    case 'minCalibrationShots':
+      if (state.selected) renderShot();
+      break;
+    case 'logEnabled':
+    case 'logLevel':
+    case 'logPackets':
+      log.configure({ enabled: settings.logEnabled, level: settings.logLevel, packets: settings.logPackets });
+      renderLogStatus();
+      break;
+    case 'logShowTail':
+      renderLogTail();
+      break;
+    default:
+      break;
+  }
+}
+
+/** Settings as a portable JSON document (no file handles, no shots). */
+function settingsDocument() {
+  const out = { app: 'portal-met-bridge-settings', version: 1, exportedAt: new Date().toISOString(), settings: {}, context: readContext() };
+  for (const key of Object.keys(SETTINGS)) out.settings[key] = settings[key];
+  return out;
+}
+
+async function importSettingsDocument(doc) {
+  if (!doc || doc.app !== 'portal-met-bridge-settings' || typeof doc.settings !== 'object') throw new Error('Not a portal-met-bridge settings file.');
+  let n = 0;
+  for (const [key, spec] of Object.entries(SETTINGS)) {
+    if (!(key in doc.settings)) continue;
+    let v = doc.settings[key];
+    if (spec.bool) v = !!v;
+    else if (spec.num) {
+      v = Number(v);
+      if (!Number.isFinite(v)) continue;
+      v = Math.min(spec.max, Math.max(spec.min, v));
+    } else v = String(v ?? spec.def);
+    settings[key] = v;
+    await store.setSetting(key, v);
+    n++;
+  }
+  writeSettings();
+  for (const key of Object.keys(SETTINGS)) applySetting(key, settings[key]);
+  if (doc.context && typeof doc.context === 'object') {
+    writeContext(doc.context);
+    await store.setSetting('context', readContext());
+  }
+  return n;
+}
+
+async function resetSettings() {
+  for (const [key, spec] of Object.entries(SETTINGS)) {
+    settings[key] = spec.def;
+    await store.setSetting(key, spec.def);
+  }
+  writeSettings();
+  for (const key of Object.keys(SETTINGS)) applySetting(key, settings[key]);
+}
+
 // ------------------------------------------------------------------- setup --
 
 async function init() {
-  let host = await store.getSetting('meticulousHost', DEFAULT_HOST);
-  if (host === 'meticulous.local:8080') host = DEFAULT_HOST; // migrate the v0.1 default
-  $('meticulous-host').value = host;
-  const view = location.hash === '#machine' ? 'machine' : await store.getSetting('view', 'shots');
+  await loadSettings();
+  const hashView = location.hash.replace('#', '');
+  const view = VIEWS.includes(hashView) ? hashView : await store.getSetting('view', 'shots');
   showView(view);
   const ctx = await store.getSetting('context', {});
   writeContext(ctx);
-  $('settle-sec').value = await store.getSetting('settleSec', 6);
-  $('lag-sec').value = await store.getSetting('lagSec', 0);
-  $('portal-auto-graph').checked = await store.getSetting('autoGraph', true);
-  $('est-pool').value = await store.getSetting('estimatePool', 'auto');
-  recorder.settleSec = Number($('settle-sec').value) || 6;
+  recorder.settleSec = settings.settleSec;
+  recorder.autoStart = settings.autoRecord;
+  log.configure({ enabled: settings.logEnabled, level: settings.logLevel, packets: settings.logPackets });
+  await restoreLogFolder();
+  renderLogStatus();
+  $('about-version').textContent = 'v0.4.0';
+  log.info('app', `portal-met-bridge v0.4.0 started · ${navigator.userAgent}`);
 
   const env = await environmentCheck();
   renderPortalSteps({ secure: env.secure, api: env.api, adapter: env.adapter });
@@ -84,20 +238,23 @@ async function init() {
 // ------------------------------------------------------------- Meticulous --
 
 function connectMeticulous() {
-  const host = $('meticulous-host').value;
+  const host = settings.meticulousHost || $('meticulous-host').value;
   let url;
   try {
     url = normalizeBaseUrl(host);
   } catch {
-    toast('That address does not look right.', 'error');
+    toast('That address does not look right. Set it under Settings → Machine.', 'error');
     return;
   }
-  store.setSetting('meticulousHost', host);
-  store.setSetting('autoConnectMeticulous', true);
-  if (meticulous) meticulous.disconnect();
+  if (meticulous) {
+    machinePanel.detach();
+    meticulous.disconnect();
+  }
+  log.info('machine', `connecting to ${url}`);
   meticulous = new MeticulousClient(url);
   meticulous.addEventListener('state', (e) => {
     const d = e.detail;
+    log.info('machine', `socket ${d.state}${d.error ? ': ' + d.error : ''}${d.reason ? ' (' + d.reason + ')' : ''}`);
     setLink('meticulous', d.state, d.state === 'connected' ? url.replace(/^https?:\/\//, '') : d.state === 'error' ? d.error : d.state);
     $('meticulous-connect').disabled = d.state === 'connected' || d.state === 'connecting';
     $('meticulous-disconnect').disabled = d.state === 'disconnected';
@@ -109,16 +266,42 @@ function connectMeticulous() {
   machinePanel.attach(meticulous);
   meticulous.ping().then(
     (s) => {
-      $('meticulous-hint').textContent = `Machine answered: ${s?.totalSavedShots ?? '?'} saved shots. Recording starts on its own when extraction begins.`;
+      log.info('machine', `REST answered: ${s?.totalSavedShots ?? '?'} saved shots`);
+      $('meticulous-hint').textContent = `Machine answered: ${s?.totalSavedShots ?? '?'} saved shots. ${settings.autoRecord ? 'Recording starts on its own when extraction begins.' : 'Automatic recording is off.'}`;
     },
-    () => {
-      $('meticulous-hint').textContent = 'No answer on /api/v1. Check the address (the machine serves on port 80) and that this Mac is on the same network.';
+    (err) => {
+      log.warn('machine', `REST ping failed: ${err?.message || err}`);
+      $('meticulous-hint').textContent = 'No answer on /api/v1. Check the address under Settings (the machine serves on port 80) and that this Mac is on the same network.';
     },
   );
 }
 
+/** Settings → Test connection: REST ping + device info, without touching the live socket. */
+async function testMeticulous() {
+  const out = $('meticulous-test-result');
+  let url;
+  try {
+    url = normalizeBaseUrl($('meticulous-host').value);
+  } catch {
+    out.textContent = 'That address does not look right.';
+    return;
+  }
+  out.textContent = `Trying ${url} …`;
+  const probe = new MeticulousClient(url);
+  try {
+    const t0 = performance.now();
+    const [stats, info] = await Promise.all([probe.ping(), probe.machineInfo().catch(() => null)]);
+    const ms = Math.round(performance.now() - t0);
+    out.textContent = `OK in ${ms} ms — ${info?.name || 'machine'} · firmware ${info?.firmware || '?'} · ${stats?.totalSavedShots ?? '?'} saved shots`;
+    log.info('machine', `test ${url}: ok ${ms} ms`, { firmware: info?.firmware, shots: stats?.totalSavedShots });
+  } catch (err) {
+    out.textContent = `No answer: ${err?.message || err}. The machine serves on port 80; check the IP and that you are on the same network.`;
+    log.warn('machine', `test ${url} failed: ${err?.message || err}`);
+  }
+}
+
 function disconnectMeticulous() {
-  store.setSetting('autoConnectMeticulous', false);
+  log.info('machine', 'disconnect requested');
   machinePanel.detach();
   meticulous?.disconnect();
   meticulous = null;
@@ -127,7 +310,13 @@ function disconnectMeticulous() {
   $('meticulous-disconnect').disabled = true;
 }
 
+let lastStatusLog = 0;
 function onStatus(s) {
+  if (settings.logPackets) log.packet('machine', `status ${s.name}/${s.state} ext=${s.extracting} t=${s.timeMs} p=${fmt(s.p, 2)} f=${fmt(s.f, 2)} w=${fmt(s.w, 2)} T=${fmt(s.temp, 1)}`);
+  else if (s.extracting && performance.now() - lastStatusLog > 1000) {
+    lastStatusLog = performance.now();
+    log.debug('machine', `${s.name} t=${(s.timeMs / 1000).toFixed(1)} p=${fmt(s.p, 1)} f=${fmt(s.f, 2)} w=${fmt(s.w, 1)}`);
+  }
   setText('ro-weight', fmt(s.w, 1));
   setText('ro-flow', fmt(s.f, 2));
   setText('ro-pressure', fmt(s.p, 1));
@@ -144,6 +333,12 @@ function onStatus(s) {
 
 portal.addEventListener('state', (e) => {
   const d = e.detail;
+  log.info('portal', `state ${d.state}${d.name ? ' ' + d.name : ''}${d.error ? ': ' + d.error : ''}`);
+  // Connected (or reconnected) while a shot is already running: switch the screen now.
+  if (d.state === 'connected' && recorder.isRecording && settings.autoGraph && !state.autoGraphSent) {
+    state.autoGraphSent = true;
+    portal.showGraph().catch((err) => log.warn('portal', `show-graph failed: ${err?.message || err}`));
+  }
   setLink('portal', d.state, d.state === 'connected' ? d.name : d.state === 'lost' ? 'connection lost' : d.state);
   const on = d.state === 'connected';
   $('portal-disconnect').disabled = !on;
@@ -159,6 +354,7 @@ portal.addEventListener('measurement', (e) => {
   setText('ro-ec', m.ec.toFixed(3));
   setText('ro-tout', m.tOut.toFixed(1));
   $('portal-detail').textContent = `${portal.device?.name || 'Portal'} · status ${m.status}`;
+  log.packet('portal', `ec ${m.ec.toFixed(4)} tInt ${m.tInt.toFixed(2)} tOut ${m.tOut.toFixed(2)} status ${m.status}`);
   if (portal.packetCount % 8 === 1) {
     $('portal-raw').textContent = `Last packet: EC ${m.ec.toFixed(4)} · internal ${m.tInt.toFixed(1)} °C · outlet ${m.tOut.toFixed(1)} °C · status ${m.status} · bytes ${m.raw.map((b) => b.toString(16).padStart(2, '0')).join(' ')}`;
     $('portal-rate').textContent = `· ${portal.packetRate().toFixed(1)}/s`;
@@ -166,9 +362,12 @@ portal.addEventListener('measurement', (e) => {
   recorder.onPortal(m);
 });
 portal.addEventListener('malformed', (e) => {
-  console.warn('Portal notification of unexpected length', e.detail.byteLength);
+  log.warn('portal', `notification of unexpected length ${e.detail.byteLength} B`);
 });
-portal.addEventListener('step', (e) => renderPortalSteps(e.detail.steps));
+portal.addEventListener('step', (e) => {
+  log.debug('portal', `step ${e.detail.name}: ${JSON.stringify(e.detail.value)}`);
+  renderPortalSteps(e.detail.steps);
+});
 
 /** Paint the connection-check list: true ✓, false ✗, string = note, null = pending. */
 function renderPortalSteps(steps) {
@@ -221,6 +420,7 @@ async function connectPortal() {
 
 recorder.addEventListener('state', (e) => {
   const d = e.detail;
+  log.info('recorder', `→ ${d.state}${d.t !== undefined ? ' at ' + d.t.toFixed(1) + ' s' : ''}`);
   const ind = $('rec-indicator');
   ind.dataset.state = d.state;
   $('rec-text').textContent = d.state === 'recording' ? 'Recording' : d.state === 'settling' ? 'Pump stopped — catching the last drips' : 'Waiting for a shot';
@@ -230,16 +430,16 @@ recorder.addEventListener('state', (e) => {
     $('shot-sub').textContent = d.shot?.profileName ? `Profile: ${d.shot.profileName}` : '';
     massChart.setAnalysis(null);
     startLiveLoop();
-    if (portal.connected && $('portal-auto-graph').checked && !state.autoGraphSent) {
+    if (portal.connected && settings.autoGraph && !state.autoGraphSent) {
       state.autoGraphSent = true;
-      portal.showGraph().catch(() => {});
+      portal.showGraph().then(() => log.info('portal', 'show-graph sent')).catch((err) => log.warn('portal', `show-graph failed: ${err?.message || err}`));
     }
   }
   if (d.state === 'idle') {
     stopLiveLoop();
     if (state.autoGraphSent) {
       state.autoGraphSent = false;
-      if (portal.connected) portal.hideGraph().catch(() => {});
+      if (portal.connected) portal.hideGraph().then(() => log.info('portal', 'hide-graph sent')).catch((err) => log.warn('portal', `hide-graph failed: ${err?.message || err}`));
     }
   }
 });
@@ -248,20 +448,22 @@ recorder.addEventListener('sample', () => {
 });
 recorder.addEventListener('shot', async (e) => {
   const shot = e.detail;
-  if (shot.machine.length + shot.portal.length < 5) {
-    toast('Recording was too short to keep.');
+  if (shot.machine.length + shot.portal.length < 5 || (!shot.manual && shot.durationSec < settings.minShotSec)) {
+    log.info('recorder', `discarded a ${shot.durationSec.toFixed(1)} s recording (${shot.machine.length} machine, ${shot.portal.length} Portal samples; minimum ${settings.minShotSec} s)`);
+    toast(`Recording was shorter than ${settings.minShotSec} s and was not kept (change this under Settings → Recording).`);
     return;
   }
   shot.context = readContext();
-  shot.lagSec = Number($('lag-sec').value) || 0;
+  shot.lagSec = settings.lagSec || 0;
   recomputeCache(shot);
   await store.putShot(shot);
   await store.rememberBean(shot.context);
   await refreshBeanLists();
   await refreshShotList();
   selectShot(shot.id);
+  log.info('recorder', `saved shot ${shot.id}: ${fmt(shot.finalWeightG, 1)} g in ${fmt(shot.durationSec, 1)} s, ${shot.machine.length} machine + ${shot.portal.length} Portal samples`);
   toast(`Saved shot — ${fmt(shot.finalWeightG, 1)} g in ${fmt(shot.durationSec, 1)} s`);
-  if (meticulous?.connected && !shot.manual) setTimeout(() => refreshFromMachine(shot.id, true), 4000);
+  if (settings.autoAttach && meticulous?.connected && !shot.manual) setTimeout(() => refreshFromMachine(shot.id, true), settings.attachDelaySec * 1000);
 });
 
 function startLiveLoop() {
@@ -271,7 +473,7 @@ function startLiveLoop() {
     state.liveDirty = false;
     timeChart.setShot(recorder.shot.machine, recorder.shot.portal);
     if (recorder.shot.portal.length > 5 && recorder.shot.machine.length > 5) {
-      const a = analyzeShot(recorder.shot.portal, recorder.shot.machine.map((s) => ({ t: s.t, w: s.w })), { lagSec: Number($('lag-sec').value) || 0 });
+      const a = analyzeShot(recorder.shot.portal, recorder.shot.machine.map((s) => ({ t: s.t, w: s.w })), { lagSec: settings.lagSec || 0 });
       if (a.curve?.length) massChart.setAnalysis(a);
     }
   }, 250);
@@ -330,7 +532,7 @@ function renderShot() {
   $('ref-bev').placeholder = fmt(shot.finalWeightG, 1);
 
   timeChart.setShot(shot.machine, shot.portal);
-  const lag = Number.isFinite(shot.lagSec) ? shot.lagSec : Number($('lag-sec').value) || 0;
+  const lag = Number.isFinite(shot.lagSec) ? shot.lagSec : settings.lagSec || 0;
   state.analysis = analyzeShot(shot.portal, shot.machine.map((s) => ({ t: s.t, w: s.w })), { doseG: Number(ctx.doseG) || 0, lagSec: lag, stopTimeSec: shot.durationSec });
   massChart.setAnalysis(state.analysis);
   renderMetrics(state.analysis);
@@ -389,8 +591,8 @@ function coffeeIdentity(shot) {
 
 /** Fit + estimate for any shot under the current "estimate from" setting. */
 function estimateShot(shot, analysis, { excludeSelf = true, points } = {}) {
-  const mode = $('est-pool').value || 'auto';
-  const fit = fitForCoffee(points || allCalibrationPoints(), coffeeIdentity(shot), mode, { excludeId: excludeSelf ? shot.id : undefined });
+  const mode = settings.estimatePool || 'auto';
+  const fit = fitForCoffee(points || allCalibrationPoints(), coffeeIdentity(shot), mode, { excludeId: excludeSelf ? shot.id : undefined, minShots: settings.minCalibrationShots });
   const estimate = estimateForShot(analysis, fit, { beverageG: shot.refractometer?.beverageG || shot.finalWeightG, doseG: Number(shot.context?.doseG) || 0, poolLabel: fit.poolLabel });
   if (fit.calibrated && fit.pool !== 'bean') estimate.flags.unshift(`Borrowed from ${fit.poolLabel}: ${fit.shotCount} shot${fit.shotCount === 1 ? '' : 's'} of ${fit.distinctCoffees} coffee${fit.distinctCoffees === 1 ? '' : 's'}${fit.fallbackFrom ? ' (no readings for this bean yet)' : ''}.`);
   return { fit, estimate };
@@ -406,7 +608,7 @@ function renderCalibration() {
   $('cal-coffee').textContent = fit.pool === 'bean' ? shot.context?.beanName || 'this coffee' : fit.poolLabel;
 
   // The chart shows the chosen pool including this shot, so the point you just saved is visible.
-  const poolPts = fitForCoffee(allCalibrationPoints(), coffeeIdentity(shot), fit.pool, {}).poolPoints;
+  const poolPts = fitForCoffee(allCalibrationPoints(), coffeeIdentity(shot), fit.pool, { minShots: settings.minCalibrationShots }).poolPoints;
   calChart.setFit(poolPts, fitCalibration(poolPts), predictTds);
 
   const dl = $('cal-stats');
@@ -637,10 +839,31 @@ async function openLink() {
 
 async function downloadEnvelope() {
   const { env } = await fullLink();
-  download(`beanconqueror-${stamp(state.selected.startedAt)}.json`, JSON.stringify(env, null, 2), 'application/json');
+  deliver(`beanconqueror-${stamp(state.selected.startedAt)}.json`, JSON.stringify(env, null, 2), 'application/json');
 }
 
 // ---------------------------------------------------------- files out --
+
+/**
+ * Hand a file to the user: into the chosen folder (Settings → Logging) when
+ * "save exports there" is on and the folder is writable, else a browser download.
+ */
+async function deliver(name, data, type, sub = 'exports') {
+  if (settings.logSaveExports && log.folder && log.folderState === 'granted') {
+    try {
+      const blob = data instanceof Blob ? data : new Blob([data], { type: type || 'application/octet-stream' });
+      const path = await log.saveFile(sub, name, blob);
+      log.info('export', `saved ${path} (${blob.size} B)`);
+      toast(`Saved ${path}`);
+      return path;
+    } catch (err) {
+      log.warn('export', `folder save failed for ${name}: ${err?.message || err}; downloading instead`);
+    }
+  }
+  log.info('export', `download ${name}`);
+  download(name, data, type);
+  return null;
+}
 
 const fileBase = (shot) => `shot-${stamp(shot.startedAt)}-${slug(shot.context?.beanName)}`;
 
@@ -650,12 +873,12 @@ function shotJson(shot, analysis, estimate) {
 
 function downloadShotJson() {
   const shot = state.selected;
-  download(`${fileBase(shot)}.json`, shotJson(shot, state.analysis, state.estimate), 'application/json');
+  deliver(`${fileBase(shot)}.json`, shotJson(shot, state.analysis, state.estimate), 'application/json');
 }
 
 function downloadCsv() {
   const shot = state.selected;
-  download(`${fileBase(shot)}.csv`, shotSamplesCsv(shot), 'text/csv');
+  deliver(`${fileBase(shot)}.csv`, shotSamplesCsv(shot), 'text/csv');
 }
 
 /** Render both charts for a shot to JPEG. Charts must be visible (Shots view). */
@@ -675,8 +898,11 @@ async function downloadJpegs() {
   const shot = state.selected;
   if ($('view-shots').hidden) showView('shots');
   const { time, mass } = await chartImages(shot, state.analysis);
-  download(`${fileBase(shot)}-time.jpg`, time.blob);
-  if (mass) setTimeout(() => download(`${fileBase(shot)}-ec-vs-mass.jpg`, mass.blob), 300);
+  await deliver(`${fileBase(shot)}-time.jpg`, time.blob);
+  if (mass) {
+    await new Promise((r) => setTimeout(r, 300));
+    await deliver(`${fileBase(shot)}-ec-vs-mass.jpg`, mass.blob);
+  }
 }
 
 function reportFor(shot, analysis, estimate, fit, images) {
@@ -733,7 +959,7 @@ async function downloadPdf() {
   try {
     const images = await chartImages(shot, state.analysis);
     const blob = await shotReportPdf(reportFor(shot, state.analysis, state.estimate, state.fit, images));
-    download(`${fileBase(shot)}-report.pdf`, blob);
+    deliver(`${fileBase(shot)}-report.pdf`, blob);
   } catch (err) {
     toast('PDF failed: ' + (err.message || err), 'error');
   }
@@ -745,8 +971,8 @@ async function analyseAll() {
   const points = allCalibrationPoints(shots);
   return shots.map((shot) => {
     const analysis = recomputeCache(shot);
-    const mode = $('est-pool').value || 'auto';
-    const fit = fitForCoffee(points, coffeeIdentity(shot), mode, { excludeId: shot.id });
+    const mode = settings.estimatePool || 'auto';
+    const fit = fitForCoffee(points, coffeeIdentity(shot), mode, { excludeId: shot.id, minShots: settings.minCalibrationShots });
     const estimate = estimateForShot(analysis, fit, { beverageG: shot.refractometer?.beverageG || shot.finalWeightG, doseG: Number(shot.context?.doseG) || 0, poolLabel: fit.poolLabel });
     return { shot, analysis, estimate, fit };
   });
@@ -755,7 +981,7 @@ async function analyseAll() {
 async function downloadSummaryCsv() {
   const all = await analyseAll();
   const rows = [SUMMARY_COLUMNS, ...all.map(({ shot, analysis, estimate }) => summaryRow(shot, analysis, estimate))];
-  download(`portal-met-bridge-shots-${stamp(Date.now())}.csv`, rowsToCsv(rows), 'text/csv');
+  deliver(`portal-met-bridge-shots-${stamp(Date.now())}.csv`, rowsToCsv(rows), 'text/csv');
 }
 
 async function downloadZip() {
@@ -794,7 +1020,7 @@ async function downloadZip() {
   prog.textContent = 'Zipping…';
   try {
     const blob = await buildZip(files);
-    download(`portal-met-bridge-export-${stamp(Date.now())}.zip`, blob);
+    deliver(`portal-met-bridge-export-${stamp(Date.now())}.zip`, blob);
     prog.textContent = `${all.length} shots exported.`;
   } catch (err) {
     toast('Zip failed: ' + (err.message || err), 'error');
@@ -946,12 +1172,125 @@ function fmtDate(ms) {
 }
 let toastTimer = null;
 function toast(msg, level = 'info') {
+  if (level === 'error') log.error('ui', msg);
+  else log.debug('ui', msg);
   const el = $('toast');
   el.textContent = msg;
   el.dataset.level = level;
   el.hidden = false;
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(() => (el.hidden = true), level === 'error' ? 7000 : 4500);
+}
+
+// ------------------------------------------------------------ log & debug --
+
+const LOG_FOLDER_KEY = 'logFolderHandle';
+
+async function restoreLogFolder() {
+  try {
+    const handle = await store.getSetting(LOG_FOLDER_KEY, null);
+    if (handle && typeof handle.queryPermission === 'function') await log.useFolder(handle);
+  } catch (err) {
+    log.warn('log', `could not restore the log folder: ${err?.message || err}`);
+  }
+  renderLogFolder();
+}
+
+async function pickLogFolder() {
+  try {
+    const handle = await log.pickFolder();
+    try {
+      await store.setSetting(LOG_FOLDER_KEY, handle); // Chrome can persist the handle
+    } catch (err) {
+      log.warn('log', `folder handle could not be saved for next time: ${err?.message || err}`);
+    }
+    renderLogFolder();
+    toast(`Log folder set to ${handle.name}`);
+  } catch (err) {
+    if (err?.name === 'AbortError') return;
+    toast(err.message || String(err), 'error');
+  }
+}
+
+async function reallowLogFolder() {
+  if (!log.folder) return;
+  await log.useFolder(log.folder, { request: true });
+  renderLogFolder();
+}
+
+async function forgetLogFolder() {
+  await log.flush().catch(() => {});
+  log.forgetFolder();
+  await store.setSetting(LOG_FOLDER_KEY, null);
+  renderLogFolder();
+}
+
+function renderLogFolder() {
+  const name = log.folder?.name;
+  const st = log.folderState;
+  const el = $('log-folder');
+  $('log-reallow-folder').hidden = st !== 'prompt';
+  $('log-forget-folder').hidden = !log.folder;
+  if (!log.folder) el.textContent = Logger.canPickFolder ? 'No folder chosen — the log stays in the page.' : 'Folder picking needs Chrome or Edge; use Download instead.';
+  else if (st === 'granted') el.textContent = `${name}/portal-met-bridge/ — writable${log.bytesWritten ? ` · ${(log.bytesWritten / 1024).toFixed(1)} kB written this session` : ''}${log.lastFlushError ? ' · last error: ' + log.lastFlushError : ''}`;
+  else if (st === 'prompt') el.textContent = `${name} — Chrome needs you to re-allow it (click Re-allow folder).`;
+  else el.textContent = `${name} — not writable (${st}${log.lastFlushError ? ': ' + log.lastFlushError : ''}).`;
+  renderLogStatus();
+}
+
+function renderLogStatus() {
+  const bits = [];
+  bits.push(log.enabled ? `on · ${settings.logLevel}${settings.logPackets ? ' + packets' : ''}` : 'off');
+  bits.push(`${log.ring.length} lines in memory${log.dropped ? ` (${log.dropped} dropped)` : ''}`);
+  if (log.folder && log.folderState === 'granted') bits.push(`writing to ${log.folder.name}`);
+  $('log-status').textContent = bits.join(' · ');
+  const tab = document.querySelector('.view-tab[data-view="settings"]');
+  let badge = tab.querySelector('.badge');
+  if (log.enabled && !badge) {
+    badge = document.createElement('span');
+    badge.className = 'badge';
+    badge.textContent = 'debug';
+    tab.appendChild(badge);
+  } else if (!log.enabled && badge) badge.remove();
+}
+
+let tailDirty = true;
+function renderLogTail() {
+  const el = $('log-tail');
+  if (!settings.logShowTail || $('view-settings').hidden) return;
+  if (!tailDirty) return;
+  tailDirty = false;
+  const lines = log.ring.slice(-300);
+  el.innerHTML = lines.map((e) => `<span class="lvl-${e.level}">${esc(formatLine(e))}</span>`).join('\n');
+  el.scrollTop = el.scrollHeight;
+  renderLogStatus();
+}
+log.addEventListener('entry', () => {
+  tailDirty = true;
+});
+log.addEventListener('cleared', () => {
+  tailDirty = true;
+  renderLogTail();
+});
+log.addEventListener('folder', () => renderLogFolder());
+setInterval(renderLogTail, 700);
+window.addEventListener('beforeunload', () => {
+  log.flush().catch(() => {});
+});
+
+async function downloadLog(json = false) {
+  await log.flush().catch(() => {});
+  const name = `portal-met-bridge-log-${stamp(Date.now())}.${json ? 'jsonl' : 'txt'}`;
+  await deliver(name, json ? log.asJsonLines() : log.asText(), 'text/plain', 'logs');
+}
+
+async function copyLogTail() {
+  try {
+    await navigator.clipboard.writeText(log.ring.slice(-200).map(formatLine).join('\n'));
+    toast('Copied the last 200 log lines.');
+  } catch (err) {
+    toast('Copy failed: ' + (err.message || err), 'error');
+  }
 }
 
 // ---------------------------------------------------------------- events --
@@ -965,25 +1304,41 @@ $('portal-connect').addEventListener('click', connectPortal);
 $('portal-disconnect').addEventListener('click', () => portal.disconnect());
 $('portal-show-graph').addEventListener('click', () => portal.showGraph().then(() => toast('Portal acknowledged the graph-on command.')).catch((e) => toast(e.message, 'error')));
 $('portal-hide-graph').addEventListener('click', () => portal.hideGraph().then(() => toast('Portal acknowledged the graph-off command.')).catch((e) => toast(e.message, 'error')));
-$('portal-auto-graph').addEventListener('change', (e) => store.setSetting('autoGraph', e.target.checked));
+
 $('rec-manual').addEventListener('click', () => (recorder.isRecording ? recorder.stopManual() : recorder.startManual()));
-$('settle-sec').addEventListener('change', (e) => {
-  recorder.settleSec = Math.max(0, Number(e.target.value) || 0);
-  store.setSetting('settleSec', recorder.settleSec);
-});
-$('lag-sec').addEventListener('change', async (e) => {
-  await store.setSetting('lagSec', Number(e.target.value) || 0);
-  if (state.selected) {
-    state.selected.lagSec = Number(e.target.value) || 0;
-    await store.putShot(state.selected);
-    renderShot();
+for (const [key, spec] of Object.entries(SETTINGS)) {
+  const el = $(spec.el);
+  if (el) el.addEventListener('change', () => settingChanged(key));
+}
+document.querySelectorAll('[data-goto]').forEach((b) => b.addEventListener('click', () => showView(b.dataset.goto)));
+$('meticulous-test').addEventListener('click', testMeticulous);
+$('settings-export').addEventListener('click', () => deliver(`portal-met-bridge-settings-${stamp(Date.now())}.json`, JSON.stringify(settingsDocument(), null, 2), 'application/json', 'backups'));
+$('settings-import').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    const n = await importSettingsDocument(JSON.parse(await file.text()));
+    toast(`Imported ${n} settings.`);
+    log.info('settings', `imported ${n} settings from ${file.name}`);
+  } catch (err) {
+    toast(err.message || String(err), 'error');
   }
+  e.target.value = '';
 });
+$('settings-reset').addEventListener('click', async () => {
+  if (!confirm('Reset every setting to its default? Shots, beans and the log folder are kept.')) return;
+  await resetSettings();
+  toast('Settings reset to defaults.');
+});
+$('log-pick-folder').addEventListener('click', pickLogFolder);
+$('log-reallow-folder').addEventListener('click', reallowLogFolder);
+$('log-forget-folder').addEventListener('click', forgetLogFolder);
+$('log-download').addEventListener('click', () => downloadLog(false));
+$('log-download-json').addEventListener('click', () => downloadLog(true));
+$('log-copy').addEventListener('click', copyLogTail);
+$('log-clear').addEventListener('click', () => log.clear());
 for (const id of ['ctx-bean', 'ctx-roaster', 'ctx-roast', 'ctx-process', 'ctx-origin', 'ctx-dose', 'ctx-grind', 'ctx-grinder', 'ctx-note']) $(id).addEventListener('change', contextChanged);
-$('est-pool').addEventListener('change', async (e) => {
-  await store.setSetting('estimatePool', e.target.value);
-  if (state.selected) renderShot();
-});
+
 $('ref-tds').addEventListener('input', updateRefEy);
 $('ref-bev').addEventListener('input', updateRefEy);
 $('ref-save').addEventListener('click', saveRefractometer);
@@ -1002,7 +1357,11 @@ $('dl-summary').addEventListener('click', downloadSummaryCsv);
 $('dl-zip').addEventListener('click', downloadZip);
 $('demo-load').addEventListener('click', addDemoShot);
 $('demo-replay').addEventListener('click', replayDemoLive);
-$('backup-export').addEventListener('click', async () => download(`portal-met-bridge-backup-${stamp(Date.now())}.json`, JSON.stringify(await store.exportAll()), 'application/json'));
+$('backup-export').addEventListener('click', async () => {
+  const doc = await store.exportAll();
+  await deliver(`portal-met-bridge-backup-${stamp(Date.now())}.json`, JSON.stringify(doc), 'application/json', 'backups');
+  $('backup-note').textContent = `${doc.shots.length} shots, ${doc.beans.length} beans.`;
+});
 $('backup-import').addEventListener('change', async (e) => {
   const file = e.target.files[0];
   if (!file) return;
@@ -1018,7 +1377,7 @@ $('backup-import').addEventListener('change', async (e) => {
 });
 
 // Handy in the console while debugging: window.__pb.state.selected, .massChart.u, ...
-window.__pb = { state, store, portal, recorder, timeChart, massChart, calChart, machinePanel, get meticulous() { return meticulous; } };
+window.__pb = { state, store, portal, recorder, timeChart, massChart, calChart, machinePanel, settings, log, get meticulous() { return meticulous; } };
 
 init().catch((err) => {
   console.error(err);

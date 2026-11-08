@@ -17,6 +17,7 @@
     <nav class="views" aria-label="Views">
       <button class="view-tab" data-view="shots" aria-selected="true">Shots</button>
       <button class="view-tab" data-view="machine" aria-selected="false">Machine</button>
+      <button class="view-tab" data-view="settings" aria-selected="false">Settings</button>
     </nav>
     <div class="links">
       <span class="link" id="link-meticulous">
@@ -36,10 +37,7 @@
     <aside class="rail">
       <section class="rail-section">
         <h2>Machine</h2>
-        <label class="field">
-          <span>Address (your machine's IP or meticulous.local; it serves on port 80)</span>
-          <input id="meticulous-host" type="text" placeholder="127.0.0.1" spellcheck="false" />
-        </label>
+        <p class="addr">Address <code id="meticulous-addr">127.0.0.1</code> <button class="linkish" data-goto="settings">change</button></p>
         <div class="row">
           <button id="meticulous-connect" class="btn primary">Connect</button>
           <button id="meticulous-disconnect" class="btn" disabled>Disconnect</button>
@@ -54,7 +52,6 @@
           <button id="portal-disconnect" class="btn" disabled>Disconnect</button>
         </div>
         <label class="check"><input type="checkbox" id="portal-accept-all" /> Show every nearby Bluetooth device</label>
-        <label class="check"><input type="checkbox" id="portal-auto-graph" checked /> Switch the Portal's screen to its graph during a shot</label>
         <div class="row">
           <button id="portal-show-graph" class="btn small" disabled>Show graph</button>
           <button id="portal-hide-graph" class="btn small" disabled>Hide graph</button>
@@ -117,13 +114,6 @@
         <p class="hint">Picking a previous bean fills in its roaster, roast level, process and origin. Calibration is kept per bean name, so keep the name stable while you work through a bag.</p>
       </section>
 
-      <section class="rail-section">
-        <h2>Recording</h2>
-        <label class="field"><span>Keep capturing after the pump stops (s)</span><input id="settle-sec" type="number" min="0" max="60" step="1" value="6" /></label>
-        <label class="field"><span>Portal lag vs cup (s)</span><input id="lag-sec" type="number" min="-2" max="3" step="0.1" value="0" /></label>
-        <p class="hint">Lag shifts EC against the scale: positive if liquid reaches the Portal before the cup.</p>
-      </section>
-
       <section class="rail-section grow">
         <h2>Shots <span class="count" id="shot-count"></span></h2>
         <ul class="shot-list" id="shot-list"></ul>
@@ -131,12 +121,113 @@
           <button id="demo-load" class="btn small">Add a demo shot</button>
           <button id="demo-replay" class="btn small">Replay a demo live</button>
         </div>
-        <div class="row">
-          <button id="backup-export" class="btn small">Back up all</button>
-          <label class="btn small file"><input type="file" id="backup-import" accept="application/json" hidden />Restore</label>
-        </div>
+        <p class="hint">Backup, restore and recording options are under <button class="linkish" data-goto="settings">Settings</button>.</p>
       </section>
     </aside>
+
+    <main class="main" id="view-settings" hidden>
+      <section class="panel settings">
+        <div class="panel-head">
+          <h2>Machine</h2>
+          <span class="panel-note" id="set-machine-note"></span>
+        </div>
+        <div class="settings-grid">
+          <label class="field"><span>Address — the machine's IP or <code>meticulous.local</code>; it serves on port 80</span>
+            <input id="meticulous-host" type="text" placeholder="127.0.0.1" spellcheck="false" autocomplete="off" /></label>
+          <div class="row align-end">
+            <button id="meticulous-test" class="btn small">Test connection</button>
+            <span class="inline-note" id="meticulous-test-result"></span>
+          </div>
+          <label class="check"><input type="checkbox" id="set-autoconnect" /> Connect to the machine when the app opens</label>
+          <label class="check"><input type="checkbox" id="set-autoattach" checked /> After a shot, fetch the machine's own saved record and attach it (replaces the live samples)</label>
+          <label class="field narrow"><span>Wait before fetching it (s)</span><input id="set-attach-delay" type="number" min="1" max="60" step="1" value="4" /></label>
+        </div>
+      </section>
+
+      <section class="panel settings">
+        <div class="panel-head"><h2>Recording</h2></div>
+        <div class="settings-grid">
+          <label class="check"><input type="checkbox" id="set-autorecord" checked /> Start recording when the machine reports <code>extracting</code> (otherwise only the manual button records)</label>
+          <label class="field narrow"><span>Keep capturing after the pump stops (s) — drips</span><input id="settle-sec" type="number" min="0" max="60" step="1" value="6" /></label>
+          <label class="field narrow"><span>Portal lag vs cup (s) — positive if liquid reaches the Portal before the cup</span><input id="lag-sec" type="number" min="-2" max="3" step="0.1" value="0" /></label>
+          <label class="field narrow"><span>Discard automatic recordings shorter than (s)</span><input id="set-min-shot" type="number" min="0" max="60" step="1" value="5" /></label>
+          <label class="check"><input type="checkbox" id="portal-auto-graph" checked /> Switch the Portal's screen to its graph during a shot and back afterwards</label>
+        </div>
+      </section>
+
+      <section class="panel settings">
+        <div class="panel-head"><h2>Estimates</h2></div>
+        <div class="settings-grid">
+          <label class="field narrow"><span>Reference shots before an estimate stops being "preliminary"</span><input id="set-min-cal" type="number" min="2" max="20" step="1" value="5" /></label>
+          <p class="hint">Which shots an estimate may borrow from (this bean, same roaster, same roast level, all) is chosen on the Shots view next to the estimate.</p>
+        </div>
+      </section>
+
+      <section class="panel settings">
+        <div class="panel-head"><h2>Backup and restore</h2></div>
+        <div class="settings-grid">
+          <h3>Settings only</h3>
+          <div class="row">
+            <button id="settings-export" class="btn small">Export settings (JSON)</button>
+            <label class="btn small file"><input type="file" id="settings-import" accept="application/json" hidden />Import settings</label>
+            <button id="settings-reset" class="btn small danger">Reset to defaults</button>
+          </div>
+          <p class="hint">Machine address, recording, estimate and logging options, and the current coffee. Shots and beans are not included.</p>
+          <h3>Everything</h3>
+          <div class="row">
+            <button id="backup-export" class="btn small">Back up everything (JSON)</button>
+            <label class="btn small file"><input type="file" id="backup-import" accept="application/json" hidden />Restore</label>
+            <span class="inline-note" id="backup-note"></span>
+          </div>
+          <p class="hint">All shots with their samples, refractometer readings, the bean library and the settings. Restoring merges by shot id; nothing is deleted.</p>
+          <p class="hint">Files go to Chrome's download folder unless a save folder is set below.</p>
+        </div>
+      </section>
+
+      <section class="panel settings">
+        <div class="panel-head">
+          <h2>Logging and debug</h2>
+          <span class="panel-note" id="log-status"></span>
+        </div>
+        <div class="settings-grid">
+          <label class="check"><input type="checkbox" id="log-enabled" /> Keep a debug log (connections, GATT steps, recorder transitions, exports, errors)</label>
+          <div class="row two">
+            <label class="field"><span>Detail</span>
+              <select id="log-level">
+                <option value="error">errors only</option>
+                <option value="warn">warnings and errors</option>
+                <option value="info" selected>events (recommended)</option>
+                <option value="debug">everything</option>
+              </select>
+            </label>
+            <label class="check tall"><input type="checkbox" id="log-packets" /> Also log every Portal packet and machine status (~20 lines/s)</label>
+          </div>
+          <h3>Where to save</h3>
+          <p class="hint">By default the log lives in this page (last 5,000 lines) and you download it. Pick a folder on this Mac and the log is appended to <code>portal-met-bridge/logs/&lt;date&gt;.log</code> there as it happens; exports and backups can be saved there too. Chrome asks you to re-allow the folder after a restart.</p>
+          <div class="row">
+            <button id="log-pick-folder" class="btn small">Choose folder…</button>
+            <button id="log-reallow-folder" class="btn small" hidden>Re-allow folder</button>
+            <button id="log-forget-folder" class="btn small" hidden>Stop using folder</button>
+            <span class="inline-note" id="log-folder"></span>
+          </div>
+          <label class="check"><input type="checkbox" id="log-save-exports" /> Save exports and backups to that folder instead of downloading them</label>
+          <h3>Log</h3>
+          <div class="row">
+            <button id="log-download" class="btn small">Download log (txt)</button>
+            <button id="log-download-json" class="btn small">Download log (JSON lines)</button>
+            <button id="log-copy" class="btn small">Copy last 200 lines</button>
+            <button id="log-clear" class="btn small">Clear</button>
+            <label class="check"><input type="checkbox" id="log-show" checked /> Live tail</label>
+          </div>
+          <pre class="log-tail" id="log-tail"></pre>
+        </div>
+      </section>
+
+      <section class="panel settings">
+        <div class="panel-head"><h2>About</h2></div>
+        <p class="hint">portal-met-bridge <span id="about-version"></span> · MIT · <a href="https://github.com/privaterra/portal-met-bridge" target="_blank" rel="noopener">github.com/privaterra/portal-met-bridge</a> · vibe-coded with Claude; see the README for how. Nothing leaves this computer except requests to the machine on your LAN and the Portal over Bluetooth.</p>
+      </section>
+    </main>
 
     <main class="main" id="view-machine" hidden>
       <section class="panel">

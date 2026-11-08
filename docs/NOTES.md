@@ -60,6 +60,13 @@ Source: [graphefruit/Beanconqueror](https://github.com/graphefruit/Beanconqueror
 - No background mode: notifications stop when the tab is discarded, so keep the tab open during a shot.
 - `tests/fake-bluetooth.js` is a minimal stand-in for `navigator.bluetooth` that covers exactly this surface, useful for any other Portal tool written for the browser.
 
+## File System Access API (log / export folder)
+
+- `window.showDirectoryPicker({ mode: 'readwrite' })` needs a user gesture and Chrome/Edge; Safari and Firefox have no directory picker, so the app falls back to downloads.
+- The returned `FileSystemDirectoryHandle` is structured-cloneable and is stored in IndexedDB; after a browser restart `queryPermission()` returns `prompt` and `requestPermission()` must again run inside a user gesture (the *Re-allow folder* button).
+- Appending: `getFileHandle(name, { create: true })`, `createWritable({ keepExistingData: true })`, `seek(file.size)`, `write`, `close`. The log flushes every 3 s and on `beforeunload`.
+- `tests/fake-folder.js` stands in for all of this in tests.
+
 ## Ideas not done yet
 
 - Read the Portal's status byte on a real unit to decide whether it is a battery percentage.

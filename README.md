@@ -8,6 +8,7 @@ It runs entirely on your machine: no account, no cloud, nothing leaves the LAN. 
 
 ![Shots view](docs/screenshot-shots.png)
 ![Machine view](docs/screenshot-machine.png)
+![Settings view](docs/screenshot-settings.png)
 
 ## What the Portal actually measures
 
@@ -37,14 +38,26 @@ cd portal-met-bridge
 
 Then, in the app:
 
-1. **Machine** → enter the machine's IP → Connect. The dot turns green when the socket.io stream is up; the hint shows the machine's saved-shot count once `/api/v1` answers.
+1. **Settings → Machine**: enter the machine's IP (or `meticulous.local`) and press *Test connection* — it answers with the machine's name, firmware and saved-shot count. Back on **Shots**, press *Connect*. The dot turns green when the socket.io stream is up.
 2. **Portal** → Connect over Bluetooth → pick the Portal in Chrome's chooser. The live EC readout starts, and the **Connection check** under the button turns each step green: secure page, Web Bluetooth, adapter, device chosen, GATT, service `0x7400`, measurement `0x7410`, command `0x7420`, notifications, 13-byte packets with their rate and raw bytes. If a step fails it says which and why.
 3. Fill in **This coffee**. The bean field is a pick-list of every bean you have used before (type to search, or type a new one); picking one fills in its roaster, roast level, process and origin. Calibration is grouped by bean name.
 4. Pull a shot. Recording starts when the machine reports `extracting`, continues for a few seconds after the pump stops (drips), then saves. About four seconds later the app fetches the machine's own saved record of the shot (with stage names: Saturate, Bloom, Gentle Rebuild, Extract…) and swaps it in for the live samples.
 5. Measure the cup with your refractometer and type the TDS into **Refractometer reading for this shot** → Save. The calibration for that bean updates, and every other shot of the same bean gets an estimate.
 6. **Estimate from** chooses what an estimate may be based on when this exact bean has no readings yet: *auto* tries this bean, then the same roaster, then the same roast level, then all your coffees, and takes the first pool with five reference shots (or the most specific one with any). The estimate always says which pool it used and how many shots and coffees were behind it; you can pin it to *this bean only* if you would rather see "no calibration" than a borrowed number.
 7. **Send to Beanconqueror**: scan the QR with the phone, or *Copy full link* and send it to yourself (Messages, Notes, AirDrop) and tap it there.
-8. **Files**: per shot — CSV of every sample, JSON of the raw shot with its analysis, both graphs as JPEG, and a one-page PDF report. For all shots — a summary CSV (one row per shot: EC metrics, refractometer reading, estimate and its basis) and a zip with every shot's files plus a full backup.
+8. **Files**: per shot — CSV of every sample, JSON of the raw shot with its analysis, both graphs as JPEG, and a one-page PDF report. For all shots — a summary CSV (one row per shot: EC metrics, refractometer reading, estimate and its basis) and a zip with every shot's files plus a full backup. Files go to Chrome's download folder, or to a folder you choose under Settings.
+
+### Settings
+
+The **Settings** tab (top bar) holds everything that is not about one shot:
+
+- **Machine** — address, *Test connection*, connect on open, and whether to fetch the machine's own saved record after each shot (and how long to wait for it).
+- **Recording** — automatic start on `extracting` (or manual only), the settle window after the pump stops, the Portal-vs-cup lag, the minimum length an automatic recording must have to be kept, and whether to switch the Portal's screen to its graph during a shot.
+- **Estimates** — how many reference shots an estimate needs before it stops being *preliminary*.
+- **Backup and restore** — *Export settings* / *Import settings* (a small JSON: address, recording, estimate and logging options, current coffee), *Reset to defaults*, and *Back up everything* / *Restore* (all shots with samples and readings, the bean library, settings; restore merges by shot id).
+- **Logging and debug** — turn on a debug log (connections, GATT steps, recorder transitions, exports, errors; optionally every Portal packet and machine status), choose the detail level, and decide **where it goes**: by default the last 5,000 lines live in the page and you download them as text or JSON lines; or *Choose folder…* to pick a folder on your Mac (Chrome's folder picker) and the log is appended there as `portal-met-bridge/logs/<date>.log` while you brew, with exports and backups optionally saved to the same folder instead of downloaded. A live tail shows the last 300 lines. Chrome asks you to re-allow the folder after it restarts; the *Re-allow folder* button handles that.
+
+The connection check, the live tail and *Download log* together are what to send with a bug report.
 
 The **Machine** tab (top bar) shows live state, stage, shot timer, setpoints, boiler/brew-head/bar/tube/motor temperatures with a five-minute chart, heater and motor power, the profiles on the machine with their images and variables, shot statistics by profile, device info (firmware, image channel, serial, component versions), Wi-Fi status and health, notifications, and read-only settings.
 
@@ -68,7 +81,7 @@ npm run test:e2e         # real Chrome + simulated Portal + mock machine: connec
 npm run mock             # a stand-in machine on :8080 for manual poking
 ```
 
-The end-to-end test injects `tests/fake-bluetooth.js`, a stand-in `navigator.bluetooth` that behaves like a Portal (service `0x7400`, 13-byte notifications at 8 Hz, command acks), and checks 20 things from the chooser filter through to the zip export. It proves the code path; a physical Portal still has to prove the protocol.
+The end-to-end test injects `tests/fake-bluetooth.js`, a stand-in `navigator.bluetooth` that behaves like a Portal (service `0x7400`, 13-byte notifications at 8 Hz, command acks), and `tests/fake-folder.js`, an in-memory folder picker, and checks 28 things from the chooser filter through recording, logging, settings export and the zip export. It proves the code path; a physical Portal still has to prove the protocol.
 
 ## What is in the box
 
@@ -82,11 +95,13 @@ js/analysis.js               mass-space integration, tail features, calibration 
 js/beanconqueror.js          ADD_BREW envelope, gzip → base64url → chunked deep link, QR sizing
 js/charts.js                 uPlot views (time with stage markers, EC vs mass, calibration)
 js/export.js                 chart JPEGs, PDF report, summary CSV, zip bundle
+js/log.js                    debug log: ring buffer, live tail, folder writer (File System Access API)
 js/store.js                  IndexedDB: shots, beans, settings
 js/demo.js                   synthetic shot
 tests/run.mjs                unit tests (node)
 tests/e2e-portal.mjs         end-to-end in Chrome with a simulated Portal + mock machine
 tests/fake-bluetooth.js      the simulated Portal (navigator.bluetooth stand-in)
+tests/fake-folder.js         in-memory stand-in for the folder picker
 tests/mock-meticulous.mjs    the mock machine (socket.io + REST)
 serve.mjs, start.command     local server / launcher
 vendor/                      uPlot 1.6.32, socket.io-client 4.8.4, qrcode-generator 2.0.4, jsPDF 2.5.2, fflate 0.8.3 (all MIT)
@@ -123,9 +138,9 @@ Dev-only: [Playwright](https://playwright.dev) and [socket.io](https://socket.io
 
 No build step, no framework, no bundler: plain ES modules served statically.
 
-**Platform APIs**: Web Bluetooth (Portal), `fetch` + socket.io over CORS (machine), `CompressionStream` (gzip for the hand-off), IndexedDB (storage).
+**Platform APIs**: Web Bluetooth (Portal), `fetch` + socket.io over CORS (machine), `CompressionStream` (gzip for the hand-off), IndexedDB (storage), File System Access API (optional log/export folder; Chrome and Edge only).
 
-**To replicate or extend with an AI assistant**, the prompts that mattered were, roughly: (1) the four source links above plus "build a tool to integrate the Portal with the Meticulous, graph it, show TDS, integrate with Beanconqueror"; (2) "the machine is at <its LAN IP>" (which surfaced the port-80 issue); (3) "add graphs of real-time brewing data, machine status, profiles, statistics, device info, connectivity" — the add-on's feature list; (4) "confirm the code connects to the Portal on macOS with Chrome; save data and graphs per shot (JSON, CSV, PDF, JPEG); estimate TDS from bean/roaster information when the bean has no readings; pick beans and roasters from previous entries" — which produced the connection check, the simulated-Portal test, the exports, the calibration pools and the bean library. Give the assistant the machine's real `/api/v1/machine`, `/api/v1/history/last`, `/api/v1/profile/list`, `/api/v1/wifi/config` and `/api/v1/settings` responses early; the saved shot JSON contains bare `NaN` tokens that break strict parsers, which is the kind of thing only real data reveals.
+**To replicate or extend with an AI assistant**, the prompts that mattered were, roughly: (1) the four source links above plus "build a tool to integrate the Portal with the Meticulous, graph it, show TDS, integrate with Beanconqueror"; (2) "the machine is at <its LAN IP>" (which surfaced the port-80 issue); (3) "add graphs of real-time brewing data, machine status, profiles, statistics, device info, connectivity" — the add-on's feature list; (4) "confirm the code connects to the Portal on macOS with Chrome; save data and graphs per shot (JSON, CSV, PDF, JPEG); estimate TDS from bean/roaster information when the bean has no readings; pick beans and roasters from previous entries" — which produced the connection check, the simulated-Portal test, the exports, the calibration pools and the bean library; (5) "add a settings menu: machine IP, recording settings, backup/restore settings, enable log/debug and where to save" — the Settings tab and `js/log.js`. Give the assistant the machine's real `/api/v1/machine`, `/api/v1/history/last`, `/api/v1/profile/list`, `/api/v1/wifi/config` and `/api/v1/settings` responses early; the saved shot JSON contains bare `NaN` tokens that break strict parsers, which is the kind of thing only real data reveals.
 
 ## Protocol notes
 

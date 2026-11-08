@@ -1,0 +1,166 @@
+// Run with:  node tests/run.mjs
+import assert from 'node:assert/strict';
+import { analyzeShot, fitCalibration, predictTds, estimateForShot, buildSegments, evalEcAt } from '../js/analysis.js';
+import { buildEnvelope, encodeHandoff, decodeHandoff, encodeForQr, CHUNK, QR_MAX_URL_CHARS } from '../js/beanconqueror.js';
+import { makeDemoShot } from '../js/demo.js';
+
+let passed = 0;
+const test = async (name, fn) => {
+  try {
+    await fn();
+    passed++;
+    console.log('  ok  ', name);
+  } catch (e) {
+    console.log('  FAIL', name);
+    console.log(e);
+    process.exitCode = 1;
+  }
+};
+
+await test('segments split at gaps and interpolate inside', () => {
+  const s = [
+    { t: 0, ec: 1 },
+    { t: 0.5, ec: 2 },
+    { t: 1.0, ec: 3 },
+    { t: 5.0, ec: 10 }, // gap of 4 s
+    { t: 5.5, ec: 11 },
+  ];
+  const segs = buildSegments(s, 1.0);
+  assert.equal(segs.length, 2);
+  assert.equal(evalEcAt(segs, 0.75).ec, 2.5);
+  assert.equal(evalEcAt(segs, 3.0), null); // in the gap
+  assert.equal(evalEcAt(segs, 5.25).ec, 10.5);
+});
+
+await test('analytic integral: constant EC over a linear weight ramp', () => {
+  // EC = 2 everywhere, mass 0→40 g over 20 s  ⇒  ∫EC dm = 80, mean = 2
+  const portal = Array.from({ length: 201 }, (_, i) => ({ t: i * 0.1, ec: 2, tOut: 60 }));
+  const weight = Array.from({ length: 41 }, (_, i) => ({ t: i * 0.5, w: i }));
+  const r = analyzeShot(portal, weight);
+  assert.equal(r.status, 'ok');
+  assert.ok(Math.abs(r.integralEcG - 80) < 1e-9, `integral ${r.integralEcG}`);
+  assert.ok(Math.abs(r.meanEcPerG - 2) < 1e-9);
+  assert.ok(Math.abs(r.coverageRatio - 1) < 1e-9);
+  assert.ok(Math.abs(r.tail.last5g.mean - 2) < 1e-9);
+  assert.ok(Math.abs(r.tail.last5g.slopePerG) < 1e-9);
+  assert.ok(Math.abs(r.massAt90PctG - 36) < 1e-6);
+});
+
+await test('analytic integral: EC linear in mass', () => {
+  // EC(m) = m/10 with m = t (1 g/s) over 0..40  ⇒  ∫ m/10 dm = 40²/20 = 80
+  const portal = Array.from({ length: 401 }, (_, i) => ({ t: i * 0.1, ec: (i * 0.1) / 10 }));
+  const weight = Array.from({ length: 81 }, (_, i) => ({ t: i * 0.5, w: i * 0.5 }));
+  const r = analyzeShot(portal, weight);
+  assert.ok(Math.abs(r.integralEcG - 80) < 1e-6, `integral ${r.integralEcG}`);
+  // last 5 g: mean of m/10 over [35,40] = 3.75, slope = 0.1 per g
+  assert.ok(Math.abs(r.tail.last5g.mean - 3.75) < 1e-6);
+  assert.ok(Math.abs(r.tail.last5g.slopePerG - 0.1) < 1e-6);
+  assert.ok(Math.abs(r.mainPeakEc - 4) < 1e-6);
+});
+
+await test('a gap in the Portal stream lowers coverage and is reported', () => {
+  const portal = [];
+  for (let i = 0; i <= 200; i++) {
+    const t = i * 0.1;
+    if (t > 8 && t < 14) continue; // 6 s dropout
+    portal.push({ t, ec: 2 });
+  }
+  const weight = Array.from({ length: 41 }, (_, i) => ({ t: i * 0.5, w: i }));
+  const r = analyzeShot(portal, weight);
+  assert.equal(r.gapCount, 1);
+  assert.ok(r.coverageRatio < 0.85 && r.coverageRatio > 0.6, `coverage ${r.coverageRatio}`);
+  assert.equal(r.status, 'low-coverage');
+});
+
+await test('demo shot analyses sensibly', () => {
+  const shot = makeDemoShot();
+  const r = analyzeShot(shot.portal, shot.machine.map((s) => ({ t: s.t, w: s.w })), { doseG: 18 });
+  assert.equal(r.status, 'ok');
+  assert.ok(r.totalMassG > 30, `mass ${r.totalMassG}`);
+  assert.ok(r.meanEcPerG > 0.5 && r.meanEcPerG < 4, `mean ec/g ${r.meanEcPerG}`);
+  assert.ok(r.mainPeakEc > r.tail.last5g.mean, 'tail below peak');
+  assert.ok(r.firstDropTimeSec > 6 && r.firstDropTimeSec < 8.5, `first drop ${r.firstDropTimeSec}`);
+  assert.ok(r.curve.length > 50);
+});
+
+await test('calibration: proportional fit recovers k, LOOCV sane, affine when it earns it', () => {
+  const pts = [];
+  for (let i = 0; i < 6; i++) {
+    const x = 1.5 + i * 0.25;
+    pts.push({ id: 's' + i, meanEcPerG: x, tdsPct: 3.2 * x + (i % 2 ? 0.02 : -0.02), meanTempC: 60 + i });
+  }
+  const fit = fitCalibration(pts);
+  assert.ok(fit.calibrated);
+  assert.ok(Math.abs(fit.proportional.k - 3.2) < 0.02, `k ${fit.proportional.k}`);
+  assert.equal(fit.preliminary, false);
+  assert.ok(fit.proportional.loocvRmse < 0.05);
+  assert.ok(Math.abs(predictTds(fit, 2) - 6.4) < 0.05);
+  // excludeId leaves one out
+  const fit5 = fitCalibration(pts, { excludeId: 's0' });
+  assert.equal(fit5.shotCount, 5);
+  // With an intercept in the data, the affine model should win once n ≥ 5
+  const pts2 = pts.map((p) => ({ ...p, tdsPct: 2.0 * p.meanEcPerG + 1.0 }));
+  const fit2 = fitCalibration(pts2);
+  assert.equal(fit2.activeModel, 'affine');
+  assert.ok(Math.abs(fit2.affine.a - 2) < 1e-6 && Math.abs(fit2.affine.b - 1) < 1e-6);
+});
+
+await test('estimate flags: no calibration, preliminary, extrapolated', () => {
+  const shot = makeDemoShot();
+  const r = analyzeShot(shot.portal, shot.machine.map((s) => ({ t: s.t, w: s.w })), { doseG: 18 });
+  const none = estimateForShot(r, fitCalibration([]), { doseG: 18 });
+  assert.equal(none.tdsPct, null);
+  const prelim = fitCalibration([{ id: 'a', meanEcPerG: r.meanEcPerG, tdsPct: 9.0 }, { id: 'b', meanEcPerG: r.meanEcPerG * 1.02, tdsPct: 9.2 }]);
+  const est = estimateForShot(r, prelim, { doseG: 18, beverageG: r.totalMassG });
+  assert.ok(Math.abs(est.tdsPct - 9.0) < 0.3, `tds ${est.tdsPct}`);
+  assert.ok(est.flags.some((f) => f.startsWith('Preliminary')));
+  assert.ok(est.eyPct > 15 && est.eyPct < 25, `ey ${est.eyPct}`);
+  const far = estimateForShot({ ...r, meanEcPerG: r.meanEcPerG * 2 }, prelim, { doseG: 18 });
+  assert.ok(far.flags.some((f) => f.includes('extrapolated')));
+});
+
+await test('Beanconqueror envelope round-trips through gzip/base64url/chunks', async () => {
+  const shot = makeDemoShot();
+  const r = analyzeShot(shot.portal, shot.machine.map((s) => ({ t: s.t, w: s.w })), { doseG: 18 });
+  const fit = fitCalibration([
+    { id: 'a', meanEcPerG: r.meanEcPerG * 0.9, tdsPct: 8.5 },
+    { id: 'b', meanEcPerG: r.meanEcPerG * 1.1, tdsPct: 10.1 },
+  ]);
+  const est = estimateForShot(r, fit, { doseG: 18, beverageG: r.totalMassG });
+  const env = buildEnvelope(shot, r, est, { beanName: 'Test coffee', roaster: 'Test roaster', grinderName: 'Zerno Z1', grindSize: '420 µm', doseG: 18, rating: 4 });
+  assert.equal(env.v, 1);
+  assert.equal(env.brew.preparationType, 'METICULOUS');
+  assert.equal(env.flow.t.length, env.flow.weight.length);
+  assert.equal(env.flow.t.length, env.flow.waterDispensed.length);
+  assert.equal(env.flow.t.length, env.flow.temperature.length);
+  assert.equal(env.flow.fidelity, 'full');
+  // weight deltas accumulate to the final weight in decigrams
+  const sumW = env.flow.weight.reduce((a, b) => a + b, 0) / 10;
+  assert.ok(Math.abs(sumW - shot.finalWeightG) < 0.15, `sum weight ${sumW} vs ${shot.finalWeightG}`);
+  assert.ok(env.flow.t.every((d) => d >= 0 && Number.isInteger(d)));
+  assert.ok(env.metrics.find((m) => m.key === 'portalEc').v.length > 100);
+  assert.ok(env.brew.note.includes('Estimated from EC'));
+  const enc = await encodeHandoff(env);
+  assert.ok(enc.url.startsWith('beanconqueror://ADD_BREW?len='));
+  const back = await decodeHandoff(enc.url);
+  assert.deepEqual(back, env);
+  console.log(`        full link: ${enc.urlChars} chars, ${enc.chunks} chunks (json ${enc.jsonBytes} B → gzip ${enc.gzipBytes} B)`);
+  // every chunk within the receiver's limit
+  const params = new URLSearchParams(enc.url.split('?')[1]);
+  for (const [k, v] of params) if (k.startsWith('shareBrew')) assert.ok(v.length <= CHUNK);
+});
+
+await test('QR-sized hand-off fits the byte budget and still decodes', async () => {
+  const shot = makeDemoShot();
+  const r = analyzeShot(shot.portal, shot.machine.map((s) => ({ t: s.t, w: s.w })), { doseG: 18 });
+  const est = estimateForShot(r, fitCalibration([]), { doseG: 18 });
+  const qr = await encodeForQr(shot, r, est, { beanName: 'Test coffee', doseG: 18, grinderName: 'Zerno Z1', grindSize: '420 µm' });
+  assert.ok(qr, 'should fit');
+  assert.ok(qr.urlChars <= QR_MAX_URL_CHARS, `qr url ${qr.urlChars}`);
+  const back = await decodeHandoff(qr.url);
+  assert.equal(back.brew.preparationType, 'METICULOUS');
+  assert.equal(back.flow.fidelity, 'downsampled');
+  console.log(`        QR link: ${qr.urlChars} chars at level ${JSON.stringify(qr.level)}`);
+});
+
+console.log(`\n${passed} test group(s) passed${process.exitCode ? ', with failures' : ''}.`);

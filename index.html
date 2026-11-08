@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>portal-met-bridge</title>
+  <link rel="stylesheet" href="vendor/uPlot.min.css" />
+  <link rel="stylesheet" href="css/app.css" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M4 26 L10 8 L16 20 L22 6 L28 26' fill='none' stroke='%232447B8' stroke-width='3' stroke-linejoin='round'/%3E%3C/svg%3E" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <h1>portal-met-bridge</h1>
+      <p>Belka Portal conductivity, logged against your Meticulous shot</p>
+    </div>
+    <nav class="views" aria-label="Views">
+      <button class="view-tab" data-view="shots" aria-selected="true">Shots</button>
+      <button class="view-tab" data-view="machine" aria-selected="false">Machine</button>
+    </nav>
+    <div class="links">
+      <span class="link" id="link-meticulous">
+        <span class="dot" data-state="idle"></span>
+        <span class="link-name">Meticulous</span>
+        <span class="link-detail" id="meticulous-detail">not connected</span>
+      </span>
+      <span class="link" id="link-portal">
+        <span class="dot" data-state="idle"></span>
+        <span class="link-name">Portal</span>
+        <span class="link-detail" id="portal-detail">not connected</span>
+      </span>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="rail">
+      <section class="rail-section">
+        <h2>Machine</h2>
+        <label class="field">
+          <span>Address (IP or hostname; the machine serves on port 80)</span>
+          <input id="meticulous-host" type="text" placeholder="192.168.30.2" spellcheck="false" />
+        </label>
+        <div class="row">
+          <button id="meticulous-connect" class="btn primary">Connect</button>
+          <button id="meticulous-disconnect" class="btn" disabled>Disconnect</button>
+        </div>
+        <p class="hint" id="meticulous-hint">Shots start recording on their own when the machine begins extracting.</p>
+      </section>
+
+      <section class="rail-section">
+        <h2>Portal</h2>
+        <div class="row">
+          <button id="portal-connect" class="btn primary">Connect over Bluetooth</button>
+          <button id="portal-disconnect" class="btn" disabled>Disconnect</button>
+        </div>
+        <label class="check"><input type="checkbox" id="portal-accept-all" /> Show every nearby Bluetooth device</label>
+        <label class="check"><input type="checkbox" id="portal-auto-graph" checked /> Switch the Portal's screen to its graph during a shot</label>
+        <div class="row">
+          <button id="portal-show-graph" class="btn small" disabled>Show graph</button>
+          <button id="portal-hide-graph" class="btn small" disabled>Hide graph</button>
+        </div>
+        <p class="hint" id="portal-hint">Close the Belka app first; the Portal accepts one connection at a time. Needs Chrome or Edge.</p>
+      </section>
+
+      <section class="rail-section">
+        <h2>This coffee</h2>
+        <label class="field"><span>Bean</span><input id="ctx-bean" type="text" placeholder="Roaster – lot" /></label>
+        <label class="field"><span>Roaster</span><input id="ctx-roaster" type="text" /></label>
+        <div class="row two">
+          <label class="field"><span>Dose (g)</span><input id="ctx-dose" type="number" step="0.1" min="0" placeholder="18.0" /></label>
+          <label class="field"><span>Grind (µm)</span><input id="ctx-grind" type="number" step="5" min="0" placeholder="420" /></label>
+        </div>
+        <label class="field"><span>Grinder</span><input id="ctx-grinder" type="text" placeholder="Zerno Z1" /></label>
+        <label class="field"><span>Note for the log</span><textarea id="ctx-note" rows="2"></textarea></label>
+        <p class="hint">Calibration is kept per bean name, so keep the name stable while you work through a bag.</p>
+      </section>
+
+      <section class="rail-section">
+        <h2>Recording</h2>
+        <label class="field"><span>Keep capturing after the pump stops (s)</span><input id="settle-sec" type="number" min="0" max="60" step="1" value="6" /></label>
+        <label class="field"><span>Portal lag vs cup (s)</span><input id="lag-sec" type="number" min="-2" max="3" step="0.1" value="0" /></label>
+        <p class="hint">Lag shifts EC against the scale: positive if liquid reaches the Portal before the cup.</p>
+      </section>
+
+      <section class="rail-section grow">
+        <h2>Shots <span class="count" id="shot-count"></span></h2>
+        <ul class="shot-list" id="shot-list"></ul>
+        <div class="row">
+          <button id="demo-load" class="btn small">Add a demo shot</button>
+          <button id="demo-replay" class="btn small">Replay a demo live</button>
+        </div>
+        <div class="row">
+          <button id="backup-export" class="btn small">Back up all</button>
+          <label class="btn small file"><input type="file" id="backup-import" accept="application/json" hidden />Restore</label>
+        </div>
+      </section>
+    </aside>
+
+    <main class="main" id="view-machine" hidden>
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Machine status</h2>
+          <span class="panel-note">Live from the machine's status and sensors streams.</span>
+        </div>
+        <div class="metrics">
+          <div class="metric"><div class="v" id="ms-state">–</div><div class="k">state</div></div>
+          <div class="metric"><div class="v" id="ms-stage">–</div><div class="k">stage</div></div>
+          <div class="metric"><div class="v" id="ms-brewing">–</div><div class="k">brewing</div></div>
+          <div class="metric"><div class="v" id="ms-timer">0.0<small>s</small></div><div class="k">shot timer</div></div>
+          <div class="metric"><div class="v" id="ms-profile">–</div><div class="k">loaded profile</div></div>
+          <div class="metric"><div class="v" id="ms-setpoint">–</div><div class="k">active setpoint</div></div>
+          <div class="metric"><div class="v" id="ms-temp">–<small>°C</small></div><div class="k">brew temperature</div></div>
+          <div class="metric"><div class="v" id="ms-pressure">–<small>bar</small></div><div class="k">pressure</div></div>
+          <div class="metric"><div class="v" id="ms-flow">–<small>ml/s</small></div><div class="k">flow</div></div>
+          <div class="metric"><div class="v" id="ms-weight">–<small>g</small></div><div class="k">scale</div></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Temperatures and power</h2>
+          <span class="panel-note">Last five minutes. Toggle series in the legend.</span>
+        </div>
+        <div class="metrics small">
+          <div class="metric"><div class="v" id="ms-boiler">–<small>°C</small></div><div class="k">external 1 (boiler side)</div></div>
+          <div class="metric"><div class="v" id="ms-head">–<small>°C</small></div><div class="k">external 2 (brew head)</div></div>
+          <div class="metric"><div class="v" id="ms-bar">–<small>°C</small></div><div class="k">heater bar (mean)</div></div>
+          <div class="metric"><div class="v" id="ms-tube">–<small>°C</small></div><div class="k">tube</div></div>
+          <div class="metric"><div class="v" id="ms-motor">–<small>°C</small></div><div class="k">motor</div></div>
+          <div class="metric"><div class="v" id="ms-heater">–<small>%</small></div><div class="k">heater power</div></div>
+          <div class="metric"><div class="v" id="ms-water">–</div><div class="k">water tank</div></div>
+        </div>
+        <div class="chart" id="chart-temps"></div>
+        <div class="chart short" id="chart-power"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Profiles on the machine</h2>
+          <button id="mc-refresh-profiles" class="btn small">Refresh</button>
+        </div>
+        <div class="profiles" id="mc-profiles"><p class="hint">Connect to the machine to list its profiles.</p></div>
+      </section>
+
+      <section class="panel split">
+        <div>
+          <div class="panel-head">
+            <h2>Statistics</h2>
+            <button id="mc-refresh-stats" class="btn small">Refresh</button>
+          </div>
+          <div id="mc-stats"><p class="hint">Connect to the machine to load its shot history.</p></div>
+        </div>
+        <div>
+          <h2>Device</h2>
+          <div id="mc-device"><p class="hint">Connect to the machine to read its device info.</p></div>
+        </div>
+      </section>
+
+      <section class="panel split">
+        <div>
+          <h2>Connectivity</h2>
+          <div id="mc-conn"></div>
+          <h3>Notifications</h3>
+          <ul class="notes" id="mc-notes"></ul>
+        </div>
+        <div>
+          <h2>Settings (read-only)</h2>
+          <div id="mc-settings"><p class="hint">Connect to the machine to read its settings.</p></div>
+        </div>
+      </section>
+    </main>
+
+    <main class="main" id="view-shots">
+      <section class="live">
+        <div class="readouts">
+          <div class="readout hero"><span class="value" id="ro-ec">–</span><span class="unit">mS/cm</span><span class="label">Portal EC</span></div>
+          <div class="readout"><span class="value" id="ro-tout">–</span><span class="unit">°C</span><span class="label">at the Portal</span></div>
+          <div class="readout"><span class="value" id="ro-weight">–</span><span class="unit">g</span><span class="label">in the cup</span></div>
+          <div class="readout"><span class="value" id="ro-flow">–</span><span class="unit">ml/s</span><span class="label">flow</span></div>
+          <div class="readout"><span class="value" id="ro-pressure">–</span><span class="unit">bar</span><span class="label">pressure</span></div>
+          <div class="readout"><span class="value" id="ro-time">0.0</span><span class="unit">s</span><span class="label" id="ro-stage">idle</span></div>
+        </div>
+        <div class="live-controls">
+          <span class="rec" id="rec-indicator" data-state="idle"><i></i><span id="rec-text">Waiting for a shot</span></span>
+          <button id="rec-manual" class="btn">Start recording now</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2 id="shot-title">No shot selected</h2>
+          <div class="panel-tools">
+            <button id="shot-refresh" class="btn small" title="Replace the live machine samples with the machine's own saved record of this shot" disabled>Refresh from machine</button>
+            <button id="shot-delete" class="btn small danger" disabled>Delete</button>
+          </div>
+        </div>
+        <p class="panel-sub" id="shot-sub"></p>
+        <div class="chart" id="chart-time"></div>
+      </section>
+
+      <section class="panel hero-panel">
+        <div class="panel-head">
+          <h2>Conductivity against cup mass</h2>
+          <span class="panel-note">The shaded area is ∫EC dm — the Portal's measure of what ended up in the cup.</span>
+        </div>
+        <div class="chart" id="chart-mass"></div>
+        <div class="metrics" id="metrics"></div>
+        <p class="status" id="analysis-status"></p>
+      </section>
+
+      <section class="panel split">
+        <div>
+          <h2>Estimated strength</h2>
+          <div class="estimate" id="estimate">
+            <div class="big"><span class="value" id="est-tds">–</span><span class="unit">% TDS</span></div>
+            <div class="big"><span class="value" id="est-ey">–</span><span class="unit">% EY</span></div>
+          </div>
+          <ul class="flags" id="est-flags"></ul>
+          <h3>Refractometer reading for this shot</h3>
+          <div class="row two">
+            <label class="field"><span>TDS (%)</span><input id="ref-tds" type="number" step="0.01" min="0" max="30" placeholder="9.20" /></label>
+            <label class="field"><span>Beverage (g)</span><input id="ref-bev" type="number" step="0.1" min="0" placeholder="auto" /></label>
+          </div>
+          <div class="row">
+            <button id="ref-save" class="btn primary small" disabled>Save reading</button>
+            <button id="ref-clear" class="btn small" disabled>Remove</button>
+            <span class="inline-note" id="ref-ey"></span>
+          </div>
+        </div>
+        <div>
+          <h2>Calibration for <span id="cal-coffee">this coffee</span></h2>
+          <div class="chart short" id="chart-cal"></div>
+          <dl class="kv" id="cal-stats"></dl>
+          <p class="hint">EC tracks ions, a refractometer tracks everything dissolved; the ratio between them is specific to a coffee, a water and a Portal. Five or more paired shots make the estimate trustworthy inside the measured range.</p>
+        </div>
+      </section>
+
+      <section class="panel split">
+        <div>
+          <h2>Send to Beanconqueror</h2>
+          <p class="hint">Scan with the phone that has Beanconqueror installed. The QR carries a thinned trace; the full-resolution link is below for AirDrop or Messages.</p>
+          <div class="qr" id="qr"></div>
+          <p class="inline-note" id="qr-info"></p>
+          <div class="row">
+            <button id="bc-copy" class="btn primary small" disabled>Copy full link</button>
+            <button id="bc-open" class="btn small" disabled>Open link here</button>
+            <button id="bc-json" class="btn small" disabled>Download envelope</button>
+          </div>
+          <p class="hint">Beanconqueror has no field for an imported TDS, so the EC analysis and the estimate land in the brew note and as a custom EC trace; type the refractometer TDS into Beanconqueror's own field if you want its EY.</p>
+        </div>
+        <div>
+          <h2>Files</h2>
+          <div class="row">
+            <button id="dl-csv" class="btn small" disabled>CSV (merged samples)</button>
+            <button id="dl-json" class="btn small" disabled>JSON (raw shot)</button>
+          </div>
+          <h3>Attach a saved machine shot</h3>
+          <p class="hint">Pulls the machine's own record and attaches it to the selected recording when the times line up, or creates a new entry without Portal data.</p>
+          <div class="row">
+            <button id="mach-last" class="btn small" disabled>Fetch last shot from machine</button>
+          </div>
+          <p class="inline-note" id="mach-info"></p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

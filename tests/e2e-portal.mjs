@@ -83,10 +83,26 @@ try {
 
   // Coffee context + machine
   await page.fill('#ctx-bean', 'E2E coffee');
+  await page.dispatchEvent('#ctx-bean', 'change');
   await page.fill('#ctx-roaster', 'E2E roaster');
+  await page.dispatchEvent('#ctx-roaster', 'change');
   await page.selectOption('#ctx-roast', 'light');
+  await page.fill('#ctx-origin', 'Colombia, Huila');
+  await page.dispatchEvent('#ctx-origin', 'change');
+  await page.fill('#ctx-grinder', 'Zerno Z1');
+  await page.dispatchEvent('#ctx-grinder', 'change');
   await page.fill('#ctx-dose', '18');
   await page.dispatchEvent('#ctx-dose', 'change');
+  await page.waitForTimeout(300);
+  const lists = await page.evaluate(() => Object.fromEntries(['bean', 'roaster', 'origin', 'grinder'].map((k) => [k, [...document.querySelectorAll(`#${k}-list option`)].map((o) => o.value)])));
+  check('bean, roaster, origin and grinder pick-lists remember new entries', lists.bean.includes('E2E coffee') && lists.roaster.includes('E2E roaster') && lists.origin.includes('Colombia, Huila') && lists.grinder.includes('Zerno Z1'), JSON.stringify(lists));
+  // Picking a previous bean fills roaster / origin
+  await page.fill('#ctx-roaster', '');
+  await page.fill('#ctx-origin', '');
+  await page.fill('#ctx-bean', 'E2E coffee');
+  await page.dispatchEvent('#ctx-bean', 'change');
+  await page.waitForTimeout(300);
+  check('picking a previous bean fills in its roaster and origin', (await page.inputValue('#ctx-roaster')) === 'E2E roaster' && (await page.inputValue('#ctx-origin')) === 'Colombia, Huila');
   // Machine address lives under Settings; test connection there, then connect from the rail.
   await page.click('.view-tab[data-view="settings"]');
   await page.fill('#meticulous-host', `localhost:${MOCK_PORT}`);
@@ -102,6 +118,21 @@ try {
   check('log folder chosen and writable', /writable/.test(await page.textContent('#log-folder')), (await page.textContent('#log-folder')).trim());
   await page.check('#log-save-exports');
   await page.dispatchEvent('#log-save-exports', 'change');
+  // Pick-list management: a second roaster, then remove it via its chip
+  await page.click('.view-tab[data-view="shots"]');
+  await page.fill('#ctx-roaster', 'Typo Roasters');
+  await page.dispatchEvent('#ctx-roaster', 'change');
+  await page.waitForTimeout(200);
+  await page.fill('#ctx-roaster', 'E2E roaster');
+  await page.dispatchEvent('#ctx-roaster', 'change');
+  await page.waitForTimeout(200);
+  await page.click('.view-tab[data-view="settings"]');
+  const chipsBefore = await page.evaluate(() => [...document.querySelectorAll('#list-roaster .chip')].map((c) => c.firstChild.textContent.trim()));
+  await page.click('#list-roaster .chip button[aria-label="Remove Typo Roasters"]');
+  await page.waitForTimeout(300);
+  const chipsAfter = await page.evaluate(() => [...document.querySelectorAll('#list-roaster .chip')].map((c) => c.firstChild.textContent.trim()));
+  const roasterOpts = await page.evaluate(() => [...document.querySelectorAll('#roaster-list option')].map((o) => o.value));
+  check('Settings → Pick-lists removes an entry from the roaster list', chipsBefore.includes('Typo Roasters') && !chipsAfter.includes('Typo Roasters') && !roasterOpts.includes('Typo Roasters') && roasterOpts.includes('E2E roaster'), `${chipsBefore.join('/')} → ${chipsAfter.join('/')}`);
   await page.click('.view-tab[data-view="shots"]');
   check('rail shows the configured address', (await page.textContent('#meticulous-addr')).includes(`localhost:${MOCK_PORT}`));
   await page.click('#meticulous-connect');

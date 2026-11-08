@@ -104,14 +104,16 @@
             </select>
           </label>
         </div>
-        <label class="field"><span>Origin</span><input id="ctx-origin" type="text" placeholder="country, region" /></label>
+        <label class="field"><span>Origin</span><input id="ctx-origin" type="text" list="origin-list" placeholder="country, region" autocomplete="off" /></label>
+        <datalist id="origin-list"></datalist>
         <div class="row two">
           <label class="field"><span>Dose (g)</span><input id="ctx-dose" type="number" step="0.1" min="0" placeholder="18.0" /></label>
           <label class="field"><span>Grind (µm)</span><input id="ctx-grind" type="number" step="5" min="0" placeholder="420" /></label>
         </div>
-        <label class="field"><span>Grinder</span><input id="ctx-grinder" type="text" placeholder="Zerno Z1" /></label>
+        <label class="field"><span>Grinder</span><input id="ctx-grinder" type="text" list="grinder-list" placeholder="e.g. Zerno Z1" autocomplete="off" /></label>
+        <datalist id="grinder-list"></datalist>
         <label class="field"><span>Note for the log</span><textarea id="ctx-note" rows="2"></textarea></label>
-        <p class="hint">Picking a previous bean fills in its roaster, roast level, process and origin. Calibration is kept per bean name, so keep the name stable while you work through a bag.</p>
+        <p class="hint">Bean, roaster, origin and grinder each offer what you have entered before (press ↓ in an empty field to see the list) or take a new entry, which is remembered. Picking a previous bean fills in its roaster, roast level, process and origin. Calibration is kept per bean name, so keep the name stable while you work through a bag.</p>
       </section>
 
       <section class="rail-section grow">
@@ -160,6 +162,23 @@
         <div class="settings-grid">
           <label class="field narrow"><span>Reference shots before an estimate stops being "preliminary"</span><input id="set-min-cal" type="number" min="2" max="20" step="1" value="5" /></label>
           <p class="hint">Which shots an estimate may borrow from (this bean, same roaster, same roast level, all) is chosen on the Shots view next to the estimate.</p>
+        </div>
+      </section>
+
+      <section class="panel settings">
+        <div class="panel-head">
+          <h2>Pick-lists</h2>
+          <span class="panel-note">What the bean, roaster, origin and grinder fields offer. Remove typos here; removing an entry does not change any shot.</span>
+        </div>
+        <div class="settings-grid">
+          <h3>Beans</h3>
+          <div class="chips" id="list-bean"></div>
+          <h3>Roasters</h3>
+          <div class="chips" id="list-roaster"></div>
+          <h3>Origins</h3>
+          <div class="chips" id="list-origin"></div>
+          <h3>Grinders</h3>
+          <div class="chips" id="list-grinder"></div>
         </div>
       </section>
 

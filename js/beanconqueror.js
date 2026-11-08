@@ -94,7 +94,7 @@ export function buildEnvelope(shot, analysis, estimate, ctx = {}, opts = {}) {
 
   const envelope = {
     v: 1,
-    app: { name: 'portal-met-bridge', version: '0.5.0' },
+    app: { name: 'portal-met-bridge', version: '0.6.0' },
     brew: {
       date: new Date(shot.startedAt ?? Date.now()).toISOString(),
       waterIn: { value: clamp(totalWaterMl || beverageG, 0, 100000), unit: 'ml' },

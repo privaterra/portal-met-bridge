@@ -4,7 +4,7 @@ import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal
 import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js';
 import { MachinePanel } from './machine-panel.js';
 import { ShotRecorder } from './recorder.js';
-import { Store, coffeeKey, deleteAllDatabases } from './store.js';
+import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js';
 import { TimeChart, MassChart, CalibrationChart } from './charts.js';
 import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, DEFAULTS } from './analysis.js';
 import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js';
@@ -217,8 +217,8 @@ async function init() {
   log.configure({ enabled: settings.logEnabled, level: settings.logLevel, packets: settings.logPackets });
   await restoreLogFolder();
   renderLogStatus();
-  $('about-version').textContent = 'v0.5.0';
-  log.info('app', `portal-met-bridge v0.5.0 started · ${navigator.userAgent}`);
+  $('about-version').textContent = 'v0.6.0';
+  log.info('app', `portal-met-bridge v0.6.0 started · ${navigator.userAgent}`);
 
   const env = await environmentCheck();
   renderPortalSteps({ secure: env.secure, api: env.api, adapter: env.adapter });
@@ -229,6 +229,8 @@ async function init() {
     $('portal-hint').textContent = env.hint;
   }
 
+  const seeded = await store.seedListsFromHistory();
+  if (seeded) log.info('lists', `seeded pick-lists with ${seeded} entries from earlier shots and beans`);
   await refreshBeanLists();
   await refreshShotList();
   if (state.shots.length) selectShot(state.shots[0].id);
@@ -458,6 +460,7 @@ recorder.addEventListener('shot', async (e) => {
   recomputeCache(shot);
   await store.putShot(shot);
   await store.rememberBean(shot.context);
+  await rememberContextValues(shot.context);
   await refreshBeanLists();
   await refreshShotList();
   selectShot(shot.id);
@@ -1100,18 +1103,71 @@ function writeContext(ctx) {
   $('ctx-origin').value = ctx.origin ?? '';
   $('ctx-dose').value = ctx.doseG || '';
   $('ctx-grind').value = (ctx.grindSize ?? '').replace(/\s*µm$/, '');
-  $('ctx-grinder').value = ctx.grinderName ?? 'Zerno Z1';
+  $('ctx-grinder').value = ctx.grinderName ?? '';
   $('ctx-note').value = ctx.note ?? '';
 }
 
 /** Rebuild the bean / roaster pick-lists from the bean library. */
+/** Rebuild every pick-list (bean, roaster, origin, grinder) and the Settings chips. */
 async function refreshBeanLists() {
   const beans = await store.listBeans();
   state.beans = beans;
   $('bean-list').innerHTML = beans.map((b) => `<option value="${esc(b.name)}">${esc([b.roaster, b.roastLevel, b.origin].filter(Boolean).join(' · '))}</option>`).join('');
-  const roasters = [...new Set(beans.map((b) => b.roaster).filter(Boolean))].sort((a, b) => a.localeCompare(b));
-  $('roaster-list').innerHTML = roasters.map((r) => `<option value="${esc(r)}"></option>`).join('');
   $('bean-count').textContent = beans.length ? `(${beans.length} known)` : '';
+  state.lists = {};
+  for (const kind of LIST_KINDS) {
+    const values = await store.listValues(kind);
+    state.lists[kind] = values;
+    $(`${kind}-list`).innerHTML = values.map((v) => `<option value="${esc(v.value)}">${esc(`used ${v.uses}× · ${new Date(v.lastUsed).toLocaleDateString()}`)}</option>`).join('');
+  }
+  renderPickListChips();
+}
+
+function renderPickListChips() {
+  const chip = (label, meta, onRemove) => {
+    const el = document.createElement('span');
+    el.className = 'chip';
+    el.innerHTML = `${esc(label)}${meta ? ` <small>${esc(meta)}</small>` : ''}`;
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.title = `Remove "${label}" from the list`;
+    b.setAttribute('aria-label', `Remove ${label}`);
+    b.textContent = '×';
+    b.addEventListener('click', onRemove);
+    el.appendChild(b);
+    return el;
+  };
+  const beanBox = $('list-bean');
+  beanBox.innerHTML = '';
+  for (const b of state.beans || []) {
+    beanBox.appendChild(
+      chip(b.name, [b.roaster, `${b.uses || 1}×`].filter(Boolean).join(' · '), async () => {
+        await store.deleteBean(b.name);
+        log.info('lists', `removed bean "${b.name}"`);
+        await refreshBeanLists();
+      }),
+    );
+  }
+  for (const kind of LIST_KINDS) {
+    const box = $(`list-${kind}`);
+    box.innerHTML = '';
+    for (const v of state.lists?.[kind] || []) {
+      box.appendChild(
+        chip(v.value, `${v.uses}×`, async () => {
+          await store.forgetValue(kind, v.value);
+          log.info('lists', `removed ${kind} "${v.value}"`);
+          await refreshBeanLists();
+        }),
+      );
+    }
+  }
+}
+
+/** Save the free-text fields of a context into their pick-lists. */
+async function rememberContextValues(ctx) {
+  await store.rememberValue('roaster', ctx.roaster);
+  await store.rememberValue('origin', ctx.origin);
+  await store.rememberValue('grinder', ctx.grinderName);
 }
 
 /** A previous bean was picked (or typed exactly): fill in what we know about it. */
@@ -1128,13 +1184,21 @@ async function beanPicked() {
 }
 
 async function contextChanged(ev) {
-  if (ev?.target?.id === 'ctx-bean') await beanPicked();
+  const id = ev?.target?.id;
+  if (id === 'ctx-bean') await beanPicked();
   const ctx = readContext();
   await store.setSetting('context', ctx);
-  if (ctx.beanName) {
+  let listsTouched = false;
+  if (ctx.beanName && (id === 'ctx-bean' || id === 'ctx-roaster' || id === 'ctx-roast' || id === 'ctx-process' || id === 'ctx-origin' || id === 'ctx-dose' || id === 'ctx-grind')) {
     await store.rememberBean(ctx);
-    await refreshBeanLists();
+    listsTouched = true;
   }
+  const kindFor = { 'ctx-roaster': ['roaster', ctx.roaster], 'ctx-origin': ['origin', ctx.origin], 'ctx-grinder': ['grinder', ctx.grinderName] };
+  if (kindFor[id]) {
+    const [kind, value] = kindFor[id];
+    if (value && (await store.rememberValue(kind, value))) listsTouched = true;
+  }
+  if (listsTouched) await refreshBeanLists();
   // Apply to the selected shot too, so a bag name typed after the shot still counts.
   if (state.selected && state.selected.source !== 'demo') {
     const prev = state.selected.context || {};
@@ -1304,7 +1368,7 @@ async function openResetDialog() {
   const withReadings = shots.filter((s) => s.refractometer?.tdsPct).length;
   const items = [
     `${shots.length} shot${shots.length === 1 ? '' : 's'} with ${shots.length === 1 ? 'its' : 'their'} samples${withReadings ? ` (${withReadings} with refractometer readings)` : ''}`,
-    `${beans.length} bean${beans.length === 1 ? '' : 's'} in the bean library`,
+    `${beans.length} bean${beans.length === 1 ? '' : 's'} in the bean library and the roaster / origin / grinder pick-lists`,
     'all settings (machine address, recording, estimates, logging) and the current coffee',
     `the debug log in this page (${log.ring.length} lines)`,
   ];

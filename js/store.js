@@ -4,7 +4,7 @@
 // store is the pick-list of coffees you have entered before.
 
 const DB_NAME = 'portal-met-bridge';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 function openDb() {
   return new Promise((resolve, reject) => {
@@ -20,6 +20,11 @@ function openDb() {
       if (!db.objectStoreNames.contains('beans')) {
         const b = db.createObjectStore('beans', { keyPath: 'key' });
         b.createIndex('lastUsed', 'lastUsed');
+      }
+      // v3: pick-lists for roaster / origin / grinder (bean keeps its richer record)
+      if (!db.objectStoreNames.contains('lists')) {
+        const l = db.createObjectStore('lists', { keyPath: 'key' });
+        l.createIndex('kind', 'kind');
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -135,6 +140,68 @@ export class Store {
     await tx(db, 'beans', 'readwrite', (s) => s.delete(coffeeKey(name)));
   }
 
+  // ------------------------------------------------------------ pick-lists --
+
+  /** Remember a value for a kind ('roaster' | 'origin' | 'grinder'); counts uses. */
+  async rememberValue(kind, value) {
+    const v = (value || '').trim();
+    if (!v || !LIST_KINDS.includes(kind)) return null;
+    const key = `${kind}:${coffeeKey(v)}`;
+    const db = await this.dbp;
+    const prev = (await tx(db, 'lists', 'readonly', (s) => s.get(key))) || { key, kind, createdAt: Date.now(), uses: 0 };
+    const rec = { ...prev, value: v, uses: (prev.uses || 0) + 1, lastUsed: Date.now() };
+    await tx(db, 'lists', 'readwrite', (s) => s.put(rec));
+    return rec;
+  }
+
+  /** Values of a kind, most used first, then most recent. */
+  async listValues(kind) {
+    const db = await this.dbp;
+    const all = await new Promise((resolve, reject) => {
+      const out = [];
+      const t = db.transaction('lists', 'readonly');
+      const req = t.objectStore('lists').index('kind').openCursor(IDBKeyRange.only(kind));
+      req.onsuccess = () => {
+        const c = req.result;
+        if (!c) return resolve(out);
+        out.push(c.value);
+        c.continue();
+      };
+      req.onerror = () => reject(req.error);
+    });
+    return all.sort((a, b) => b.uses - a.uses || b.lastUsed - a.lastUsed);
+  }
+
+  async forgetValue(kind, value) {
+    const db = await this.dbp;
+    await tx(db, 'lists', 'readwrite', (s) => s.delete(`${kind}:${coffeeKey(value)}`));
+  }
+
+  /** One-time: fill the pick-lists from what beans and shots already know. */
+  async seedListsFromHistory() {
+    if (await this.getSetting('listsSeeded', false)) return 0;
+    let n = 0;
+    const beans = await this.listBeans({ limit: 100000 });
+    for (const b of beans) {
+      if (b.roaster && (await this.rememberValue('roaster', b.roaster))) n++;
+      if (b.origin && (await this.rememberValue('origin', b.origin))) n++;
+    }
+    const shots = await this.listShots({ limit: 100000 });
+    const seen = new Set();
+    for (const s of shots) {
+      const c = s.context || {};
+      for (const [kind, v] of [['roaster', c.roaster], ['origin', c.origin], ['grinder', c.grinderName]]) {
+        if (!v) continue;
+        const k = `${kind}:${coffeeKey(v)}`;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        if (await this.rememberValue(kind, v)) n++;
+      }
+    }
+    await this.setSetting('listsSeeded', true);
+    return n;
+  }
+
   // -------------------------------------------------------------- settings --
 
   async getSetting(key, fallback = null) {
@@ -151,8 +218,8 @@ export class Store {
   // ------------------------------------------------------- backup/restore --
 
   async exportAll() {
-    const [shots, beans] = await Promise.all([this.listShots({ limit: 100000 }), this.listBeans({ limit: 100000 })]);
-    return { app: 'portal-met-bridge', version: 2, exportedAt: new Date().toISOString(), shots, beans };
+    const [shots, beans, ...lists] = await Promise.all([this.listShots({ limit: 100000 }), this.listBeans({ limit: 100000 }), ...LIST_KINDS.map((k) => this.listValues(k))]);
+    return { app: 'portal-met-bridge', version: 3, exportedAt: new Date().toISOString(), shots, beans, lists: lists.flat() };
   }
 
   async importAll(json) {
@@ -164,9 +231,12 @@ export class Store {
         n++;
       }
     }
+    const db = await this.dbp;
     if (Array.isArray(json.beans)) {
-      const db = await this.dbp;
       for (const b of json.beans) if (b && b.key) await tx(db, 'beans', 'readwrite', (s) => s.put(b));
+    }
+    if (Array.isArray(json.lists)) {
+      for (const l of json.lists) if (l && l.key && LIST_KINDS.includes(l.kind)) await tx(db, 'lists', 'readwrite', (s) => s.put(l));
     }
     return n;
   }
@@ -202,6 +272,8 @@ export function deleteAllDatabases() {
     ),
   );
 }
+
+export const LIST_KINDS = ['roaster', 'origin', 'grinder'];
 
 /** Shots calibrate per coffee; the key is the normalised bean name. */
 export function coffeeKey(name) {

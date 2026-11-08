@@ -172,6 +172,37 @@ export class Store {
   }
 }
 
+/** Close the connection so the database can be deleted. */
+Store.prototype.close = async function close() {
+  try {
+    const db = await this.dbp;
+    db.close();
+  } catch {
+    /* never opened */
+  }
+};
+
+/** Delete this app's databases (current and the v0.1 name). Resolves with what happened per database. */
+export function deleteAllDatabases() {
+  const names = [DB_NAME, 'portal-bridge'];
+  return Promise.all(
+    names.map(
+      (name) =>
+        new Promise((resolve) => {
+          const req = indexedDB.deleteDatabase(name);
+          let blocked = false;
+          req.onblocked = () => {
+            blocked = true;
+          };
+          req.onsuccess = () => resolve({ name, ok: true, blocked });
+          req.onerror = () => resolve({ name, ok: false, error: req.error?.message || 'error' });
+          // deleteDatabase never settles while another tab holds the DB open; don't hang forever.
+          setTimeout(() => resolve({ name, ok: false, blocked: true, error: 'another tab of this app still has the database open' }), 8000);
+        }),
+    ),
+  );
+}
+
 /** Shots calibrate per coffee; the key is the normalised bean name. */
 export function coffeeKey(name) {
   return (name || '')

@@ -172,6 +172,28 @@ export class Logger extends EventTarget {
     return root.getDirectoryHandle(sub, { create: true });
   }
 
+  /**
+   * Remove everything this app wrote in the chosen folder — only the
+   * `portal-met-bridge/` subfolder, never anything else — and stop using the
+   * folder so nothing is recreated. Returns true when the subfolder was removed.
+   */
+  async eraseFolderContents() {
+    if (!this.folder || this.folderState !== 'granted') return false;
+    if (this.flushTimer) clearTimeout(this.flushTimer);
+    this.flushTimer = null;
+    this.pending = [];
+    let removed = false;
+    try {
+      await this.folder.getDirectoryHandle('portal-met-bridge'); // throws if absent
+      await this.folder.removeEntry('portal-met-bridge', { recursive: true });
+      removed = true;
+    } catch (err) {
+      if (err?.name !== 'NotFoundError') throw err;
+    }
+    this.forgetFolder();
+    return removed;
+  }
+
   _installGlobalHandlers() {
     if (typeof window === 'undefined') return;
     window.addEventListener('error', (e) => this.error('window', e.message, { file: e.filename, line: e.lineno }));

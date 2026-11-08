@@ -4,7 +4,7 @@ import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal
 import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js';
 import { MachinePanel } from './machine-panel.js';
 import { ShotRecorder } from './recorder.js';
-import { Store, coffeeKey } from './store.js';
+import { Store, coffeeKey, deleteAllDatabases } from './store.js';
 import { TimeChart, MassChart, CalibrationChart } from './charts.js';
 import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, DEFAULTS } from './analysis.js';
 import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js';
@@ -35,7 +35,7 @@ function showView(name) {
     timeChart.u.setSize({ width: Math.max(320, $('chart-time').clientWidth), height: 320 });
     massChart.u.setSize({ width: Math.max(320, $('chart-mass').clientWidth), height: 300 });
   } else if (name === 'settings') renderLogTail();
-  store.setSetting('view', name);
+  if (!erasing) store.setSetting('view', name).catch(() => {});
   try {
     history.replaceState(null, '', '#' + name);
   } catch {
@@ -217,8 +217,8 @@ async function init() {
   log.configure({ enabled: settings.logEnabled, level: settings.logLevel, packets: settings.logPackets });
   await restoreLogFolder();
   renderLogStatus();
-  $('about-version').textContent = 'v0.4.0';
-  log.info('app', `portal-met-bridge v0.4.0 started · ${navigator.userAgent}`);
+  $('about-version').textContent = 'v0.5.0';
+  log.info('app', `portal-met-bridge v0.5.0 started · ${navigator.userAgent}`);
 
   const env = await environmentCheck();
   renderPortalSteps({ secure: env.secure, api: env.api, adapter: env.adapter });
@@ -1293,6 +1293,125 @@ async function copyLogTail() {
   }
 }
 
+// -------------------------------------------------------------- start over --
+
+let erasing = false;
+
+async function openResetDialog() {
+  const dlg = $('reset-dialog');
+  const shots = await store.listShots({ limit: 100000 });
+  const beans = await store.listBeans({ limit: 100000 });
+  const withReadings = shots.filter((s) => s.refractometer?.tdsPct).length;
+  const items = [
+    `${shots.length} shot${shots.length === 1 ? '' : 's'} with ${shots.length === 1 ? 'its' : 'their'} samples${withReadings ? ` (${withReadings} with refractometer readings)` : ''}`,
+    `${beans.length} bean${beans.length === 1 ? '' : 's'} in the bean library`,
+    'all settings (machine address, recording, estimates, logging) and the current coffee',
+    `the debug log in this page (${log.ring.length} lines)`,
+  ];
+  if (portal.device) items.push(`the Bluetooth pairing with ${portal.device.name || 'the Portal'} (Chrome will ask you to pick it again)`);
+  $('reset-list').innerHTML = items.map((t) => `<li>${esc(t)}</li>`).join('');
+  const hasFolder = !!log.folder;
+  $('reset-folder-row').hidden = !hasFolder;
+  if (hasFolder) {
+    $('reset-folder-label').textContent = `Also delete the files this app wrote in ${log.folder.name}/portal-met-bridge/ (logs, exports, backups)${log.folderState !== 'granted' ? ' — folder access must be re-allowed first' : ''}`;
+    $('reset-folder').checked = log.folderState === 'granted';
+    $('reset-folder').disabled = log.folderState !== 'granted';
+  }
+  $('reset-confirm').value = '';
+  $('reset-go').disabled = true;
+  $('reset-progress').textContent = '';
+  $('reset-progress').dataset.level = 'bad';
+  dlg.showModal();
+  $('reset-confirm').focus();
+}
+
+async function eraseEverything() {
+  if (erasing) return;
+  erasing = true;
+  const prog = $('reset-progress');
+  const say = (t, level = 'warn') => {
+    prog.textContent = t;
+    prog.dataset.level = level;
+  };
+  const report = [];
+  $('reset-go').disabled = true;
+  $('reset-cancel').disabled = true;
+  $('reset-confirm').disabled = true;
+  const wipeFolder = !$('reset-folder-row').hidden && $('reset-folder').checked && !$('reset-folder').disabled;
+  log.info('reset', `erase everything requested${wipeFolder ? ' (including the save folder contents)' : ''}`);
+  try {
+    // 1. Devices: stop streams, forget the Portal pairing.
+    say('Disconnecting…');
+    stopLiveLoop();
+    recorder.reset();
+    try {
+      await portal.disconnect();
+      if (portal.device?.forget) {
+        await portal.device.forget();
+        report.push('Portal pairing forgotten');
+      }
+    } catch (err) {
+      report.push(`Portal: ${err?.message || err}`);
+    }
+    try {
+      machinePanel.detach();
+      meticulous?.disconnect();
+      meticulous = null;
+    } catch {
+      /* ignore */
+    }
+
+    // 2. Files in the save folder (only our own subfolder), then stop using the folder.
+    if (wipeFolder) {
+      say('Deleting files in the save folder…');
+      try {
+        const folderName = log.folder?.name || 'folder';
+        const removed = await log.eraseFolderContents();
+        report.push(removed ? `deleted ${folderName}/portal-met-bridge/` : 'save folder had no app files');
+      } catch (err) {
+        report.push(`save folder: ${err?.message || err}`);
+      }
+    } else {
+      log.forgetFolder(); // never recreate logs after the wipe
+    }
+
+    // 3. The database (shots, beans, settings, folder handle) and any other storage.
+    say('Deleting the database…');
+    await store.close();
+    const results = await deleteAllDatabases();
+    for (const r of results) {
+      if (r.name === 'portal-met-bridge') report.push(r.ok && !r.blocked ? 'database deleted' : `database: ${r.error || 'blocked'} — close other tabs of this app`);
+    }
+    try {
+      localStorage.clear();
+      sessionStorage.clear();
+    } catch {
+      /* not available */
+    }
+    try {
+      if (window.caches) for (const k of await caches.keys()) await caches.delete(k);
+    } catch {
+      /* ignore */
+    }
+    log.clear();
+
+    // 4. Restart into defaults.
+    const bad = results.some((r) => r.name === 'portal-met-bridge' && (!r.ok || r.blocked));
+    say(`${report.join(' · ')}. ${bad ? 'Reload once the other tabs are closed.' : 'Restarting…'}`, bad ? 'bad' : 'ok');
+    if (!bad) setTimeout(() => location.replace(location.pathname), 1200);
+    else {
+      $('reset-cancel').disabled = false;
+      $('reset-cancel').textContent = 'Close';
+      erasing = false;
+    }
+  } catch (err) {
+    say(`Could not finish: ${err?.message || err}. Nothing more will be changed; reload the page.`, 'bad');
+    $('reset-cancel').disabled = false;
+    $('reset-cancel').textContent = 'Close';
+    erasing = false;
+  }
+}
+
 // ---------------------------------------------------------------- events --
 
 document.querySelectorAll('.view-tab').forEach((b) => b.addEventListener('click', () => showView(b.dataset.view)));
@@ -1329,6 +1448,21 @@ $('settings-reset').addEventListener('click', async () => {
   if (!confirm('Reset every setting to its default? Shots, beans and the log folder are kept.')) return;
   await resetSettings();
   toast('Settings reset to defaults.');
+});
+$('reset-all').addEventListener('click', openResetDialog);
+$('reset-confirm').addEventListener('input', (e) => {
+  $('reset-go').disabled = e.target.value.trim().toUpperCase() !== 'ERASE';
+});
+$('reset-confirm').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    if (!$('reset-go').disabled) eraseEverything();
+  }
+});
+$('reset-go').addEventListener('click', eraseEverything);
+$('reset-cancel').addEventListener('click', () => $('reset-dialog').close());
+$('reset-dialog').addEventListener('cancel', (e) => {
+  if (erasing) e.preventDefault(); // Esc must not interrupt a wipe in progress
 });
 $('log-pick-folder').addEventListener('click', pickLogFolder);
 $('log-reallow-folder').addEventListener('click', reallowLogFolder);

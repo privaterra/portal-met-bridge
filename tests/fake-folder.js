@@ -47,11 +47,22 @@
     async requestPermission() {
       return 'granted';
     }
-    async getDirectoryHandle(name) {
-      return new FakeDirectoryHandle(this.path ? `${this.path}/${name}` : name, name);
+    async getDirectoryHandle(name, opts) {
+      const path = this.path ? `${this.path}/${name}` : name;
+      const exists = Object.keys(files).some((k) => k.startsWith(path + '/'));
+      if (!exists && !opts?.create) throw new DOMException('not found', 'NotFoundError');
+      return new FakeDirectoryHandle(path, name);
     }
     async getFileHandle(name) {
       return new FakeFileHandle(this.path ? `${this.path}/${name}` : name);
+    }
+    async removeEntry(name, opts) {
+      const prefix = (this.path ? `${this.path}/${name}` : name) + '/';
+      const keys = Object.keys(files).filter((k) => k.startsWith(prefix) || k === prefix.slice(0, -1));
+      if (!keys.length) throw new DOMException('not found', 'NotFoundError');
+      if (keys.length > 1 && !opts?.recursive) throw new DOMException('not empty', 'InvalidModificationError');
+      for (const k of keys) delete files[k];
+      window.__fakeFolderRemoved = (window.__fakeFolderRemoved || []).concat(prefix.slice(0, -1));
     }
   }
   window.showDirectoryPicker = async () => new FakeDirectoryHandle('', 'FakeFolder');

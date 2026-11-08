@@ -169,6 +169,20 @@ a { color: var(--cobalt); }
 .log-tail:empty::after { content: "Nothing logged yet."; color: #8a94a3; }
 .badge { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 3px; background: var(--amber); color: #fff; margin-left: 8px; vertical-align: middle; }
 
+/* danger zone + modal */
+.panel.settings.danger-zone { border-color: var(--bad); box-shadow: inset 0 3px 0 var(--bad); }
+.btn.danger.solid { background: var(--bad); color: #fff; }
+.btn.danger.solid:hover:not(:disabled) { background: #85202d; }
+.modal { border: 1px solid var(--rule); border-radius: 6px; padding: 20px 22px; width: min(92vw, 520px); color: var(--ink); background: #fff; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25); }
+.modal::backdrop { background: rgba(28, 36, 48, 0.45); }
+.modal h2 { font-size: 16px; margin-bottom: 8px; }
+.modal p { font-size: 13px; margin: 6px 0; }
+.modal ul { margin: 4px 0 8px; padding-left: 20px; font-size: 13px; }
+.modal ul li { margin: 2px 0; }
+.modal .field { margin-top: 10px; }
+.modal .row.end { justify-content: flex-end; margin-top: 10px; margin-bottom: 0; }
+.modal .status:empty { display: none; }
+
 /* connection check */
 .check-list { margin-top: 8px; font-size: 12px; }
 .check-list summary { cursor: pointer; color: var(--ink-2); }

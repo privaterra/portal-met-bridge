@@ -65,6 +65,7 @@ Source: [graphefruit/Beanconqueror](https://github.com/graphefruit/Beanconqueror
 - `window.showDirectoryPicker({ mode: 'readwrite' })` needs a user gesture and Chrome/Edge; Safari and Firefox have no directory picker, so the app falls back to downloads.
 - The returned `FileSystemDirectoryHandle` is structured-cloneable and is stored in IndexedDB; after a browser restart `queryPermission()` returns `prompt` and `requestPermission()` must again run inside a user gesture (the *Re-allow folder* button).
 - Appending: `getFileHandle(name, { create: true })`, `createWritable({ keepExistingData: true })`, `seek(file.size)`, `write`, `close`. The log flushes every 3 s and on `beforeunload`.
+- Removing the app's files: `folder.removeEntry('portal-met-bridge', { recursive: true })`; only that subfolder is ever touched. `BluetoothDevice.forget()` (Chrome 110+) drops the pairing permission; `indexedDB.deleteDatabase()` never settles while another tab holds the database open, so the wipe reports that case instead of hanging.
 - `tests/fake-folder.js` stands in for all of this in tests.
 
 ## Ideas not done yet

@@ -15,7 +15,7 @@ Thanks for looking. This is a small, vibe-coded tool (see "How this was built" i
 npm start                 # http://localhost:8787  (or: node serve.mjs)
 npm test                  # unit tests: analysis maths, calibration pools, packet parser, CSV, hand-off round-trip
 npm i -D playwright socket.io
-npm run test:e2e          # Chrome + simulated Portal + mock machine, 28 checks; add --headed to watch
+npm run test:e2e          # Chrome + simulated Portal + mock machine, 35 checks; add --headed to watch
 npm run mock              # mock machine on :8080 (PORT=… to change); point the app at localhost:8080
 ```
 
@@ -36,6 +36,7 @@ Please keep these invariants:
 - New user-facing options go through the `SETTINGS` table in `js/main.js` (one line: key, default, input id), so they are persisted, exported, imported and reset together.
 - Nothing is sent anywhere but the machine on the LAN and the Portal over BLE.
 - The app never sends `/api/v1/action/*` commands unless a future feature explicitly adds a control panel with confirmation.
+- The only destructive action is *Start over*; it stays behind a typed confirmation, lists what it deletes, and touches nothing on disk outside the app's own `portal-met-bridge/` subfolder.
 
 ## Pull requests
 

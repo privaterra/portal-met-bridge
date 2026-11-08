@@ -223,6 +223,16 @@
         </div>
       </section>
 
+      <section class="panel settings danger-zone">
+        <div class="panel-head"><h2>Start over</h2></div>
+        <div class="settings-grid">
+          <p class="hint">Erases everything this app has stored in this browser — shots and their samples, refractometer readings, the bean library, all settings, the debug log and the Portal pairing — and, if you choose, the files it wrote in your save folder. The app then restarts as if freshly installed. There is no undo; take a backup first if in doubt.</p>
+          <div class="row">
+            <button id="reset-all" class="btn danger">Erase everything and start fresh…</button>
+          </div>
+        </div>
+      </section>
+
       <section class="panel settings">
         <div class="panel-head"><h2>About</h2></div>
         <p class="hint">portal-met-bridge <span id="about-version"></span> · MIT · <a href="https://github.com/privaterra/portal-met-bridge" target="_blank" rel="noopener">github.com/privaterra/portal-met-bridge</a> · vibe-coded with Claude; see the README for how. Nothing leaves this computer except requests to the machine on your LAN and the Portal over Bluetooth.</p>
@@ -417,6 +427,22 @@
       </section>
     </main>
   </div>
+
+  <dialog id="reset-dialog" class="modal">
+    <form method="dialog">
+      <h2>Erase everything and start fresh?</h2>
+      <p>This deletes, permanently:</p>
+      <ul id="reset-list"></ul>
+      <label class="check" id="reset-folder-row" hidden><input type="checkbox" id="reset-folder" checked /> <span id="reset-folder-label"></span></label>
+      <p class="hint">Your Meticulous and Portal are not touched — only what this app stored. It restarts with default settings afterwards.</p>
+      <label class="field"><span>Type <b>ERASE</b> to confirm</span><input id="reset-confirm" type="text" autocomplete="off" spellcheck="false" placeholder="ERASE" /></label>
+      <p class="status" id="reset-progress" data-level="bad"></p>
+      <div class="row end">
+        <button type="button" id="reset-cancel" class="btn">Cancel</button>
+        <button type="button" id="reset-go" class="btn danger solid" disabled>Erase and restart</button>
+      </div>
+    </form>
+  </dialog>
 
   <div class="toast" id="toast" hidden></div>
   <script type="module" src="js/main.js"></script>

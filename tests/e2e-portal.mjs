@@ -201,6 +201,41 @@ try {
   await page.click('#portal-disconnect');
   await page.waitForTimeout(300);
   check('disconnect clears the link', (await page.getAttribute('#link-portal .dot', 'data-state')) === 'disconnected');
+
+  // Start over: typed confirmation, folder wipe, database gone, reload into defaults
+  await page.click('.view-tab[data-view="settings"]');
+  await page.click('#log-pick-folder'); // re-attach the fake folder so there is something to wipe
+  await page.waitForTimeout(200);
+  await page.click('#log-download');
+  await page.waitForTimeout(500);
+  const before = await page.evaluate(() => Object.keys(window.__fakeFolderFiles).length);
+  await page.click('#reset-all');
+  await page.waitForSelector('#reset-dialog[open]');
+  const listText = await page.textContent('#reset-list');
+  check('erase dialog lists shots, beans, settings, log and pairing', /1 shot/.test(listText) && /bean/.test(listText) && /settings/.test(listText) && /debug log/.test(listText), listText.replace(/\s+/g, ' ').slice(0, 160));
+  check('erase button disabled until ERASE is typed', await page.isDisabled('#reset-go'));
+  await page.fill('#reset-confirm', 'erase');
+  check('typing ERASE (any case) enables it', !(await page.isDisabled('#reset-go')));
+  check('folder wipe offered and ticked', await page.isChecked('#reset-folder'));
+  const navigation = page.waitForNavigation({ timeout: 15000 });
+  await page.click('#reset-go');
+  await page.waitForFunction(() => /Restarting|database deleted/.test(document.querySelector('#reset-progress')?.textContent || ''), null, { timeout: 10000 });
+  const progress = await page.textContent('#reset-progress');
+  const removed = await page.evaluate(() => window.__fakeFolderRemoved || []);
+  check('erase report: database deleted and folder subfolder removed', /database deleted/.test(progress) && removed.includes('portal-met-bridge'), `${progress.trim()} | removed: ${removed.join(',')} | files before: ${before}`);
+  await navigation;
+  await page.waitForLoadState('networkidle');
+  await page.waitForTimeout(800);
+  const after = await page.evaluate(async () => ({
+    shots: document.querySelectorAll('#shot-list li').length,
+    host: document.querySelector('#meticulous-host').value,
+    addr: document.querySelector('#meticulous-addr').textContent,
+    logOn: document.querySelector('#log-enabled').checked,
+    beans: document.querySelectorAll('#bean-list option').length,
+    hash: location.hash,
+    dbs: (await (indexedDB.databases ? indexedDB.databases() : Promise.resolve([]))).map((d) => d.name),
+  }));
+  check('after restart: no shots, no beans, default address, log off, opens on Shots', after.shots === 0 && after.beans === 0 && after.host === '127.0.0.1' && after.addr === '127.0.0.1' && after.logOn === false && (after.hash === '' || after.hash === '#shots'), JSON.stringify(after));
   check('no page errors', errors.length === 0, errors.join(' | ').slice(0, 300));
 
   if (headed) await page.waitForTimeout(5000);

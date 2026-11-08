@@ -75,4 +75,5 @@ Source: [graphefruit/Beanconqueror](https://github.com/graphefruit/Beanconqueror
 - A `/api/v1/action/*` panel (start/stop/tare/preheat) — deliberately left out of a first release of a tool that is mainly a logger.
 - Export the calibration table (bean, k, n, LOOCV) as CSV.
 - A small "machine shot browser" that pulls any past shot from `/api/v1/history` (not just the last) and lets you attach Portal recordings after the fact.
+- Feedback from Discord community members.
 - Ensure Github commits are signed.

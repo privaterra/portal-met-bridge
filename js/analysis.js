@@ -419,13 +419,13 @@ export function extractionYield(tdsPct, beverageG, doseG) {
 }
 
 /** Combine analysis + fit into an estimate with explicit uncertainty flags. */
-export function estimateForShot(analysis, fit, { beverageG, doseG } = {}) {
+export function estimateForShot(analysis, fit, { beverageG, doseG, poolLabel } = {}) {
   const flags = [];
   if (!analysis || !(analysis.meanEcPerG > 0) || ['no-portal-data', 'no-weight-data', 'insufficient-mass'].includes(analysis.status)) {
     return { tdsPct: null, eyPct: null, flags: ['No usable Portal + weight data in this shot, so nothing to estimate from.'] };
   }
   if (!fit || !fit.calibrated) {
-    return { tdsPct: null, eyPct: null, flags: ['No refractometer calibration yet for this coffee.'] };
+    return { tdsPct: null, eyPct: null, flags: [poolLabel ? `No refractometer readings yet for ${poolLabel}.` : 'No refractometer calibration yet for this coffee.'] };
   }
   if (analysis.status !== 'ok') flags.push('Shot analysis is not reliable (' + analysis.status + ').');
   if (fit.preliminary) flags.push(`Preliminary: only ${fit.shotCount} reference shot${fit.shotCount === 1 ? '' : 's'} (need ${DEFAULTS.minCalibrationShots}).`);
@@ -433,7 +433,55 @@ export function estimateForShot(analysis, fit, { beverageG, doseG } = {}) {
   if (fit.shotCount >= 2 && (x < fit.minX * 0.95 || x > fit.maxX * 1.05)) flags.push('Outside the EC range of the reference shots (extrapolated).');
   const tdsPct = predictTds(fit, x);
   const eyPct = extractionYield(tdsPct, beverageG ?? analysis.totalMassG, doseG);
-  return { tdsPct, eyPct, flags, model: fit.activeModel };
+  return { tdsPct, eyPct, flags, model: fit.activeModel, pool: fit.pool ?? null, poolLabel: fit.poolLabel ?? poolLabel ?? null };
+}
+
+// ------------------------------------------------------- calibration pools --
+
+/**
+ * Which reference shots may inform an estimate for a given coffee.
+ * Pools are ordered from most to least specific. "auto" takes the most
+ * specific pool that has reached the minimum shot count, else the most
+ * specific one with any shots at all (flagged preliminary).
+ */
+export const POOLS = Object.freeze([
+  { id: 'bean', label: 'this bean only', match: (p, c) => !!c.coffeeKey && p.coffeeKey === c.coffeeKey },
+  { id: 'roaster', label: 'the same roaster', match: (p, c) => !!c.roasterKey && p.roasterKey === c.roasterKey },
+  { id: 'roast', label: 'the same roast level', match: (p, c) => !!c.roastLevel && p.roastLevel === c.roastLevel },
+  { id: 'all', label: 'all my coffees', match: () => true },
+]);
+
+/**
+ * @param {Array} points   calibration points carrying coffeeKey/roasterKey/roastLevel
+ * @param {object} coffee  { coffeeKey, roasterKey, roastLevel } of the shot being estimated
+ * @param {string} mode    'auto' | 'bean' | 'roaster' | 'roast' | 'all'
+ * @param {object} opts    { excludeId, minShots }
+ * @returns fit with .pool, .poolLabel, .poolPoints, .distinctCoffees, .fallbackFrom
+ */
+export function fitForCoffee(points, coffee, mode = 'auto', opts = {}) {
+  const minShots = opts.minShots ?? DEFAULTS.minCalibrationShots;
+  const c = coffee || {};
+  const candidates = mode === 'auto' ? POOLS : POOLS.filter((p) => p.id === mode);
+  const fits = candidates.map((pool) => {
+    const pts = points.filter((p) => p.id !== opts.excludeId && pool.match(p, c));
+    const fit = fitCalibration(pts, opts);
+    fit.pool = pool.id;
+    fit.poolLabel = pool.label;
+    fit.poolPoints = pts;
+    fit.distinctCoffees = new Set(pts.map((p) => p.coffeeKey || '')).size;
+    return fit;
+  });
+  let chosen = fits.find((f) => f.shotCount >= minShots) || fits.find((f) => f.shotCount > 0) || fits[fits.length - 1];
+  if (!chosen) {
+    chosen = fitCalibration([], opts);
+    chosen.pool = mode === 'auto' ? 'bean' : mode;
+    chosen.poolLabel = (POOLS.find((p) => p.id === chosen.pool) || POOLS[0]).label;
+    chosen.poolPoints = [];
+    chosen.distinctCoffees = 0;
+  }
+  chosen.fallbackFrom = mode === 'auto' && chosen.pool !== 'bean' ? 'bean' : null;
+  chosen.mode = mode;
+  return chosen;
 }
 
 // ------------------------------------------------------------------ helpers --

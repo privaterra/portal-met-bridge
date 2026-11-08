@@ -129,7 +129,29 @@ a { color: var(--cobalt); }
   padding: 6px 8px;
   width: 100%;
 }
+.field select {
+  border: 1px solid var(--rule);
+  background: #fff;
+  border-radius: 3px;
+  padding: 6px 8px;
+  width: 100%;
+}
+.field.inline { margin-top: 10px; }
+.field span small { color: var(--ink-3); font-weight: 400; margin-left: 4px; }
 .field textarea { resize: vertical; }
+
+/* connection check */
+.check-list { margin-top: 8px; font-size: 12px; }
+.check-list summary { cursor: pointer; color: var(--ink-2); }
+.check-list summary span { color: var(--ink-3); margin-left: 4px; }
+.check-list ol { list-style: none; margin: 8px 0 0; padding: 0; }
+.check-list li { display: flex; align-items: baseline; gap: 8px; padding: 2px 0; color: var(--ink-2); }
+.check-list li i { width: 9px; height: 9px; border-radius: 50%; border: 1px solid var(--ink-3); background: var(--paper-3); flex: none; transform: translateY(1px); }
+.check-list li[data-ok="true"] i { background: var(--ok); border-color: var(--ok); }
+.check-list li[data-ok="false"] i { background: var(--bad); border-color: var(--bad); }
+.check-list li[data-ok="warn"] i { background: var(--amber); border-color: var(--amber); }
+.check-list li .why { color: var(--bad); margin-left: 4px; }
+.check-list li .why.warn { color: var(--warn); }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
 .row.two > * { flex: 1; min-width: 0; }
 .check { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; color: var(--ink-2); margin: 6px 0; }

@@ -164,3 +164,81 @@ await test('QR-sized hand-off fits the byte budget and still decodes', async () 
 });
 
 console.log(`\n${passed} test group(s) passed${process.exitCode ? ', with failures' : ''}.`);
+
+// ---------------------------------------------------------------- v0.3 ----
+import { parseMeasurement, SHOW_GRAPH, HIDE_GRAPH, PACKET_BYTES } from '../js/portal-ble.js';
+import { fitForCoffee, POOLS } from '../js/analysis.js';
+import { shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, csvEscape } from '../js/export.js';
+
+await test('Portal packet parser: 13-byte little-endian floats + status byte', () => {
+  const buf = new ArrayBuffer(PACKET_BYTES);
+  const dv = new DataView(buf);
+  dv.setFloat32(0, 2.345, true);
+  dv.setFloat32(4, 31.5, true);
+  dv.setFloat32(8, 64.25, true);
+  dv.setUint8(12, 87);
+  const m = parseMeasurement(dv);
+  assert.ok(Math.abs(m.ec - 2.345) < 1e-6 && m.tInt === 31.5 && m.tOut === 64.25 && m.status === 87);
+  assert.equal(parseMeasurement(new DataView(new ArrayBuffer(12))), null, 'wrong length rejected');
+  dv.setFloat32(0, NaN, true);
+  assert.equal(parseMeasurement(dv), null, 'NaN rejected');
+  assert.deepEqual([...SHOW_GRAPH], [0x40, 0x00, 0x01, 0x2d]);
+  assert.deepEqual([...HIDE_GRAPH], [0x40, 0x00, 0x01, 0x2e]);
+});
+
+await test('calibration pools: auto falls back bean → roaster → roast → all, and labels it', () => {
+  const mk = (id, coffeeKey, roasterKey, roastLevel, x, k) => ({ id, coffeeKey, roasterKey, roastLevel, meanEcPerG: x, tdsPct: k * x });
+  const pts = [
+    ...[1.6, 1.7, 1.8, 1.9, 2.0].map((x, i) => mk('a' + i, 'bean-a', 'roaster-1', 'light', x, 3.0)),
+    ...[1.5, 1.8, 2.1].map((x, i) => mk('b' + i, 'bean-b', 'roaster-1', 'light', x, 3.3)),
+    ...[2.2, 2.4].map((x, i) => mk('c' + i, 'bean-c', 'roaster-2', 'dark', x, 2.5)),
+  ];
+  assert.equal(POOLS.map((p) => p.id).join(','), 'bean,roaster,roast,all');
+  // Bean A has 5 shots → bean pool
+  const fa = fitForCoffee(pts, { coffeeKey: 'bean-a', roasterKey: 'roaster-1', roastLevel: 'light' }, 'auto');
+  assert.equal(fa.pool, 'bean');
+  assert.equal(fa.shotCount, 5);
+  assert.ok(Math.abs(fa.proportional.k - 3.0) < 1e-9);
+  // Bean B has only 3 → falls back to roaster-1 (8 shots), flagged as a fallback
+  const fb = fitForCoffee(pts, { coffeeKey: 'bean-b', roasterKey: 'roaster-1', roastLevel: 'light' }, 'auto');
+  assert.equal(fb.pool, 'roaster');
+  assert.equal(fb.shotCount, 8);
+  assert.equal(fb.distinctCoffees, 2);
+  assert.equal(fb.fallbackFrom, 'bean');
+  // A brand-new light roast from an unknown roaster → roast pool (8 light shots)
+  const fn = fitForCoffee(pts, { coffeeKey: 'bean-new', roasterKey: 'roaster-9', roastLevel: 'light' }, 'auto');
+  assert.equal(fn.pool, 'roast');
+  assert.equal(fn.shotCount, 8);
+  // Unknown everything → all (10 shots)
+  const fu = fitForCoffee(pts, { coffeeKey: 'x', roasterKey: 'y', roastLevel: '' }, 'auto');
+  assert.equal(fu.pool, 'all');
+  assert.equal(fu.shotCount, 10);
+  // Forced bean-only with too few shots stays on bean and is preliminary; none at all → not calibrated
+  const forced = fitForCoffee(pts, { coffeeKey: 'bean-c', roasterKey: 'roaster-2', roastLevel: 'dark' }, 'bean');
+  assert.equal(forced.pool, 'bean');
+  assert.equal(forced.preliminary, true);
+  const none = fitForCoffee(pts, { coffeeKey: 'nothing', roasterKey: '', roastLevel: '' }, 'bean');
+  assert.equal(none.calibrated, false);
+  assert.equal(none.poolLabel, 'this bean only');
+  // excludeId leaves the shot itself out
+  const loo = fitForCoffee(pts, { coffeeKey: 'bean-a', roasterKey: 'roaster-1', roastLevel: 'light' }, 'bean', { excludeId: 'a0' });
+  assert.equal(loo.shotCount, 4);
+});
+
+await test('CSV exports: escaping, per-sample rows, summary columns', () => {
+  assert.equal(csvEscape('a,b'), '"a,b"');
+  assert.equal(csvEscape('say "hi"'), '"say ""hi"""');
+  assert.equal(csvEscape(NaN), '');
+  const shot = makeDemoShot({ seed: 3 });
+  shot.context = { beanName: 'Test, with comma', roaster: 'R', roastLevel: 'light', doseG: 18 };
+  const csv = shotSamplesCsv(shot);
+  const lines = csv.trim().split('\n');
+  assert.equal(lines.length, 1 + shot.machine.length + shot.portal.length);
+  assert.ok(lines[0].startsWith('t_s,source,stage,pressure_bar'));
+  const r = analyzeShot(shot.portal, shot.machine.map((s) => ({ t: s.t, w: s.w })), { doseG: 18 });
+  const row = summaryRow(shot, r, { tdsPct: 9.1, eyPct: 20.2, model: 'proportional', pool: 'bean', flags: ['x'] });
+  assert.equal(row.length, SUMMARY_COLUMNS.length);
+  assert.ok(rowsToCsv([SUMMARY_COLUMNS, row]).includes('"Test, with comma"'));
+});
+
+console.log(`\n${passed} test group(s) passed in total${process.exitCode ? ', with failures' : ''}.`);

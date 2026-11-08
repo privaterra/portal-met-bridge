@@ -37,8 +37,8 @@
       <section class="rail-section">
         <h2>Machine</h2>
         <label class="field">
-          <span>Address (IP or hostname; the machine serves on port 80)</span>
-          <input id="meticulous-host" type="text" placeholder="192.168.30.2" spellcheck="false" />
+          <span>Address (your machine's IP or meticulous.local; it serves on port 80)</span>
+          <input id="meticulous-host" type="text" placeholder="127.0.0.1" spellcheck="false" />
         </label>
         <div class="row">
           <button id="meticulous-connect" class="btn primary">Connect</button>
@@ -60,19 +60,61 @@
           <button id="portal-hide-graph" class="btn small" disabled>Hide graph</button>
         </div>
         <p class="hint" id="portal-hint">Close the Belka app first; the Portal accepts one connection at a time. Needs Chrome or Edge.</p>
+        <details class="check-list" id="portal-check">
+          <summary>Connection check <span id="portal-check-summary"></span></summary>
+          <ol id="portal-steps">
+            <li data-step="secure"><i></i>Page is secure (localhost)</li>
+            <li data-step="api"><i></i>Web Bluetooth available</li>
+            <li data-step="adapter"><i></i>Bluetooth adapter on and allowed for Chrome</li>
+            <li data-step="device"><i></i>Portal chosen</li>
+            <li data-step="gatt"><i></i>GATT connected</li>
+            <li data-step="service"><i></i>Service 0x7400 found</li>
+            <li data-step="measurement"><i></i>Measurement 0x7410 found</li>
+            <li data-step="command"><i></i>Command 0x7420 found</li>
+            <li data-step="notify"><i></i>Notifications started</li>
+            <li data-step="packet"><i></i>13-byte packets arriving <span id="portal-rate"></span></li>
+          </ol>
+          <p class="hint" id="portal-raw"></p>
+          <p class="hint">On macOS, Chrome needs Bluetooth permission: System Settings → Privacy &amp; Security → Bluetooth → Google Chrome.</p>
+        </details>
       </section>
 
       <section class="rail-section">
         <h2>This coffee</h2>
-        <label class="field"><span>Bean</span><input id="ctx-bean" type="text" placeholder="Roaster – lot" /></label>
-        <label class="field"><span>Roaster</span><input id="ctx-roaster" type="text" /></label>
+        <label class="field"><span>Bean <small id="bean-count"></small></span><input id="ctx-bean" type="text" list="bean-list" placeholder="pick a previous bean or type a new one" autocomplete="off" /></label>
+        <datalist id="bean-list"></datalist>
+        <label class="field"><span>Roaster</span><input id="ctx-roaster" type="text" list="roaster-list" autocomplete="off" /></label>
+        <datalist id="roaster-list"></datalist>
+        <div class="row two">
+          <label class="field"><span>Roast level</span>
+            <select id="ctx-roast">
+              <option value="">unknown</option>
+              <option value="light">light</option>
+              <option value="medium-light">medium-light</option>
+              <option value="medium">medium</option>
+              <option value="medium-dark">medium-dark</option>
+              <option value="dark">dark</option>
+            </select>
+          </label>
+          <label class="field"><span>Process</span>
+            <select id="ctx-process">
+              <option value="">unknown</option>
+              <option value="washed">washed</option>
+              <option value="natural">natural</option>
+              <option value="honey">honey / pulped</option>
+              <option value="anaerobic">anaerobic / fermented</option>
+              <option value="other">other</option>
+            </select>
+          </label>
+        </div>
+        <label class="field"><span>Origin</span><input id="ctx-origin" type="text" placeholder="country, region" /></label>
         <div class="row two">
           <label class="field"><span>Dose (g)</span><input id="ctx-dose" type="number" step="0.1" min="0" placeholder="18.0" /></label>
           <label class="field"><span>Grind (µm)</span><input id="ctx-grind" type="number" step="5" min="0" placeholder="420" /></label>
         </div>
         <label class="field"><span>Grinder</span><input id="ctx-grinder" type="text" placeholder="Zerno Z1" /></label>
         <label class="field"><span>Note for the log</span><textarea id="ctx-note" rows="2"></textarea></label>
-        <p class="hint">Calibration is kept per bean name, so keep the name stable while you work through a bag.</p>
+        <p class="hint">Picking a previous bean fills in its roaster, roast level, process and origin. Calibration is kept per bean name, so keep the name stable while you work through a bag.</p>
       </section>
 
       <section class="rail-section">
@@ -215,7 +257,18 @@
             <div class="big"><span class="value" id="est-tds">–</span><span class="unit">% TDS</span></div>
             <div class="big"><span class="value" id="est-ey">–</span><span class="unit">% EY</span></div>
           </div>
+          <p class="inline-note" id="est-basis"></p>
           <ul class="flags" id="est-flags"></ul>
+          <label class="field inline"><span>Estimate from</span>
+            <select id="est-pool">
+              <option value="auto">auto — this bean, else same roaster, else same roast level, else all</option>
+              <option value="bean">this bean only</option>
+              <option value="roaster">the same roaster (any of its beans)</option>
+              <option value="roast">the same roast level (any roaster)</option>
+              <option value="all">all my coffees</option>
+            </select>
+          </label>
+          <p class="hint">With no refractometer readings for this exact bean, the estimate can borrow the ratio from related coffees. It is flagged with what it was based on; the wider the pool, the rougher the number.</p>
           <h3>Refractometer reading for this shot</h3>
           <div class="row two">
             <label class="field"><span>TDS (%)</span><input id="ref-tds" type="number" step="0.01" min="0" max="30" placeholder="9.20" /></label>
@@ -249,11 +302,20 @@
           <p class="hint">Beanconqueror has no field for an imported TDS, so the EC analysis and the estimate land in the brew note and as a custom EC trace; type the refractometer TDS into Beanconqueror's own field if you want its EY.</p>
         </div>
         <div>
-          <h2>Files</h2>
+          <h2>Files for this shot</h2>
           <div class="row">
-            <button id="dl-csv" class="btn small" disabled>CSV (merged samples)</button>
+            <button id="dl-csv" class="btn small" disabled>CSV (samples)</button>
             <button id="dl-json" class="btn small" disabled>JSON (raw shot)</button>
+            <button id="dl-jpeg" class="btn small" disabled>Graphs (JPEG)</button>
+            <button id="dl-pdf" class="btn small" disabled>Report (PDF)</button>
           </div>
+          <h3>Files for all shots</h3>
+          <div class="row">
+            <button id="dl-summary" class="btn small">Summary CSV</button>
+            <button id="dl-zip" class="btn small">Everything (zip)</button>
+            <span class="inline-note" id="dl-progress"></span>
+          </div>
+          <p class="hint">The summary has one row per shot with the EC metrics, refractometer reading and estimate. The zip adds every shot's CSV, JSON, graphs and PDF report.</p>
           <h3>Attach a saved machine shot</h3>
           <p class="hint">Pulls the machine's own record and attaches it to the selected recording when the times line up, or creates a new entry without Portal data.</p>
           <div class="row">

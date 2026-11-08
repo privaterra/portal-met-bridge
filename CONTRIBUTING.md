@@ -12,13 +12,18 @@ Thanks for looking. This is a small, vibe-coded tool (see "How this was built" i
 ## Running locally
 
 ```bash
-node serve.mjs            # http://localhost:8787
-node tests/run.mjs        # unit tests (analysis maths, hand-off round-trip)
+npm start                 # http://localhost:8787  (or: node serve.mjs)
+npm test                  # unit tests: analysis maths, calibration pools, packet parser, CSV, hand-off round-trip
+npm i -D playwright socket.io
+npm run test:e2e          # Chrome + simulated Portal + mock machine, 20 checks; add --headed to watch
+npm run mock              # mock machine on :8080 (PORT=… to change); point the app at localhost:8080
 ```
 
 Web Bluetooth needs Chrome or Edge and a `localhost` origin. `window.__pb` exposes the app's state and chart instances in the console while debugging.
 
-To work without hardware, use *Add a demo shot* / *Replay a demo live*, or run a mock machine: the backend protocol is small enough that a 60-line socket.io server covers it (see `docs/NOTES.md` for payloads).
+To work without hardware: *Add a demo shot* / *Replay a demo live* in the app; `tests/mock-meticulous.mjs` for the machine; and `tests/fake-bluetooth.js` for the Portal — paste it into the console before clicking *Connect over Bluetooth* and the app connects to a simulated Portal that emits the real 13-byte packets.
+
+When you do have a Portal, the **Connection check** panel is the thing to screenshot for a bug report: it shows which GATT step failed and the raw bytes of the last packet.
 
 ## Code shape
 
@@ -26,7 +31,8 @@ No build step, plain ES modules. Each file in `js/` is one concern; `analysis.js
 
 Please keep these invariants:
 
-- EC is never displayed as TDS without a calibration, and estimates always carry their flags.
+- EC is never displayed as TDS without a calibration, and estimates always carry their flags — including which pool (bean / roaster / roast level / all) they were borrowed from.
+- `js/export.js` and `js/analysis.js` stay free of DOM access beyond canvases, so exports can be scripted.
 - Nothing is sent anywhere but the machine on the LAN and the Portal over BLE.
 - The app never sends `/api/v1/action/*` commands unless a future feature explicitly adds a control panel with confirmation.
 

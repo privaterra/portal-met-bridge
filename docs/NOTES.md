@@ -27,7 +27,7 @@ Decenza's EC → TDS method (fork janhcla/Decenza, tag `portal-calibration-20261
 
 ## Meticulous (observed on firmware 0.2.24-475, image 2026M1510-beta)
 
-Source: [MeticulousHome/meticulous-backend](https://github.com/MeticulousHome/meticulous-backend) plus the author's machine at `192.168.30.2`. The [nickwilsonr/meticulous-addon](https://github.com/nickwilsonr/meticulous-addon) README/code was the hint for the port.
+Source: [MeticulousHome/meticulous-backend](https://github.com/MeticulousHome/meticulous-backend) plus the author's own machine on his LAN. The [nickwilsonr/meticulous-addon](https://github.com/nickwilsonr/meticulous-addon) README/code was the hint for the port.
 
 - **Port 80.** nginx on the machine fronts the backend's REST and socket.io. The backend process listens on 8080 bound to `127.0.0.1`, so `:8080` is unreachable from the LAN. CORS is `*`, so a page on `http://localhost` can call the machine directly.
 - socket.io `status` (~10 Hz): `{ name, state, extracting, time (ms since shot start, -1 idle), profile, profile_time, sensors: { p bar, f ml/s, w g, t °C, g gravimetric ml/s }, setpoints: { active, pressure?, flow? }, loaded_profile, id }`.
@@ -50,6 +50,15 @@ Source: [graphefruit/Beanconqueror](https://github.com/graphefruit/Beanconqueror
 - Envelope v1: `app{name,version}`, `brew{date ISO, doseIn{g}, waterIn{ml} (required), beverageOut{g} (required), brewTime s (required), temperature °C, grindSize, grinderName, grinderRpm, preparationMethod (required), preparationType e.g. "METICULOUS", bloomTime, firstDripTime, rating 0–10, note}`, optional `bean{name, roaster, roastingDate, origin, …}`, `flow{fidelity full|downsampled, t[] delta ms, waterDispensed[] delta decigrams, weight[] delta decigrams, temperature[] absolute}`, `metrics[]{key, name, unit, kind measured|target, t[] absolute ms, v[]}` (≤ 100 metrics, ≤ 10,000 points each), `imported{source, sourceName, sourceUrl https, device, schema, params}` (required).
 - **No TDS field.** The estimate goes in `brew.note` and `imported.params`; the EC trace is sent as a custom metric. Type the refractometer value into Beanconqueror's own TDS field for its EY.
 - Beanconqueror has native Meticulous support (same socket.io `status` payload) and BLE refractometer support (DiFluid R2), but no Belka Portal support.
+
+## Web Bluetooth on macOS Chrome (what the app relies on)
+
+- `navigator.bluetooth.requestDevice({ filters: [{ services: [0x7400] }, { namePrefix: 'PORTAL' }, …], optionalServices: [0x7400] })` — filters are OR-ed; a 16-bit alias is accepted for the service. The variegated firmware and Decenza both identify a Portal by the advertised `0x7400`, so the service filter should match; the name prefixes are belt-and-braces (Decenza labels an unnamed Portal "PORTAL").
+- `requestDevice` must run inside a user gesture (the Connect button) and shows Chrome's own chooser; nothing on the page can pick for you.
+- `getAvailability()` returns false when Bluetooth is off **or** Chrome lacks the macOS Bluetooth permission; the Connection check surfaces this before the chooser.
+- `writeValueWithResponse` is used for the 4-byte display commands (the Portal expects write-with-response).
+- No background mode: notifications stop when the tab is discarded, so keep the tab open during a shot.
+- `tests/fake-bluetooth.js` is a minimal stand-in for `navigator.bluetooth` that covers exactly this surface, useful for any other Portal tool written for the browser.
 
 ## Ideas not done yet
 

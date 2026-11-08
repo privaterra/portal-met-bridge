@@ -6,6 +6,7 @@
 // reachable over the network (it only matters for an emulated backend run
 // without nginx, e.g. in Docker). This matches the nickwilsonr/meticulous-addon
 // finding. Verified against firmware 0.2.24 (beta channel) on 2026-11-08.
+// DEFAULT_HOST is a placeholder: type your machine's LAN IP or meticulous.local.
 //
 //   socket.io "status"  (~10 Hz): { name, state, extracting, time (ms since shot
 //       start), profile, profile_time, sensors: { p bar, f ml/s, w g, t °C,
@@ -30,7 +31,7 @@
 
 import { io } from '../vendor/socket.io.esm.min.js';
 
-export const DEFAULT_HOST = '192.168.30.2';
+export const DEFAULT_HOST = '127.0.0.1';
 
 export function normalizeBaseUrl(input) {
   let s = (input || '').trim();

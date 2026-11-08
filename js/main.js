@@ -1,14 +1,15 @@
 // main.js — wires the devices, the recorder, storage, charts and export together.
 
-import { PortalBle, bluetoothSupported } from './portal-ble.js';
+import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js';
 import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js';
 import { MachinePanel } from './machine-panel.js';
 import { ShotRecorder } from './recorder.js';
 import { Store, coffeeKey } from './store.js';
 import { TimeChart, MassChart, CalibrationChart } from './charts.js';
-import { analyzeShot, fitCalibration, estimateForShot, extractionYield, predictTds } from './analysis.js';
+import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, DEFAULTS } from './analysis.js';
 import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js';
 import { makeDemoShot } from './demo.js';
+import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug } from './export.js';
 import qrcode from '../vendor/qrcode.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -58,24 +59,23 @@ async function init() {
   const view = location.hash === '#machine' ? 'machine' : await store.getSetting('view', 'shots');
   showView(view);
   const ctx = await store.getSetting('context', {});
-  $('ctx-bean').value = ctx.beanName ?? '';
-  $('ctx-roaster').value = ctx.roaster ?? '';
-  $('ctx-dose').value = ctx.doseG ?? '';
-  $('ctx-grind').value = ctx.grindSize ?? '';
-  $('ctx-grinder').value = ctx.grinderName ?? 'Zerno Z1';
-  $('ctx-note').value = ctx.note ?? '';
+  writeContext(ctx);
   $('settle-sec').value = await store.getSetting('settleSec', 6);
   $('lag-sec').value = await store.getSetting('lagSec', 0);
   $('portal-auto-graph').checked = await store.getSetting('autoGraph', true);
+  $('est-pool').value = await store.getSetting('estimatePool', 'auto');
   recorder.settleSec = Number($('settle-sec').value) || 6;
 
-  if (!bluetoothSupported()) {
+  const env = await environmentCheck();
+  renderPortalSteps({ secure: env.secure, api: env.api, adapter: env.adapter });
+  if (!env.secure || !env.api) {
     $('portal-connect').disabled = true;
-    $('portal-hint').textContent = window.isSecureContext
-      ? 'This browser has no Web Bluetooth. Open this page in Chrome or Edge.'
-      : 'Web Bluetooth needs a secure page: open this app at http://localhost (not a file:// path or a LAN address).';
+    $('portal-hint').textContent = env.hint;
+  } else if (env.adapter === false) {
+    $('portal-hint').textContent = env.hint;
   }
 
+  await refreshBeanLists();
   await refreshShotList();
   if (state.shots.length) selectShot(state.shots[0].id);
   if (await store.getSetting('autoConnectMeticulous', false)) connectMeticulous();
@@ -159,17 +159,60 @@ portal.addEventListener('measurement', (e) => {
   setText('ro-ec', m.ec.toFixed(3));
   setText('ro-tout', m.tOut.toFixed(1));
   $('portal-detail').textContent = `${portal.device?.name || 'Portal'} · status ${m.status}`;
+  if (portal.packetCount % 8 === 1) {
+    $('portal-raw').textContent = `Last packet: EC ${m.ec.toFixed(4)} · internal ${m.tInt.toFixed(1)} °C · outlet ${m.tOut.toFixed(1)} °C · status ${m.status} · bytes ${m.raw.map((b) => b.toString(16).padStart(2, '0')).join(' ')}`;
+    $('portal-rate').textContent = `· ${portal.packetRate().toFixed(1)}/s`;
+  }
   recorder.onPortal(m);
 });
 portal.addEventListener('malformed', (e) => {
   console.warn('Portal notification of unexpected length', e.detail.byteLength);
 });
+portal.addEventListener('step', (e) => renderPortalSteps(e.detail.steps));
+
+/** Paint the connection-check list: true ✓, false ✗, string = note, null = pending. */
+function renderPortalSteps(steps) {
+  let ok = 0;
+  let bad = false;
+  for (const name of STEPS) {
+    const li = document.querySelector(`#portal-steps li[data-step="${name}"]`);
+    if (!li) continue;
+    const v = steps[name];
+    li.querySelector('.why')?.remove();
+    if (v === true) {
+      li.dataset.ok = 'true';
+      ok++;
+    } else if (v === false) {
+      li.dataset.ok = 'false';
+      bad = true;
+    } else if (typeof v === 'string') {
+      const soft = name === 'command' || name === 'device';
+      li.dataset.ok = soft ? (name === 'device' ? 'true' : 'warn') : 'false';
+      if (name === 'device') ok++;
+      else if (!soft) bad = true;
+      const span = document.createElement('span');
+      span.className = 'why' + (soft ? ' warn' : '');
+      span.textContent = '— ' + v;
+      li.appendChild(span);
+    } else {
+      delete li.dataset.ok;
+    }
+  }
+  const all = steps.packet === true;
+  $('portal-check-summary').textContent = all ? '— connected to the Portal, packets flowing' : bad ? '— a step failed' : ok ? `— ${ok}/${STEPS.length}` : '';
+  if (all || bad) $('portal-check').open = true;
+}
 
 async function connectPortal() {
   try {
     await portal.pick({ acceptAll: $('portal-accept-all').checked });
+    toast(`Connected to ${portal.device?.name || 'the Portal'} — the connection check shows each step.`);
   } catch (err) {
-    if (err?.name === 'NotFoundError') return; // user cancelled the chooser
+    if (err?.name === 'NotFoundError') {
+      // The chooser closed with nothing picked: either cancelled, or no Portal was visible.
+      $('portal-hint').textContent = 'No device picked. If the Portal was missing from Chrome’s list: wake it, close the Belka app on your phone, and try "Show every nearby Bluetooth device".';
+      return;
+    }
     toast(err.message || String(err), 'error');
   }
 }
@@ -213,6 +256,8 @@ recorder.addEventListener('shot', async (e) => {
   shot.lagSec = Number($('lag-sec').value) || 0;
   recomputeCache(shot);
   await store.putShot(shot);
+  await store.rememberBean(shot.context);
+  await refreshBeanLists();
   await refreshShotList();
   selectShot(shot.id);
   toast(`Saved shot — ${fmt(shot.finalWeightG, 1)} g in ${fmt(shot.durationSec, 1)} s`);
@@ -278,7 +323,7 @@ function renderShot() {
   ].filter(Boolean).join(' · ');
   $('shot-delete').disabled = false;
   $('shot-refresh').disabled = !meticulous?.connected;
-  for (const id of ['bc-copy', 'bc-open', 'bc-json', 'dl-csv', 'dl-json', 'ref-save']) $(id).disabled = false;
+  for (const id of ['bc-copy', 'bc-open', 'bc-json', 'dl-csv', 'dl-json', 'dl-jpeg', 'dl-pdf', 'ref-save']) $(id).disabled = false;
   $('ref-clear').disabled = !shot.refractometer;
   $('ref-tds').value = shot.refractometer?.tdsPct ?? '';
   $('ref-bev').value = shot.refractometer?.beverageG ?? '';
@@ -319,40 +364,69 @@ function renderMetrics(a) {
   setStatus('analysis-status', msg, level);
 }
 
-function calibrationPoints(key, excludeId) {
-  return state.shots
-    .filter((s) => s.coffeeKey === key && s.refractometer?.tdsPct && s.analysisCache && s.id !== excludeId)
-    .map((s) => ({ id: s.id, meanEcPerG: s.analysisCache.meanEcPerG, tdsPct: s.refractometer.tdsPct, reliable: s.analysisCache.status === 'ok', meanTempC: s.analysisCache.meanTempC, when: s.startedAt }));
+/** Every shot with a refractometer reading, as a calibration point carrying its coffee identity. */
+function allCalibrationPoints(shots = state.shots) {
+  return shots
+    .filter((s) => s.refractometer?.tdsPct && s.analysisCache && s.analysisCache.meanEcPerG > 0)
+    .map((s) => ({
+      id: s.id,
+      meanEcPerG: s.analysisCache.meanEcPerG,
+      tdsPct: s.refractometer.tdsPct,
+      reliable: s.analysisCache.status === 'ok',
+      meanTempC: s.analysisCache.meanTempC,
+      when: s.startedAt,
+      coffeeKey: s.coffeeKey || coffeeKey(s.context?.beanName),
+      roasterKey: s.roasterKey || coffeeKey(s.context?.roaster),
+      roastLevel: s.context?.roastLevel || '',
+      beanName: s.context?.beanName || '',
+    }));
+}
+
+function coffeeIdentity(shot) {
+  const c = shot.context || {};
+  return { coffeeKey: coffeeKey(c.beanName), roasterKey: coffeeKey(c.roaster), roastLevel: c.roastLevel || '' };
+}
+
+/** Fit + estimate for any shot under the current "estimate from" setting. */
+function estimateShot(shot, analysis, { excludeSelf = true, points } = {}) {
+  const mode = $('est-pool').value || 'auto';
+  const fit = fitForCoffee(points || allCalibrationPoints(), coffeeIdentity(shot), mode, { excludeId: excludeSelf ? shot.id : undefined });
+  const estimate = estimateForShot(analysis, fit, { beverageG: shot.refractometer?.beverageG || shot.finalWeightG, doseG: Number(shot.context?.doseG) || 0, poolLabel: fit.poolLabel });
+  if (fit.calibrated && fit.pool !== 'bean') estimate.flags.unshift(`Borrowed from ${fit.poolLabel}: ${fit.shotCount} shot${fit.shotCount === 1 ? '' : 's'} of ${fit.distinctCoffees} coffee${fit.distinctCoffees === 1 ? '' : 's'}${fit.fallbackFrom ? ' (no readings for this bean yet)' : ''}.`);
+  return { fit, estimate };
 }
 
 function renderCalibration() {
   const shot = state.selected;
   const key = coffeeKey(shot.context?.beanName);
-  $('cal-coffee').textContent = shot.context?.beanName || 'this coffee';
   // Each reviewed shot is excluded from its own fit (leave-one-out for the estimate).
-  const pts = calibrationPoints(key, shot.id);
-  state.fit = fitCalibration(pts);
-  const allPts = calibrationPoints(key, null);
-  calChart.setFit(allPts, fitCalibration(allPts), predictTds);
+  const { fit, estimate } = estimateShot(shot, state.analysis);
+  state.fit = fit;
+  state.estimate = estimate;
+  $('cal-coffee').textContent = fit.pool === 'bean' ? shot.context?.beanName || 'this coffee' : fit.poolLabel;
+
+  // The chart shows the chosen pool including this shot, so the point you just saved is visible.
+  const poolPts = fitForCoffee(allCalibrationPoints(), coffeeIdentity(shot), fit.pool, {}).poolPoints;
+  calChart.setFit(poolPts, fitCalibration(poolPts), predictTds);
 
   const dl = $('cal-stats');
   const rows = [];
   if (!key) rows.push(['Bean', 'Give this shot a bean name so its reading can be grouped.']);
-  rows.push(['Reference shots', `${allPts.length} with refractometer readings${pts.length !== allPts.length ? ` (${pts.length} used; this shot is left out)` : ''}`]);
-  if (state.fit.calibrated) {
-    const p = state.fit.proportional;
+  rows.push(['Pool', `${fit.poolLabel}${fit.mode === 'auto' ? ' (auto)' : ''} — ${poolPts.length} reference shot${poolPts.length === 1 ? '' : 's'}${fit.distinctCoffees > 1 ? ` across ${fit.distinctCoffees} coffees` : ''}${poolPts.length !== fit.shotCount ? ` (${fit.shotCount} used; this shot is left out)` : ''}`]);
+  if (fit.calibrated) {
+    const p = fit.proportional;
     rows.push(['Proportional k', `${p.k.toFixed(3)} %TDS per (mS/cm) — leave-one-out error ${isFinite(p.loocvRmse) ? '±' + p.loocvRmse.toFixed(2) + '% TDS' : 'n/a'}`]);
-    if (state.fit.affine) rows.push(['Affine', `${state.fit.affine.a.toFixed(3)}·x + ${state.fit.affine.b.toFixed(2)} — leave-one-out ±${state.fit.affine.loocvRmse.toFixed(2)}% TDS`]);
-    rows.push(['Active model', state.fit.activeModel + (state.fit.preliminary ? ' (preliminary)' : '')]);
-    rows.push(['Measured EC/g range', `${state.fit.minX.toFixed(3)} – ${state.fit.maxX.toFixed(3)}`]);
-    if (state.fit.tempCorrelation !== null) rows.push(['Residual vs outlet temp', `r = ${state.fit.tempCorrelation.toFixed(2)}`]);
+    if (fit.affine) rows.push(['Affine', `${fit.affine.a.toFixed(3)}·x + ${fit.affine.b.toFixed(2)} — leave-one-out ±${fit.affine.loocvRmse.toFixed(2)}% TDS`]);
+    rows.push(['Active model', fit.activeModel + (fit.preliminary ? ' (preliminary)' : '')]);
+    rows.push(['Measured EC/g range', `${fit.minX.toFixed(3)} – ${fit.maxX.toFixed(3)}`]);
+    if (fit.tempCorrelation !== null) rows.push(['Residual vs outlet temp', `r = ${fit.tempCorrelation.toFixed(2)}`]);
   }
   dl.innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
 
-  state.estimate = estimateForShot(state.analysis, state.fit, { beverageG: shot.refractometer?.beverageG || shot.finalWeightG, doseG: Number(shot.context?.doseG) || 0 });
-  setText('est-tds', Number.isFinite(state.estimate.tdsPct) ? state.estimate.tdsPct.toFixed(2) : '–');
-  setText('est-ey', Number.isFinite(state.estimate.eyPct) ? state.estimate.eyPct.toFixed(1) : '–');
-  $('est-flags').innerHTML = state.estimate.flags.map((f) => `<li>${esc(f)}</li>`).join('');
+  setText('est-tds', Number.isFinite(estimate.tdsPct) ? estimate.tdsPct.toFixed(2) : '–');
+  setText('est-ey', Number.isFinite(estimate.eyPct) ? estimate.eyPct.toFixed(1) : '–');
+  $('est-basis').textContent = fit.calibrated ? `Based on ${fit.poolLabel} · ${fit.activeModel} model · ${fit.shotCount} reference shot${fit.shotCount === 1 ? '' : 's'}` : '';
+  $('est-flags').innerHTML = estimate.flags.map((f) => `<li>${esc(f)}</li>`).join('');
 }
 
 async function saveRefractometer() {
@@ -566,20 +640,168 @@ async function downloadEnvelope() {
   download(`beanconqueror-${stamp(state.selected.startedAt)}.json`, JSON.stringify(env, null, 2), 'application/json');
 }
 
+// ---------------------------------------------------------- files out --
+
+const fileBase = (shot) => `shot-${stamp(shot.startedAt)}-${slug(shot.context?.beanName)}`;
+
+function shotJson(shot, analysis, estimate) {
+  return JSON.stringify({ app: 'portal-met-bridge', version: 2, shot, analysis, estimate }, null, 2);
+}
+
 function downloadShotJson() {
   const shot = state.selected;
-  const out = { ...shot, analysis: state.analysis, estimate: state.estimate };
-  download(`portal-shot-${stamp(shot.startedAt)}.json`, JSON.stringify(out, null, 2), 'application/json');
+  download(`${fileBase(shot)}.json`, shotJson(shot, state.analysis, state.estimate), 'application/json');
 }
 
 function downloadCsv() {
   const shot = state.selected;
-  const rows = [['t_s', 'source', 'pressure_bar', 'flow_mls', 'weight_g', 'grav_flow_gs', 'machine_temp_c', 'stage', 'portal_ec_mscm', 'portal_out_temp_c', 'portal_int_temp_c', 'portal_status']];
-  for (const s of shot.machine) rows.push([s.t, 'machine', s.p, s.f, s.w, s.g, s.temp, s.status ?? '', '', '', '', '']);
-  for (const s of shot.portal) rows.push([s.t, 'portal', '', '', '', '', '', '', s.ec, s.tOut, s.tInt, s.status]);
-  rows.sort((a, b) => (a[0] === 't_s' ? -1 : b[0] === 't_s' ? 1 : a[0] - b[0]));
-  const csv = rows.map((r) => r.map((v) => (v === undefined || v === null || Number.isNaN(v) ? '' : typeof v === 'string' ? `"${v.replace(/"/g, '""')}"` : v)).join(',')).join('\n');
-  download(`portal-shot-${stamp(shot.startedAt)}.csv`, csv, 'text/csv');
+  download(`${fileBase(shot)}.csv`, shotSamplesCsv(shot), 'text/csv');
+}
+
+/** Render both charts for a shot to JPEG. Charts must be visible (Shots view). */
+async function chartImages(shot, analysis) {
+  const c = shot.context || {};
+  const sub = [fmtDate(shot.startedAt), shot.profileName, c.beanName, c.doseG ? `${c.doseG} g in` : null, `${fmt(shot.finalWeightG, 1)} g out`, `${fmt(shot.durationSec, 1)} s`].filter(Boolean).join(' · ');
+  const time = await chartToJpeg(timeChart.u, { title: 'Shot against time', subtitle: sub, legend: legendOf(timeChart.u) });
+  let mass = null;
+  if (analysis?.curve?.length) {
+    const sub2 = `mean EC ${fmt(analysis.meanEcPerG, 3)} mS/cm · ∫EC dm ${fmt(analysis.integralEcG, 1)} · peak ${fmt(analysis.mainPeakEc, 3)} at ${fmt(analysis.mainPeakMassG, 1)} g · 90 % of ∫ at ${fmt(analysis.massAt90PctG, 1)} g`;
+    mass = await chartToJpeg(massChart.u, { title: 'Conductivity against cup mass', subtitle: sub2, legend: legendOf(massChart.u) });
+  }
+  return { time, mass };
+}
+
+async function downloadJpegs() {
+  const shot = state.selected;
+  if ($('view-shots').hidden) showView('shots');
+  const { time, mass } = await chartImages(shot, state.analysis);
+  download(`${fileBase(shot)}-time.jpg`, time.blob);
+  if (mass) setTimeout(() => download(`${fileBase(shot)}-ec-vs-mass.jpg`, mass.blob), 300);
+}
+
+function reportFor(shot, analysis, estimate, fit, images) {
+  const c = shot.context || {};
+  const a = analysis || {};
+  const metrics = [
+    ['Profile', shot.profileName || '–'],
+    ['Bean', c.beanName || '–'],
+    ['Roaster', c.roaster || '–'],
+    ['Roast · process · origin', [c.roastLevel, c.process, c.origin].filter(Boolean).join(' · ') || '–'],
+    ['Dose', c.doseG ? `${c.doseG} g` : '–'],
+    ['Grind · grinder', [c.grindSize, c.grinderName].filter(Boolean).join(' · ') || '–'],
+    ['Beverage', `${fmt(shot.finalWeightG, 1)} g`],
+    ['Extraction', `${fmt(shot.durationSec, 1)} s`],
+    ['Samples', `${shot.machine?.length ?? 0} machine · ${shot.portal?.length ?? 0} Portal`],
+    ['Analysis', a.status || '–'],
+    ['Mean EC per g', `${fmt(a.meanEcPerG, 3)} mS/cm`],
+    ['∫EC dm', `${fmt(a.integralEcG, 1)} mS·g/cm`],
+    ['Peak EC', `${fmt(a.mainPeakEc, 3)} at ${fmt(a.mainPeakMassG, 1)} g`],
+    ['Last 5 g', `mean ${fmt(a.tail?.last5g?.mean, 3)} · slope ${fmt(a.tail?.last5g?.slopePerG, 3)}/g`],
+    ['Mass at 90 % of ∫', `${fmt(a.massAt90PctG, 1)} g`],
+    ['Portal coverage', `${fmt((a.coverageRatio ?? 0) * 100, 0)} %`],
+    ['First drop', `${fmt(a.firstDropTimeSec, 1)} s`],
+    ['Portal temperature', `${fmt(a.meanTempC, 1)} °C mean · ${fmt(a.maxTempC, 1)} max`],
+  ];
+  const est = [
+    ['Refractometer TDS', shot.refractometer?.tdsPct ? `${shot.refractometer.tdsPct.toFixed(2)} %` : '–'],
+    ['Refractometer EY', Number.isFinite(shot.refractometer?.eyPct) ? `${shot.refractometer.eyPct.toFixed(1)} %` : '–'],
+    ['Estimated TDS', Number.isFinite(estimate?.tdsPct) ? `${estimate.tdsPct.toFixed(2)} %` : '–'],
+    ['Estimated EY', Number.isFinite(estimate?.eyPct) ? `${estimate.eyPct.toFixed(1)} %` : '–'],
+    ['Based on', fit?.calibrated ? `${fit.poolLabel} · ${fit.activeModel} · ${fit.shotCount} shots` : 'no calibration'],
+    ['k (proportional)', fit?.proportional ? `${fit.proportional.k.toFixed(3)} ± ${isFinite(fit.proportional.loocvRmse) ? fit.proportional.loocvRmse.toFixed(2) : '–'} % TDS` : '–'],
+  ];
+  const notes = [...(estimate?.flags || [])];
+  if (c.note) notes.push(c.note);
+  notes.push('EC is a conductivity proxy; TDS/EY here are estimates from refractometer calibration unless a refractometer reading is shown.');
+  const imgs = [];
+  if (images.time) imgs.push({ ...images.time, caption: 'Pressure, flow, weight and Portal EC against time; dotted lines mark the machine’s stages.' });
+  if (images.mass) imgs.push({ ...images.mass, caption: 'Portal EC against cumulative cup mass; the shaded area is ∫EC dm, the dashed line its running share.' });
+  return {
+    title: `${fmtDate(shot.startedAt)}${shot.profileName ? ' — ' + shot.profileName : ''}`,
+    subtitle: [c.beanName, c.roaster, c.doseG ? `${c.doseG} g → ${fmt(shot.finalWeightG, 1)} g in ${fmt(shot.durationSec, 1)} s` : null].filter(Boolean).join(' · '),
+    images: imgs,
+    metrics,
+    estimate: est,
+    notes,
+  };
+}
+
+async function downloadPdf() {
+  const shot = state.selected;
+  if ($('view-shots').hidden) showView('shots');
+  toast('Building the PDF…');
+  try {
+    const images = await chartImages(shot, state.analysis);
+    const blob = await shotReportPdf(reportFor(shot, state.analysis, state.estimate, state.fit, images));
+    download(`${fileBase(shot)}-report.pdf`, blob);
+  } catch (err) {
+    toast('PDF failed: ' + (err.message || err), 'error');
+  }
+}
+
+/** Analysis + estimate for every shot, computed once for the summary and the zip. */
+async function analyseAll() {
+  const shots = await store.listShots({ limit: 100000 });
+  const points = allCalibrationPoints(shots);
+  return shots.map((shot) => {
+    const analysis = recomputeCache(shot);
+    const mode = $('est-pool').value || 'auto';
+    const fit = fitForCoffee(points, coffeeIdentity(shot), mode, { excludeId: shot.id });
+    const estimate = estimateForShot(analysis, fit, { beverageG: shot.refractometer?.beverageG || shot.finalWeightG, doseG: Number(shot.context?.doseG) || 0, poolLabel: fit.poolLabel });
+    return { shot, analysis, estimate, fit };
+  });
+}
+
+async function downloadSummaryCsv() {
+  const all = await analyseAll();
+  const rows = [SUMMARY_COLUMNS, ...all.map(({ shot, analysis, estimate }) => summaryRow(shot, analysis, estimate))];
+  download(`portal-met-bridge-shots-${stamp(Date.now())}.csv`, rowsToCsv(rows), 'text/csv');
+}
+
+async function downloadZip() {
+  const all = await analyseAll();
+  if (!all.length) {
+    toast('No shots to export yet.');
+    return;
+  }
+  if ($('view-shots').hidden) showView('shots');
+  const prog = $('dl-progress');
+  const files = {};
+  files['shots-summary.csv'] = rowsToCsv([SUMMARY_COLUMNS, ...all.map(({ shot, analysis, estimate }) => summaryRow(shot, analysis, estimate))]);
+  files['backup.json'] = JSON.stringify(await store.exportAll());
+  files['README.txt'] = `portal-met-bridge export — ${new Date().toString()}\n\nshots-summary.csv   one row per shot (EC metrics, refractometer reading, estimate)\nbackup.json         full backup; restore it with the Restore button\nshots/<shot>/       samples.csv, shot.json, time.jpg, ec-vs-mass.jpg, report.pdf per shot\n\nEC is a conductivity proxy; TDS/EY are estimates from refractometer calibration unless a refractometer reading is present.\n`;
+  const selectedId = state.selected?.id;
+  let i = 0;
+  for (const { shot, analysis, estimate, fit } of all) {
+    i++;
+    prog.textContent = `Rendering ${i}/${all.length}…`;
+    const dir = `shots/${fileBase(shot)}`;
+    files[`${dir}/samples.csv`] = shotSamplesCsv(shot);
+    files[`${dir}/shot.json`] = shotJson(shot, analysis, estimate);
+    // Render this shot's charts, then capture.
+    timeChart.setShot(shot.machine, shot.portal);
+    massChart.setAnalysis(analysis);
+    await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 30)));
+    try {
+      const images = await chartImages(shot, analysis);
+      files[`${dir}/time.jpg`] = images.time.blob;
+      if (images.mass) files[`${dir}/ec-vs-mass.jpg`] = images.mass.blob;
+      files[`${dir}/report.pdf`] = await shotReportPdf(reportFor(shot, analysis, estimate, fit, images));
+    } catch (err) {
+      files[`${dir}/ERROR.txt`] = String(err?.message || err);
+    }
+  }
+  prog.textContent = 'Zipping…';
+  try {
+    const blob = await buildZip(files);
+    download(`portal-met-bridge-export-${stamp(Date.now())}.zip`, blob);
+    prog.textContent = `${all.length} shots exported.`;
+  } catch (err) {
+    toast('Zip failed: ' + (err.message || err), 'error');
+    prog.textContent = '';
+  }
+  if (selectedId) selectShot(selectedId);
+  setTimeout(() => (prog.textContent = ''), 6000);
 }
 
 // ------------------------------------------------------------------- demo --
@@ -628,10 +850,15 @@ function replayDemoLive() {
 
 // --------------------------------------------------------------- context --
 
+const CONTEXT_KEYS = ['beanName', 'roaster', 'roastLevel', 'process', 'origin', 'doseG', 'grindSize', 'grinderName', 'note'];
+
 function readContext() {
   return {
     beanName: $('ctx-bean').value.trim(),
     roaster: $('ctx-roaster').value.trim(),
+    roastLevel: $('ctx-roast').value,
+    process: $('ctx-process').value,
+    origin: $('ctx-origin').value.trim(),
     doseG: Number($('ctx-dose').value) || 0,
     grindSize: $('ctx-grind').value ? `${$('ctx-grind').value} µm` : '',
     grinderName: $('ctx-grinder').value.trim(),
@@ -639,13 +866,53 @@ function readContext() {
   };
 }
 
-async function contextChanged() {
+function writeContext(ctx) {
+  $('ctx-bean').value = ctx.beanName ?? '';
+  $('ctx-roaster').value = ctx.roaster ?? '';
+  $('ctx-roast').value = ctx.roastLevel ?? '';
+  $('ctx-process').value = ctx.process ?? '';
+  $('ctx-origin').value = ctx.origin ?? '';
+  $('ctx-dose').value = ctx.doseG || '';
+  $('ctx-grind').value = (ctx.grindSize ?? '').replace(/\s*µm$/, '');
+  $('ctx-grinder').value = ctx.grinderName ?? 'Zerno Z1';
+  $('ctx-note').value = ctx.note ?? '';
+}
+
+/** Rebuild the bean / roaster pick-lists from the bean library. */
+async function refreshBeanLists() {
+  const beans = await store.listBeans();
+  state.beans = beans;
+  $('bean-list').innerHTML = beans.map((b) => `<option value="${esc(b.name)}">${esc([b.roaster, b.roastLevel, b.origin].filter(Boolean).join(' · '))}</option>`).join('');
+  const roasters = [...new Set(beans.map((b) => b.roaster).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  $('roaster-list').innerHTML = roasters.map((r) => `<option value="${esc(r)}"></option>`).join('');
+  $('bean-count').textContent = beans.length ? `(${beans.length} known)` : '';
+}
+
+/** A previous bean was picked (or typed exactly): fill in what we know about it. */
+async function beanPicked() {
+  const b = await store.getBean($('ctx-bean').value);
+  if (!b) return false;
+  if (!$('ctx-roaster').value.trim() || b.roaster) $('ctx-roaster').value = b.roaster || '';
+  if (b.roastLevel) $('ctx-roast').value = b.roastLevel;
+  if (b.process) $('ctx-process').value = b.process;
+  if (b.origin) $('ctx-origin').value = b.origin;
+  if (!$('ctx-dose').value && b.lastDoseG) $('ctx-dose').value = b.lastDoseG;
+  if (!$('ctx-grind').value && b.lastGrind) $('ctx-grind').value = String(b.lastGrind).replace(/\s*µm$/, '');
+  return true;
+}
+
+async function contextChanged(ev) {
+  if (ev?.target?.id === 'ctx-bean') await beanPicked();
   const ctx = readContext();
   await store.setSetting('context', ctx);
+  if (ctx.beanName) {
+    await store.rememberBean(ctx);
+    await refreshBeanLists();
+  }
   // Apply to the selected shot too, so a bag name typed after the shot still counts.
   if (state.selected && state.selected.source !== 'demo') {
     const prev = state.selected.context || {};
-    const changed = ['beanName', 'roaster', 'doseG', 'grindSize', 'grinderName', 'note'].some((k) => (prev[k] ?? '') !== (ctx[k] ?? ''));
+    const changed = CONTEXT_KEYS.some((k) => (prev[k] ?? '') !== (ctx[k] ?? ''));
     if (changed) {
       state.selected.context = ctx;
       state.selected.analysisCache = summarize(state.analysis);
@@ -676,15 +943,6 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<
 function fmtDate(ms) {
   const d = new Date(ms);
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-}
-const stamp = (ms) => new Date(ms).toISOString().replace(/[:.]/g, '-').slice(0, 19);
-function download(name, text, type) {
-  const blob = new Blob([text], { type });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = name;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
 let toastTimer = null;
 function toast(msg, level = 'info') {
@@ -721,7 +979,11 @@ $('lag-sec').addEventListener('change', async (e) => {
     renderShot();
   }
 });
-for (const id of ['ctx-bean', 'ctx-roaster', 'ctx-dose', 'ctx-grind', 'ctx-grinder', 'ctx-note']) $(id).addEventListener('change', contextChanged);
+for (const id of ['ctx-bean', 'ctx-roaster', 'ctx-roast', 'ctx-process', 'ctx-origin', 'ctx-dose', 'ctx-grind', 'ctx-grinder', 'ctx-note']) $(id).addEventListener('change', contextChanged);
+$('est-pool').addEventListener('change', async (e) => {
+  await store.setSetting('estimatePool', e.target.value);
+  if (state.selected) renderShot();
+});
 $('ref-tds').addEventListener('input', updateRefEy);
 $('ref-bev').addEventListener('input', updateRefEy);
 $('ref-save').addEventListener('click', saveRefractometer);
@@ -734,14 +996,19 @@ $('bc-open').addEventListener('click', openLink);
 $('bc-json').addEventListener('click', downloadEnvelope);
 $('dl-csv').addEventListener('click', downloadCsv);
 $('dl-json').addEventListener('click', downloadShotJson);
+$('dl-jpeg').addEventListener('click', downloadJpegs);
+$('dl-pdf').addEventListener('click', downloadPdf);
+$('dl-summary').addEventListener('click', downloadSummaryCsv);
+$('dl-zip').addEventListener('click', downloadZip);
 $('demo-load').addEventListener('click', addDemoShot);
 $('demo-replay').addEventListener('click', replayDemoLive);
-$('backup-export').addEventListener('click', async () => download(`portal-bridge-backup-${stamp(Date.now())}.json`, JSON.stringify(await store.exportAll()), 'application/json'));
+$('backup-export').addEventListener('click', async () => download(`portal-met-bridge-backup-${stamp(Date.now())}.json`, JSON.stringify(await store.exportAll()), 'application/json'));
 $('backup-import').addEventListener('change', async (e) => {
   const file = e.target.files[0];
   if (!file) return;
   try {
     const n = await store.importAll(JSON.parse(await file.text()));
+    await refreshBeanLists();
     await refreshShotList();
     toast(`Restored ${n} shots.`);
   } catch (err) {

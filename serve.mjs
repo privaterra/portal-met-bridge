@@ -32,7 +32,7 @@ http
       if (!file.startsWith(root)) throw Object.assign(new Error('forbidden'), { code: 'EACCES' });
       const s = await stat(file);
       if (s.isDirectory()) throw Object.assign(new Error('dir'), { code: 'ENOENT' });
-      res.writeHead(200, { 'Content-Type': types[extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
+      res.writeHead(200, { 'Content-Type': types[extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
       res.end(await readFile(file));
     } catch (e) {
       res.writeHead(e.code === 'ENOENT' ? 404 : 403, { 'Content-Type': 'text/plain' });

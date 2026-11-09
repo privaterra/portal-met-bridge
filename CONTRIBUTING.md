@@ -39,6 +39,10 @@ Please keep these invariants:
 - Deleting shots (History) always goes through the confirm dialog; *Start over* stays behind a typed confirmation, lists what it deletes, and touches nothing on disk outside the app's own `portal-met-bridge/` subfolder.
 - A shot in progress is checkpointed to IndexedDB under its final id (`inProgress: true`); anything that writes a finished shot must await the in-flight checkpoint (`checkpointPromise`) so a late checkpoint can never overwrite the final record. `finalizeCheckpoint()` in `js/recorder.js` is the single place that turns a leftover checkpoint into a shot.
 
+## Releasing a version
+
+`node tools/bump-version.mjs 0.9.0` updates every place the version lives — `package.json`, the About line and start-up log in `js/main.js`, the Beanconqueror envelope's `app.version`, and the `?v=` stamp on every app-module import and on the `<script>`/`<link>` tags in `index.html`. The stamps are what make Chrome fetch fresh copies after an update instead of running a cached `main.js` against a new `index.html` (that mismatch shows as "Start-up problem: Cannot set properties of null"). `npm test` fails if any stamp disagrees, and `serve.mjs` sends `Cache-Control: no-store` for the same reason.
+
 ## Pull requests
 
 Small and focused, with a sentence on what you tested it against (firmware version, Portal yes/no, browser). If an AI assistant wrote part of the change, say so in the PR — it helps reviewers know where to look harder.

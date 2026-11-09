@@ -35,7 +35,7 @@ cd portal-met-bridge
 ./start.command        # or: node serve.mjs   /   python3 -m http.server 8787 --bind 127.0.0.1
 ```
 
-`start.command` serves on `http://localhost:8787` and opens Chrome. You can also double-click it in Finder (first time: right-click → Open, since it is unsigned).
+`start.command` serves on `http://localhost:8787` and opens Chrome. You can also double-click it in Finder (first time: right-click → Open, since it is unsigned). After updating (`git pull`), just reload; if an older copy of the page is still open and complains about a *Start-up problem*, reload once with Shift held (⌘⇧R) so Chrome drops its cached scripts — from v0.8.1 every script is version-stamped so this does not recur.
 
 Then, in the app:
 

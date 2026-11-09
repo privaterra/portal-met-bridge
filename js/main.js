@@ -1,16 +1,16 @@
 // main.js — wires the devices, the recorder, storage, charts and export together.
 
-import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js';
-import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js';
-import { MachinePanel } from './machine-panel.js';
-import { ShotRecorder, finalizeCheckpoint } from './recorder.js';
-import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js';
-import { TimeChart, MassChart, CalibrationChart } from './charts.js';
-import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, DEFAULTS } from './analysis.js';
-import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js';
-import { makeDemoShot } from './demo.js';
-import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug } from './export.js';
-import { log, Logger, formatLine } from './log.js';
+import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.8.1';
+import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.8.1';
+import { MachinePanel } from './machine-panel.js?v=0.8.1';
+import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.8.1';
+import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.8.1';
+import { TimeChart, MassChart, CalibrationChart } from './charts.js?v=0.8.1';
+import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, DEFAULTS } from './analysis.js?v=0.8.1';
+import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.8.1';
+import { makeDemoShot } from './demo.js?v=0.8.1';
+import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug } from './export.js?v=0.8.1';
+import { log, Logger, formatLine } from './log.js?v=0.8.1';
 import qrcode from '../vendor/qrcode.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -316,8 +316,8 @@ async function init() {
   log.configure({ enabled: settings.logEnabled, level: settings.logLevel, packets: settings.logPackets });
   await restoreLogFolder();
   renderLogStatus();
-  $('about-version').textContent = 'v0.8.0';
-  log.info('app', `portal-met-bridge v0.8.0 started · ${navigator.userAgent}`);
+  $('about-version').textContent = 'v0.8.1';
+  log.info('app', `portal-met-bridge v0.8.1 started · ${navigator.userAgent}`);
 
   const env = await environmentCheck();
   renderPortalSteps({ secure: env.secure, api: env.api, adapter: env.adapter });
@@ -1706,7 +1706,7 @@ function fmtDate(ms) {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 }
 let toastTimer = null;
-function toast(msg, level = 'info') {
+function toast(msg, level = 'info', ms) {
   if (level === 'error') log.error('ui', msg);
   else log.debug('ui', msg);
   const el = $('toast');
@@ -1714,7 +1714,7 @@ function toast(msg, level = 'info') {
   el.dataset.level = level;
   el.hidden = false;
   if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (el.hidden = true), level === 'error' ? 7000 : 4500);
+  toastTimer = setTimeout(() => (el.hidden = true), ms || (level === 'error' ? 7000 : 4500));
 }
 
 // ------------------------------------------------------------ log & debug --
@@ -2113,5 +2113,7 @@ window.__pb = { state, store, portal, recorder, timeChart, massChart, calChart, 
 
 init().catch((err) => {
   console.error(err);
-  toast('Start-up problem: ' + (err.message || err), 'error');
+  // The usual cause after an update is a stale script in the browser cache
+  // (an old main.js running against a new index.html, or the reverse).
+  toast(`Start-up problem: ${err.message || err}. If you just updated, reload with Shift held (⌘⇧R) to clear cached scripts.`, 'error', 15000);
 });

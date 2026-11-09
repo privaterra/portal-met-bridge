@@ -4,6 +4,7 @@ import { analyzeShot, fitCalibration, predictTds, estimateForShot, buildSegments
 import { buildEnvelope, encodeHandoff, decodeHandoff, encodeForQr, CHUNK, QR_MAX_URL_CHARS } from '../js/beanconqueror.js';
 import { makeDemoShot } from '../js/demo.js';
 import { ShotRecorder, finalizeCheckpoint } from '../js/recorder.js';
+import { readFileSync, readdirSync } from 'node:fs';
 
 let passed = 0;
 const test = async (name, fn) => {
@@ -266,6 +267,24 @@ await test('recorder: checkpoint recovery finalises an interrupted shot, drops a
   rec.onStatus({ extracting: false, timeMs: 1000, p: 0, f: 0, w: 10, at: 1000 });
   assert.equal(rec.state, 'settling');
   return new Promise((resolve) => setTimeout(() => { assert.equal(shots.length, 1); assert.equal(shots[0].portal.length, 1); assert.equal(shots[0].machine.length, 3); assert.equal(shots[0].finalWeightG, 10); resolve(); }, 30));
+});
+
+await test('release: every version stamp agrees with package.json (tools/bump-version.mjs keeps them in step)', () => {
+  const version = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+  const files = ['index.html', ...readdirSync(new URL('../js', import.meta.url)).filter((f) => f.endsWith('.js')).map((f) => `js/${f}`)];
+  for (const f of files) {
+    const text = readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
+    for (const m of text.matchAll(/\?v=(\d+\.\d+\.\d+)/g)) assert.equal(m[1], version, `${f} imports ?v=${m[1]}`);
+    // every app-module import must carry the stamp, or a stale cached copy can outlive an update
+    for (const m of text.matchAll(/from '(\.\/[a-z-]+\.js)(\?v=[^']*)?'/g)) assert.ok(m[2], `${f}: import of ${m[1]} lacks ?v=`);
+  }
+  const main = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  assert.ok(main.includes(`'v${version}'`), 'About line');
+  assert.ok(main.includes(`portal-met-bridge v${version} started`), 'start-up log line');
+  const bc = readFileSync(new URL('../js/beanconqueror.js', import.meta.url), 'utf8');
+  assert.ok(bc.includes(`version: '${version}'`), 'Beanconqueror envelope version');
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  assert.ok(html.includes(`js/main.js?v=${version}`) && html.includes(`css/app.css?v=${version}`), 'index.html stamps');
 });
 
 console.log(`\n${passed} test group(s) passed in total${process.exitCode ? ', with failures' : ''}.`);

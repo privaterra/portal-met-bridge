@@ -1,7 +1,8 @@
 // Run with:  node tests/run.mjs
 import assert from 'node:assert/strict';
-import { analyzeShot, fitCalibration, predictTds, estimateForShot, buildSegments, evalEcAt } from '../js/analysis.js';
+import { analyzeShot, fitCalibration, predictTds, estimateForShot, buildSegments, evalEcAt, beverageOf, beverageOverridden } from '../js/analysis.js';
 import { buildEnvelope, encodeHandoff, decodeHandoff, encodeForQr, CHUNK, QR_MAX_URL_CHARS } from '../js/beanconqueror.js';
+import { summaryRow as summaryRowEarly, SUMMARY_COLUMNS as SUMMARY_COLUMNS_EARLY } from '../js/export.js';
 import { makeDemoShot } from '../js/demo.js';
 import { ShotRecorder, finalizeCheckpoint } from '../js/recorder.js';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -136,6 +137,18 @@ await test('Beanconqueror envelope round-trips through gzip/base64url/chunks', a
   assert.equal(env.flow.t.length, env.flow.waterDispensed.length);
   assert.equal(env.flow.t.length, env.flow.temperature.length);
   assert.equal(env.flow.fidelity, 'full');
+  // a beverage weighed by hand replaces the machine's scale in the hand-off and the summary row
+  const weighed = buildEnvelope({ ...shot, beverageG: 41.5 }, r, est, { beanName: 'Test coffee', doseG: 18 });
+  assert.equal(weighed.brew.beverageOut.value, 41.5);
+  assert.equal(env.brew.beverageOut.value, Math.round(shot.finalWeightG * 10) / 10);
+  assert.equal(beverageOf({ finalWeightG: 40 }), 40);
+  assert.equal(beverageOf({ finalWeightG: 40, beverageG: 41.5 }), 41.5);
+  assert.equal(beverageOf({ finalWeightG: 40, refractometer: { beverageG: 39 } }), 39, 'legacy shots keep the beverage typed with the reading');
+  assert.equal(beverageOverridden({ finalWeightG: 40, beverageG: 41.5 }), true);
+  assert.equal(beverageOverridden({ finalWeightG: 40, beverageG: 40 }), false);
+  const row = summaryRowEarly({ ...shot, beverageG: 41.5, context: { doseG: 18 } }, r, est);
+  assert.equal(row[SUMMARY_COLUMNS_EARLY.indexOf('beverage_g')], 41.5);
+  assert.equal(row[SUMMARY_COLUMNS_EARLY.indexOf('machine_weight_g')], Math.round(shot.finalWeightG * 10) / 10);
   // weight deltas accumulate to the final weight in decigrams
   const sumW = env.flow.weight.reduce((a, b) => a + b, 0) / 10;
   assert.ok(Math.abs(sumW - shot.finalWeightG) < 0.15, `sum weight ${sumW} vs ${shot.finalWeightG}`);

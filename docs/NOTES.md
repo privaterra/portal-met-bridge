@@ -87,6 +87,10 @@ Record of truth is IndexedDB (`shots` store). Lifecycle of a live shot:
 
 History (`renderHistory`) is a plain sorted/filtered render of `state.shots` (the `listShots()` result, 200 newest); TDS column = reading, else `estimateShot()` over the cached analysis summary. Edits go through `openShotDialog/saveShotDialog`, deletes through `deleteShots()` + `confirmDialog()`. The "This coffee" fields write into the selected shot only while it is the newest one.
 
+## Beverage weighed vs. machine weight (v0.8.2)
+
+`shot.finalWeightG` is what the machine's scale reported (max cup weight during the shot) and is never edited. `shot.beverageG` is optional: the cup weight the user measured on their own scale, entered in History → Edit or with a refractometer reading. `beverageOf(shot)` (analysis.js) returns `beverageG`, else the beverage typed with a reading on pre-0.8.2 shots (`refractometer.beverageG`), else `finalWeightG`; it is what yield, EY, the summary CSV (`beverage_g`, next to `machine_weight_g`), the PDF and the Beanconqueror `beverageOut` use. Blanking the field deletes `beverageG` and rewrites `refractometer.beverageG` from the machine value, so a stale typed value cannot linger. The History row marks an override with ⚖ (tooltip shows the machine value); the Shots header says "41.5 g out (weighed; machine 40.0 g)". Analysis and calibration stay in machine-mass space: EC is integrated against the scale's curve, not the hand weight.
+
 ## Ideas not done yet
 
 - Read the Portal's status byte on a real unit to decide whether it is a battery percentage.

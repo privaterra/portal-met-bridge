@@ -264,6 +264,7 @@ table.hist .num { text-align: right; }
 table.hist td.coffee { white-space: normal; min-width: 140px; max-width: 260px; }
 table.hist td.coffee small { display: block; color: var(--ink-3); font-size: 12px; }
 table.hist td.ec { color: var(--cobalt); font-weight: 600; }
+table.hist .weighed { margin-left: 3px; font-size: 11px; color: var(--ink-3); cursor: help; }
 table.hist td.tds b { color: var(--ink); }
 table.hist td.tds i { color: var(--ink-2); }
 table.hist td.when { color: var(--ink-2); }

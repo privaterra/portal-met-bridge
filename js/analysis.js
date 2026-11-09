@@ -413,6 +413,24 @@ export function predictTds(fit, meanEcPerG) {
 }
 
 /** Extraction yield from TDS%, beverage mass and dose. */
+/**
+ * The beverage mass to use for yield, EY and the hand-off: what the user
+ * weighed by hand when they entered it (`shot.beverageG`, editable for any saved
+ * shot), else the cup weight the machine's scale reported during the shot.
+ */
+export function beverageOf(shot) {
+  if (!shot) return null;
+  if (Number.isFinite(shot.beverageG) && shot.beverageG > 0) return shot.beverageG;
+  if (Number.isFinite(shot.refractometer?.beverageG) && shot.refractometer.beverageG > 0) return shot.refractometer.beverageG;
+  return Number.isFinite(shot.finalWeightG) ? shot.finalWeightG : null;
+}
+
+/** True when the user's weighed value differs from what the machine saw. */
+export function beverageOverridden(shot) {
+  const b = beverageOf(shot);
+  return Number.isFinite(shot?.beverageG) && shot.beverageG > 0 && Number.isFinite(shot.finalWeightG) && Math.abs(b - shot.finalWeightG) >= 0.05;
+}
+
 export function extractionYield(tdsPct, beverageG, doseG) {
   if (![tdsPct, beverageG, doseG].every(Number.isFinite) || doseG <= 0) return null;
   return (tdsPct * beverageG) / doseG;

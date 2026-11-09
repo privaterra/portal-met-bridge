@@ -240,10 +240,21 @@ try {
   await page.fill('#e-bean', 'E2E coffee (edited)');
   await page.fill('#e-dose', '18.5');
   await page.fill('#e-tds', '9.1');
+  await page.fill('#e-bev', '41.5');
   await page.click('#shot-dialog-save');
   await page.waitForTimeout(400);
-  const edited = await page.evaluate(() => ({ row: document.querySelector('#hist-rows tr')?.textContent.replace(/\s+/g, ' '), sel: window.__pb.state.selected?.context?.beanName, tds: window.__pb.state.selected?.refractometer?.tdsPct, dose: window.__pb.state.selected?.context?.doseG, open: document.querySelector('#shot-dialog').open }));
+  const edited = await page.evaluate(() => ({ row: document.querySelector('#hist-rows tr')?.textContent.replace(/\s+/g, ' '), sel: window.__pb.state.selected?.context?.beanName, tds: window.__pb.state.selected?.refractometer?.tdsPct, dose: window.__pb.state.selected?.context?.doseG, open: document.querySelector('#shot-dialog').open, bev: window.__pb.state.selected?.beverageG, ey: window.__pb.state.selected?.refractometer?.eyPct, machineW: window.__pb.state.selected?.finalWeightG, sub: document.querySelector('#shot-sub').textContent }));
   check('History → Edit updates coffee, dose and reading', /E2E coffee \(edited\)/.test(edited.row) && /18\.5 →/.test(edited.row) && edited.sel === 'E2E coffee (edited)' && edited.tds === 9.1 && edited.dose === 18.5 && !edited.open, JSON.stringify(edited).slice(0, 200));
+  check('beverage weighed is editable and replaces the machine weight for yield and EY', edited.bev === 41.5 && /→ 41\.5 g⚖/.test(edited.row) && Math.abs(edited.ey - (9.1 * 41.5) / 18.5) < 0.01 && /41\.5 g out \(weighed; machine/.test(edited.sub), JSON.stringify({ bev: edited.bev, ey: edited.ey, machineW: edited.machineW, sub: edited.sub }).slice(0, 220));
+  // blanking the field returns to the machine's scale
+  await page.click('#hist-rows tr button[data-act="edit"]');
+  await page.waitForSelector('#shot-dialog[open]');
+  check('edit dialog shows the weighed value and the machine value as placeholder', (await page.inputValue('#e-bev')) === '41.5' && /\(machine\)/.test(await page.getAttribute('#e-bev', 'placeholder')));
+  await page.fill('#e-bev', '');
+  await page.click('#shot-dialog-save');
+  await page.waitForTimeout(400);
+  const reverted = await page.evaluate(() => ({ bev: window.__pb.state.selected?.beverageG, row: document.querySelector('#hist-rows tr')?.textContent.replace(/\s+/g, ' '), machineW: window.__pb.state.selected?.finalWeightG, refBev: window.__pb.state.selected?.refractometer?.beverageG }));
+  check('blank beverage weighed reverts to the machine weight', reverted.bev === undefined && !/⚖/.test(reverted.row) && reverted.refBev === reverted.machineW, JSON.stringify(reverted).slice(0, 200));
   await page.click('#hist-rows tr button[data-act="open"]');
   await page.waitForTimeout(200);
   const opened = await page.evaluate(() => ({ shotsVisible: !document.querySelector('#view-shots').hidden, histHidden: document.querySelector('#view-history').hidden, sub: document.querySelector('#shot-sub').textContent }));

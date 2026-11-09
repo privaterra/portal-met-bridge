@@ -1,16 +1,16 @@
 // main.js — wires the devices, the recorder, storage, charts and export together.
 
-import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.8.1';
-import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.8.1';
-import { MachinePanel } from './machine-panel.js?v=0.8.1';
-import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.8.1';
-import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.8.1';
-import { TimeChart, MassChart, CalibrationChart } from './charts.js?v=0.8.1';
-import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, DEFAULTS } from './analysis.js?v=0.8.1';
-import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.8.1';
-import { makeDemoShot } from './demo.js?v=0.8.1';
-import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug } from './export.js?v=0.8.1';
-import { log, Logger, formatLine } from './log.js?v=0.8.1';
+import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.8.2';
+import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.8.2';
+import { MachinePanel } from './machine-panel.js?v=0.8.2';
+import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.8.2';
+import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.8.2';
+import { TimeChart, MassChart, CalibrationChart } from './charts.js?v=0.8.2';
+import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, DEFAULTS } from './analysis.js?v=0.8.2';
+import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.8.2';
+import { makeDemoShot } from './demo.js?v=0.8.2';
+import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug } from './export.js?v=0.8.2';
+import { log, Logger, formatLine } from './log.js?v=0.8.2';
 import qrcode from '../vendor/qrcode.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -316,8 +316,8 @@ async function init() {
   log.configure({ enabled: settings.logEnabled, level: settings.logLevel, packets: settings.logPackets });
   await restoreLogFolder();
   renderLogStatus();
-  $('about-version').textContent = 'v0.8.1';
-  log.info('app', `portal-met-bridge v0.8.1 started · ${navigator.userAgent}`);
+  $('about-version').textContent = 'v0.8.2';
+  log.info('app', `portal-met-bridge v0.8.2 started · ${navigator.userAgent}`);
 
   const env = await environmentCheck();
   renderPortalSteps({ secure: env.secure, api: env.api, adapter: env.adapter });
@@ -794,6 +794,7 @@ function histSortValue(shot, key) {
     case 'profileName': return (shot.profileName || '').toLowerCase();
     case 'meanEc': return shot.analysisCache?.meanEcPerG ?? -1;
     case 'tds': return histTds(shot).v || -1;
+    case 'finalWeightG': return beverageOf(shot) ?? -1;
     default: return shot[key] ?? -1;
   }
 }
@@ -824,7 +825,8 @@ function renderHistory() {
     if (s.inProgress) tr.classList.add('recording');
     const when = new Date(s.startedAt);
     const coffee = s.inProgress ? '<i>recording now…</i>' : `${esc(c.beanName || 'no bean')}${c.roaster || c.origin ? `<small>${esc([c.roaster, c.origin].filter(Boolean).join(' · '))}</small>` : ''}`;
-    const inOut = `${c.doseG ? fmt(Number(c.doseG), 1) : '–'} → ${fmt(s.finalWeightG, 1)} g`;
+    const bev = beverageOf(s);
+    const inOut = `${c.doseG ? fmt(Number(c.doseG), 1) : '–'} → ${fmt(bev, 1)} g${beverageOverridden(s) ? `<span class="weighed" title="weighed by hand; the machine's scale saw ${fmt(s.finalWeightG, 1)} g">⚖</span>` : ''}`;
     const data = [
       `<span class="tag ${s.portal?.length ? 'on' : 'off'}" title="Portal samples">P ${s.portal?.length || 0}</span>`,
       `<span class="tag ${s.machine?.length ? 'on' : 'off'}" title="machine samples">M ${s.machine?.length || 0}</span>`,
@@ -950,8 +952,9 @@ function openShotDialog(shot) {
   $('e-grind').value = (c.grindSize || '').replace(/\s*µm$/, '');
   $('e-note').value = c.note || '';
   $('e-tds').value = shot.refractometer?.tdsPct ?? '';
-  $('e-bev').value = shot.refractometer?.beverageG ?? '';
-  $('e-bev').placeholder = fmt(shot.finalWeightG, 1);
+  // Beverage weighed is a field of the shot in its own right: editable with or without a reading.
+  $('e-bev').value = Number.isFinite(shot.beverageG) && shot.beverageG > 0 ? shot.beverageG : '';
+  $('e-bev').placeholder = `${fmt(shot.finalWeightG, 1)} (machine)`;
   $('shot-dialog').showModal();
   $('e-bean').focus();
 }
@@ -971,9 +974,12 @@ async function saveShotDialog() {
     grinderName: $('e-grinder').value.trim(),
     note: $('e-note').value.trim(),
   };
+  const weighed = Number($('e-bev').value);
+  if (weighed > 0 && weighed < 5000) shot.beverageG = Math.round(weighed * 10) / 10;
+  else delete shot.beverageG; // blank → back to what the machine's scale saw
+  const bev = shot.beverageG > 0 ? shot.beverageG : shot.finalWeightG; // not beverageOf(): a stale reading value must not survive a blank
   const tds = Number($('e-tds').value);
   if (tds > 0 && tds < 30) {
-    const bev = Number($('e-bev').value) || shot.finalWeightG;
     shot.refractometer = { ...(shot.refractometer || {}), tdsPct: tds, beverageG: bev, eyPct: extractionYield(tds, bev, shot.context.doseG), at: shot.refractometer?.at || Date.now() };
   } else {
     delete shot.refractometer;
@@ -998,7 +1004,7 @@ function renderShot() {
   $('shot-sub').textContent = [
     ctx.beanName,
     ctx.doseG ? `${ctx.doseG} g in` : null,
-    `${fmt(shot.finalWeightG, 1)} g out`,
+    `${fmt(beverageOf(shot), 1)} g out${beverageOverridden(shot) ? ` (weighed; machine ${fmt(shot.finalWeightG, 1)} g)` : ''}`,
     `${fmt(shot.durationSec, 1)} s`,
     `${shot.machine.length} machine · ${shot.portal.length} Portal samples`,
     shot.machineSource ? 'machine record attached' : null,
@@ -1011,8 +1017,8 @@ function renderShot() {
   for (const id of ['bc-copy', 'bc-open', 'bc-json', 'dl-csv', 'dl-json', 'dl-jpeg', 'dl-pdf', 'ref-save']) $(id).disabled = false;
   $('ref-clear').disabled = !shot.refractometer;
   $('ref-tds').value = shot.refractometer?.tdsPct ?? '';
-  $('ref-bev').value = shot.refractometer?.beverageG ?? '';
-  $('ref-bev').placeholder = fmt(shot.finalWeightG, 1);
+  $('ref-bev').value = Number.isFinite(shot.beverageG) && shot.beverageG > 0 ? shot.beverageG : (shot.refractometer?.beverageG ?? '');
+  $('ref-bev').placeholder = `${fmt(shot.finalWeightG, 1)} (machine)`;
 
   timeChart.setShot(shot.machine, shot.portal);
   const lag = Number.isFinite(shot.lagSec) ? shot.lagSec : settings.lagSec || 0;
@@ -1076,7 +1082,7 @@ function coffeeIdentity(shot) {
 function estimateShot(shot, analysis, { excludeSelf = true, points } = {}) {
   const mode = settings.estimatePool || 'auto';
   const fit = fitForCoffee(points || allCalibrationPoints(), coffeeIdentity(shot), mode, { excludeId: excludeSelf ? shot.id : undefined, minShots: settings.minCalibrationShots });
-  const estimate = estimateForShot(analysis, fit, { beverageG: shot.refractometer?.beverageG || shot.finalWeightG, doseG: Number(shot.context?.doseG) || 0, poolLabel: fit.poolLabel });
+  const estimate = estimateForShot(analysis, fit, { beverageG: beverageOf(shot), doseG: Number(shot.context?.doseG) || 0, poolLabel: fit.poolLabel });
   if (fit.calibrated && fit.pool !== 'bean') estimate.flags.unshift(`Borrowed from ${fit.poolLabel}: ${fit.shotCount} shot${fit.shotCount === 1 ? '' : 's'} of ${fit.distinctCoffees} coffee${fit.distinctCoffees === 1 ? '' : 's'}${fit.fallbackFrom ? ' (no readings for this bean yet)' : ''}.`);
   return { fit, estimate };
 }
@@ -1121,7 +1127,10 @@ async function saveRefractometer() {
     toast('Enter the refractometer TDS as a percentage, e.g. 9.2.', 'error');
     return;
   }
-  const bev = Number($('ref-bev').value) || shot.finalWeightG;
+  const typed = Number($('ref-bev').value);
+  if (typed > 0 && typed < 5000) shot.beverageG = Math.round(typed * 10) / 10; // a weighed cup entered with the reading is kept on the shot
+  else delete shot.beverageG;
+  const bev = shot.beverageG > 0 ? shot.beverageG : shot.finalWeightG;
   const dose = Number(shot.context?.doseG) || 0;
   shot.refractometer = { tdsPct: tds, beverageG: bev, eyPct: extractionYield(tds, bev, dose), at: Date.now() };
   shot.analysisCache = summarize(state.analysis);
@@ -1142,7 +1151,7 @@ async function clearRefractometer() {
 function updateRefEy() {
   const shot = state.selected;
   const tds = Number($('ref-tds').value);
-  const bev = Number($('ref-bev').value) || shot?.finalWeightG;
+  const bev = Number($('ref-bev').value) || beverageOf(shot);
   const dose = Number(shot?.context?.doseG) || 0;
   const ey = extractionYield(tds, bev, dose);
   $('ref-ey').textContent = tds > 0 ? (ey ? `→ EY ${ey.toFixed(1)}% at ${dose} g in` : 'Add a dose to get EY') : '';
@@ -1355,7 +1364,7 @@ function downloadCsv() {
 /** Render both charts for a shot to JPEG. Charts must be visible (Shots view). */
 async function chartImages(shot, analysis) {
   const c = shot.context || {};
-  const sub = [fmtDate(shot.startedAt), shot.profileName, c.beanName, c.doseG ? `${c.doseG} g in` : null, `${fmt(shot.finalWeightG, 1)} g out`, `${fmt(shot.durationSec, 1)} s`].filter(Boolean).join(' · ');
+  const sub = [fmtDate(shot.startedAt), shot.profileName, c.beanName, c.doseG ? `${c.doseG} g in` : null, `${fmt(beverageOf(shot), 1)} g out`, `${fmt(shot.durationSec, 1)} s`].filter(Boolean).join(' · ');
   const time = await chartToJpeg(timeChart.u, { title: 'Shot against time', subtitle: sub, legend: legendOf(timeChart.u) });
   let mass = null;
   if (analysis?.curve?.length) {
@@ -1386,7 +1395,7 @@ function reportFor(shot, analysis, estimate, fit, images) {
     ['Roast · process · origin', [c.roastLevel, c.process, c.origin].filter(Boolean).join(' · ') || '–'],
     ['Dose', c.doseG ? `${c.doseG} g` : '–'],
     ['Grind · grinder', [c.grindSize, c.grinderName].filter(Boolean).join(' · ') || '–'],
-    ['Beverage', `${fmt(shot.finalWeightG, 1)} g`],
+    ['Beverage', beverageOverridden(shot) ? `${fmt(beverageOf(shot), 1)} g weighed (machine ${fmt(shot.finalWeightG, 1)} g)` : `${fmt(shot.finalWeightG, 1)} g`],
     ['Extraction', `${fmt(shot.durationSec, 1)} s`],
     ['Samples', `${shot.machine?.length ?? 0} machine · ${shot.portal?.length ?? 0} Portal`],
     ['Analysis', a.status || '–'],
@@ -1415,7 +1424,7 @@ function reportFor(shot, analysis, estimate, fit, images) {
   if (images.mass) imgs.push({ ...images.mass, caption: 'Portal EC against cumulative cup mass; the shaded area is ∫EC dm, the dashed line its running share.' });
   return {
     title: `${fmtDate(shot.startedAt)}${shot.profileName ? ' — ' + shot.profileName : ''}`,
-    subtitle: [c.beanName, c.roaster, c.doseG ? `${c.doseG} g → ${fmt(shot.finalWeightG, 1)} g in ${fmt(shot.durationSec, 1)} s` : null].filter(Boolean).join(' · '),
+    subtitle: [c.beanName, c.roaster, c.doseG ? `${c.doseG} g → ${fmt(beverageOf(shot), 1)} g in ${fmt(shot.durationSec, 1)} s` : null].filter(Boolean).join(' · '),
     images: imgs,
     metrics,
     estimate: est,
@@ -1444,7 +1453,7 @@ async function analyseAll() {
     const analysis = recomputeCache(shot);
     const mode = settings.estimatePool || 'auto';
     const fit = fitForCoffee(points, coffeeIdentity(shot), mode, { excludeId: shot.id, minShots: settings.minCalibrationShots });
-    const estimate = estimateForShot(analysis, fit, { beverageG: shot.refractometer?.beverageG || shot.finalWeightG, doseG: Number(shot.context?.doseG) || 0, poolLabel: fit.poolLabel });
+    const estimate = estimateForShot(analysis, fit, { beverageG: beverageOf(shot), doseG: Number(shot.context?.doseG) || 0, poolLabel: fit.poolLabel });
     return { shot, analysis, estimate, fit };
   });
 }

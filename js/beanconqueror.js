@@ -5,7 +5,7 @@
 //   payload = base64url(gzip(JSON envelope)), unpadded, split into 400-char chunks.
 // Works in the browser and in Node ≥ 18 (CompressionStream is global in both).
 
-import { downsample } from './analysis.js?v=0.8.1';
+import { downsample } from './analysis.js?v=0.8.2';
 
 export const CHUNK = 400;
 export const MAX_SINGLE_INFLATED = 524_288;
@@ -62,7 +62,9 @@ export function buildEnvelope(shot, analysis, estimate, ctx = {}, opts = {}) {
     temperature.push(round1(s.temp ?? 0));
   }
   const totalWaterMl = round1(cumWater);
-  const beverageG = round1(shot.finalWeightG ?? analysis?.totalMassG ?? (machine.length ? Math.max(...machine.map((s) => s.w ?? 0)) : 0));
+  // The cup the user weighed wins over the machine's scale; both are kept on the shot.
+  const weighed = Number.isFinite(shot.beverageG) && shot.beverageG > 0 ? shot.beverageG : null;
+  const beverageG = round1(weighed ?? shot.finalWeightG ?? analysis?.totalMassG ?? (machine.length ? Math.max(...machine.map((s) => s.w ?? 0)) : 0));
 
   const metrics = [];
   const addMetric = (key, name, unit, src, pick) => {
@@ -94,7 +96,7 @@ export function buildEnvelope(shot, analysis, estimate, ctx = {}, opts = {}) {
 
   const envelope = {
     v: 1,
-    app: { name: 'portal-met-bridge', version: '0.8.1' },
+    app: { name: 'portal-met-bridge', version: '0.8.2' },
     brew: {
       date: new Date(shot.startedAt ?? Date.now()).toISOString(),
       waterIn: { value: clamp(totalWaterMl || beverageG, 0, 100000), unit: 'ml' },

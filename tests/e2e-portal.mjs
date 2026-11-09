@@ -190,11 +190,19 @@ try {
   });
   await page.waitForFunction(() => document.querySelector('#rec-indicator')?.dataset.state === 'recording', null, { timeout: 30000 });
   check('recording started on the machine’s extracting flag', true);
-  await page.waitForTimeout(2000);
+  await page.waitForTimeout(2500);
+  // The live shot is checkpointed to the database while it runs
+  const ckpt = await page.evaluate(async () => {
+    const live = window.__pb.recorder.shot;
+    const rows = await window.__pb.store.listShots();
+    const row = rows.find((r) => r.id === live?.id);
+    return { liveId: live?.id, found: !!row, inProgress: !!row?.inProgress, portal: row?.portal?.length || 0, machine: row?.machine?.length || 0, histRow: document.querySelector('#hist-rows tr.recording') ? document.querySelector('#hist-rows tr.recording').textContent : null };
+  });
+  check('live shot is checkpointed to IndexedDB while recording', ckpt.found && ckpt.inProgress && ckpt.machine > 3, JSON.stringify(ckpt).slice(0, 200));
   const writes = await page.evaluate(() => window.__fakePortalWrites || []);
   const dbg = await page.evaluate(() => ({ autoGraph: window.__pb.settings.autoGraph, connected: window.__pb.portal.connected, cmd: !!window.__pb.portal.command, log: window.__pb.log.ring.filter((e) => /graph|command/i.test(e.msg)).map((e) => e.msg) }));
   check('show-graph command written at shot start (40 00 01 2D)', JSON.stringify(writes).includes('[64,0,1,45]'), JSON.stringify(writes) + ' ' + JSON.stringify(dbg));
-  await page.waitForFunction(() => document.querySelector('#rec-indicator')?.dataset.state === 'idle' && document.querySelectorAll('#shot-list li').length >= 1, null, { timeout: 90000 });
+  await page.waitForFunction(() => document.querySelector('#rec-indicator')?.dataset.state === 'idle' && window.__pb.state.shots.some((x) => !x.inProgress), null, { timeout: 90000 });
   await page.waitForTimeout(6000); // machine-record swap
   const writes2 = await page.evaluate(() => window.__fakePortalWrites || []);
   check('hide-graph command written at shot end (40 00 01 2E)', JSON.stringify(writes2).includes('[64,0,1,46]'));
@@ -208,8 +216,61 @@ try {
   check('machine record attached', sel.machineRecord);
   check('analysis status ok with ≥ 85 % coverage', sel.status === 'ok' && sel.coverage >= 0.85, `${sel.status}, coverage ${(sel.coverage * 100).toFixed(0)} %`);
   check('mean EC and peak are plausible', sel.meanEc > 0.5 && sel.peak > sel.meanEc, `mean ${sel.meanEc.toFixed(3)} peak ${sel.peak.toFixed(3)}`);
+  const finalRows = await page.evaluate(async () => (await window.__pb.store.listShots()).map((r) => ({ id: r.id, inProgress: !!r.inProgress, files: r.files?.json || null })));
+  check('checkpoint replaced by the final record (no in-progress rows left)', finalRows.length === 1 && !finalRows[0].inProgress, JSON.stringify(finalRows));
+  const shotFiles = await page.evaluate(() => Object.keys(window.__fakeFolderFiles || {}).filter((f) => /portal-met-bridge\/shots\//.test(f)));
+  check('shot JSON and CSV written to the save folder automatically', shotFiles.some((f) => /\.json$/.test(f)) && shotFiles.some((f) => /\.csv$/.test(f)) && !!finalRows[0].files, shotFiles.join(', '));
+  const autoJson = await page.evaluate(() => { const k = Object.keys(window.__fakeFolderFiles).find((f) => /shots\/.*\.json$/.test(f)); return JSON.parse(window.__fakeFolderFiles[k]); });
+  check('auto-written JSON carries the machine record and the Portal samples', autoJson?.shot?.machineShotId && autoJson.shot.portal.length > 150 && autoJson.analysis?.meanEcPerG > 0, `machineShotId=${autoJson?.shot?.machineShotId} portal=${autoJson?.shot?.portal?.length}`);
 
-  // Refractometer reading → estimate from "this bean" vs pools
+  // History tab: list, search, filter, open, edit, delete
+  await page.click('.view-tab[data-view="history"]');
+  const histRows = await page.evaluate(() => [...document.querySelectorAll('#hist-rows tr')].map((tr) => tr.textContent.replace(/\s+/g, ' ').trim()));
+  check('History lists the shot with its coffee, EC/g and data tags', histRows.length === 1 && /E2E coffee/.test(histRows[0]) && /P \d+/.test(histRows[0]) && /M \d+/.test(histRows[0]), histRows.join(' | ').slice(0, 200));
+  await page.fill('#hist-search', 'zzz-nothing');
+  check('History search filters rows', (await page.evaluate(() => document.querySelectorAll('#hist-rows tr').length)) === 0);
+  await page.fill('#hist-search', 'E2E');
+  check('History search matches the bean', (await page.evaluate(() => document.querySelectorAll('#hist-rows tr').length)) === 1);
+  await page.fill('#hist-search', '');
+  await page.selectOption('#hist-filter', 'reading');
+  check('filter "with a refractometer reading" hides shots without one', (await page.evaluate(() => document.querySelectorAll('#hist-rows tr').length)) === 0);
+  await page.selectOption('#hist-filter', 'all');
+  await page.click('#hist-rows tr button[data-act="edit"]');
+  await page.waitForSelector('#shot-dialog[open]');
+  await page.fill('#e-bean', 'E2E coffee (edited)');
+  await page.fill('#e-dose', '18.5');
+  await page.fill('#e-tds', '9.1');
+  await page.click('#shot-dialog-save');
+  await page.waitForTimeout(400);
+  const edited = await page.evaluate(() => ({ row: document.querySelector('#hist-rows tr')?.textContent.replace(/\s+/g, ' '), sel: window.__pb.state.selected?.context?.beanName, tds: window.__pb.state.selected?.refractometer?.tdsPct, dose: window.__pb.state.selected?.context?.doseG, open: document.querySelector('#shot-dialog').open }));
+  check('History → Edit updates coffee, dose and reading', /E2E coffee \(edited\)/.test(edited.row) && /18\.5 →/.test(edited.row) && edited.sel === 'E2E coffee (edited)' && edited.tds === 9.1 && edited.dose === 18.5 && !edited.open, JSON.stringify(edited).slice(0, 200));
+  await page.click('#hist-rows tr button[data-act="open"]');
+  await page.waitForTimeout(200);
+  const opened = await page.evaluate(() => ({ shotsVisible: !document.querySelector('#view-shots').hidden, histHidden: document.querySelector('#view-history').hidden, sub: document.querySelector('#shot-sub').textContent }));
+  check('History → Open shows the shot on the Shots tab', opened.shotsVisible && opened.histHidden && /E2E coffee \(edited\)/.test(opened.sub), JSON.stringify(opened).slice(0, 160));
+  await page.click('#demo-load');
+  await page.waitForTimeout(600);
+  await page.click('.view-tab[data-view="history"]');
+  const rowsWithDemo = await page.evaluate(() => [...document.querySelectorAll('#hist-rows tr')].map((tr) => ({ id: tr.dataset.id, demo: /demo/.test(tr.textContent) })));
+  check('demo shot appears in History', rowsWithDemo.length === 2 && rowsWithDemo.some((r) => r.demo), JSON.stringify(rowsWithDemo));
+  const demoId = rowsWithDemo.find((r) => r.demo).id;
+  await page.check(`#hist-rows tr[data-id="${demoId}"] input[type="checkbox"]`);
+  check('selecting a row enables Delete selected', /Delete selected \(1\)/.test(await page.textContent('#hist-delete-selected')) && !(await page.isDisabled('#hist-delete-selected')));
+  await page.click('#hist-delete-selected');
+  await page.waitForSelector('#confirm-dialog[open]');
+  check('delete asks for confirmation in a dialog', /Delete this shot\?/.test(await page.textContent('#confirm-title')));
+  await page.click('#confirm-cancel');
+  await page.waitForTimeout(200);
+  check('cancelling keeps the shot', (await page.evaluate(() => document.querySelectorAll('#hist-rows tr').length)) === 2);
+  await page.click('#hist-delete-selected');
+  await page.waitForSelector('#confirm-dialog[open]');
+  await page.click('#confirm-go');
+  await page.waitForTimeout(400);
+  const afterDelete = await page.evaluate(() => [...document.querySelectorAll('#hist-rows tr')].map((tr) => tr.dataset.id));
+  check('confirming deletes the selected shot', afterDelete.length === 1 && !afterDelete.includes(demoId), afterDelete.join(','));
+  await page.click('.view-tab[data-view="shots"]');
+
+  // Refractometer reading → estimate from "this bean" vs pools (overwrites the 9.1 typed in the dialog)
   await page.fill('#ref-tds', '9.3');
   await page.click('#ref-save');
   await page.waitForTimeout(500);
@@ -252,10 +313,12 @@ try {
   check('second JPEG (EC vs mass) downloads', /ec-vs-mass\.jpg$/.test(jpg2.suggestedFilename()), jpg2.suggestedFilename());
   const pdf = await dl('#dl-pdf');
   check('PDF report downloads', pdf.bytes > 20000 && /report\.pdf$/.test(pdf.name), `${pdf.name} ${pdf.bytes} B`);
+  await page.click('.view-tab[data-view="history"]');
   const csv = await dl('#dl-summary');
-  check('summary CSV downloads', csv.bytes > 200 && /shots-.*\.csv$/.test(csv.name), `${csv.name} ${csv.bytes} B`);
+  check('summary CSV downloads (from History)', csv.bytes > 200 && /shots-.*\.csv$/.test(csv.name), `${csv.name} ${csv.bytes} B`);
   const zip = await dl('#dl-zip');
-  check('zip of everything downloads', zip.bytes > 30000 && /export-.*\.zip$/.test(zip.name), `${zip.name} ${zip.bytes} B`);
+  check('zip of everything downloads (from History)', zip.bytes > 30000 && /export-.*\.zip$/.test(zip.name), `${zip.name} ${zip.bytes} B`);
+  await page.click('.view-tab[data-view="shots"]');
 
   // Disconnect path
   await page.click('#portal-disconnect');
@@ -287,7 +350,7 @@ try {
   await page.waitForLoadState('networkidle');
   await page.waitForTimeout(800);
   const after = await page.evaluate(async () => ({
-    shots: document.querySelectorAll('#shot-list li').length,
+    shots: window.__pb.state.shots.length,
     host: document.querySelector('#meticulous-host').value,
     addr: document.querySelector('#meticulous-addr').textContent,
     logOn: document.querySelector('#log-enabled').checked,
@@ -296,6 +359,17 @@ try {
     dbs: (await (indexedDB.databases ? indexedDB.databases() : Promise.resolve([]))).map((d) => d.name),
   }));
   check('after restart: no shots, no beans, default address, log off, opens on Shots', after.shots === 0 && after.beans === 0 && after.host === '127.0.0.1' && after.addr === '127.0.0.1' && after.logOn === false && (after.hash === '' || after.hash === '#shots'), JSON.stringify(after));
+  // Recovery: a checkpoint left behind by a tab closed mid-shot becomes a shot on the next start
+  await page.evaluate(async () => {
+    const t0 = Date.now() - 600000;
+    const machine = Array.from({ length: 40 }, (_, i) => ({ t: i * 0.5, p: 6 + Math.sin(i / 5), f: 2, w: i * 1.1, temp: 92, status: 'Extract' }));
+    const portal = Array.from({ length: 160 }, (_, i) => ({ t: i * 0.125, ec: 3 - i / 100, tOut: 60, tInt: 30, status: 1 }));
+    await window.__pb.store.putShot({ id: 'ckpt-test', startedAt: t0, inProgress: true, checkpointAt: t0 + 20000, source: 'live', manual: false, profileName: 'Interrupted', machine, portal, finalWeightG: 43, durationSec: 19.5, context: { beanName: 'Interrupted bean' } });
+  });
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForTimeout(1200);
+  const recovered = await page.evaluate(async () => { const r = (await window.__pb.store.listShots()).find((x) => x.id === 'ckpt-test'); return r ? { inProgress: !!r.inProgress, recovered: !!r.recovered, duration: r.durationSec, weight: r.finalWeightG, cache: !!r.analysisCache, toast: document.querySelector('#toast')?.textContent } : null; });
+  check('unfinished checkpoint recovered as a shot after restart', recovered && !recovered.inProgress && recovered.recovered && recovered.duration === 19.5 && recovered.weight === 43 && recovered.cache, JSON.stringify(recovered));
   check('no page errors', errors.length === 0, errors.join(' | ').slice(0, 300));
 
   if (headed) await page.waitForTimeout(5000);

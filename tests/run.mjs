@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { analyzeShot, fitCalibration, predictTds, estimateForShot, buildSegments, evalEcAt } from '../js/analysis.js';
 import { buildEnvelope, encodeHandoff, decodeHandoff, encodeForQr, CHUNK, QR_MAX_URL_CHARS } from '../js/beanconqueror.js';
 import { makeDemoShot } from '../js/demo.js';
+import { ShotRecorder, finalizeCheckpoint } from '../js/recorder.js';
 
 let passed = 0;
 const test = async (name, fn) => {
@@ -239,6 +240,32 @@ await test('CSV exports: escaping, per-sample rows, summary columns', () => {
   const row = summaryRow(shot, r, { tdsPct: 9.1, eyPct: 20.2, model: 'proportional', pool: 'bean', flags: ['x'] });
   assert.equal(row.length, SUMMARY_COLUMNS.length);
   assert.ok(rowsToCsv([SUMMARY_COLUMNS, row]).includes('"Test, with comma"'));
+});
+
+await test('recorder: checkpoint recovery finalises an interrupted shot, drops an empty one', () => {
+  const machine = Array.from({ length: 21 }, (_, i) => ({ t: i * 0.5, w: i * 2, p: 6, f: 2 }));
+  const portal = Array.from({ length: 80 }, (_, i) => ({ t: i * 0.125, ec: 2.5 }));
+  const ck = { id: 'c1', startedAt: 1000, checkpointAt: 12000, inProgress: true, source: 'live', machine, portal, finalWeightG: 0 };
+  const out = finalizeCheckpoint(ck);
+  assert.equal(out, ck);
+  assert.equal(out.inProgress, undefined);
+  assert.equal(out.recovered, true);
+  assert.equal(out.durationSec, 10);
+  assert.equal(out.recordedUntilSec, 10);
+  assert.equal(out.endedAt, 12000);
+  assert.equal(out.finalWeightG, 40);
+  assert.equal(out.checkpointAt, undefined);
+  assert.equal(finalizeCheckpoint({ id: 'c2', inProgress: true, machine: [{ t: 0, w: 0 }], portal: [] }), null);
+  // and a normal recording still finalises on the falling edge after the settle window
+  const rec = new ShotRecorder({ settleSec: 0 });
+  const shots = [];
+  rec.addEventListener('shot', (e) => shots.push(e.detail));
+  rec.onStatus({ extracting: true, timeMs: 0, p: 1, f: 1, w: 0, at: 0 });
+  rec.onPortal({ ec: 2, tOut: 60, tInt: 30, status: 1, at: 100 });
+  rec.onStatus({ extracting: true, timeMs: 500, p: 6, f: 2, w: 5, at: 500 });
+  rec.onStatus({ extracting: false, timeMs: 1000, p: 0, f: 0, w: 10, at: 1000 });
+  assert.equal(rec.state, 'settling');
+  return new Promise((resolve) => setTimeout(() => { assert.equal(shots.length, 1); assert.equal(shots[0].portal.length, 1); assert.equal(shots[0].machine.length, 3); assert.equal(shots[0].finalWeightG, 10); resolve(); }, 30));
 });
 
 console.log(`\n${passed} test group(s) passed in total${process.exitCode ? ', with failures' : ''}.`);

@@ -15,7 +15,7 @@ Thanks for looking. This is a small, vibe-coded tool (see "How this was built" i
 npm start                 # http://localhost:8787  (or: node serve.mjs)
 npm test                  # unit tests: analysis maths, calibration pools, packet parser, CSV, hand-off round-trip
 npm i -D playwright socket.io
-npm run test:e2e          # Chrome + simulated Portal + mock machine, 44 checks; add --headed to watch
+npm run test:e2e          # Chrome + simulated Portal + mock machine, 60 checks; add --headed to watch
 npm run mock              # mock machine on :8080 (PORT=… to change); point the app at localhost:8080
 ```
 
@@ -36,13 +36,14 @@ Please keep these invariants:
 - New user-facing options go through the `SETTINGS` table in `js/main.js` (one line: key, default, input id) plus a label in `SETTING_LABELS`, so they are persisted, exported, imported, reset and shown in the save bar together. Typed inputs are saved by Enter / ⌘S / *Save settings* / leaving the tab, never by blur alone; toggles and selects save on change.
 - Nothing is sent anywhere but the machine on the LAN and the Portal over BLE.
 - The app never sends `/api/v1/action/*` commands unless a future feature explicitly adds a control panel with confirmation.
-- The only destructive action is *Start over*; it stays behind a typed confirmation, lists what it deletes, and touches nothing on disk outside the app's own `portal-met-bridge/` subfolder.
+- Deleting shots (History) always goes through the confirm dialog; *Start over* stays behind a typed confirmation, lists what it deletes, and touches nothing on disk outside the app's own `portal-met-bridge/` subfolder.
+- A shot in progress is checkpointed to IndexedDB under its final id (`inProgress: true`); anything that writes a finished shot must await the in-flight checkpoint (`checkpointPromise`) so a late checkpoint can never overwrite the final record. `finalizeCheckpoint()` in `js/recorder.js` is the single place that turns a leftover checkpoint into a shot.
 
 ## Pull requests
 
 Small and focused, with a sentence on what you tested it against (firmware version, Portal yes/no, browser). If an AI assistant wrote part of the change, say so in the PR — it helps reviewers know where to look harder.
 
-Signed commits are welcome but not required. `docs/SIGNED-COMMITS.md` walks through getting the green **Verified** badge on GitHub with an SSH key (about five minutes on a Mac), including how to sign commits an AI session produced before you push them.
+Signed commits are welcome but not required. `docs/SIGNED-COMMITS.md` walks through getting the green **Verified** badge on GitHub with an SSH key (about five minutes on a Mac), including how to sign commits an AI session produced before you push them; `tools/publish.sh` does the fetch → rebase → sign → push routine with checks.
 
 ## License
 

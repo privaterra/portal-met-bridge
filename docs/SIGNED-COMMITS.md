@@ -146,14 +146,50 @@ git push --force-with-lease
 
 Nobody else has a clone of this repository that matters yet, so this is safe today; it stops being polite the moment someone forks or opens a pull request. Your call — the project loses nothing by leaving old history unsigned and signing from here on.
 
-**Shortcut for every future delivery:** the amend-and-push pair above as a Git alias:
+**Shortcut for every future delivery:** `tools/publish.sh` in this repository does the fetch-rebase-sign-push sequence with checks (section C2), or as a bare alias:
 
 ```bash
-git config --global alias.signpush '!git commit --amend --no-edit && git push'
+git config --global alias.signpush '!git pull --rebase && git rebase --exec "git commit --amend --no-edit -n -S" origin/main && git push'
 # then, after unpacking a delivery:  git signpush
 ```
 
 ---
+
+## C2. Every delivery, step by step (the routine)
+
+This is the whole routine for getting a change from the AI session onto GitHub as **Verified**, assuming A1–A4 (or B) are done once. It is also what `tools/publish.sh` automates.
+
+1. **Unpack** the delivery. The session copies the new files into `~/Sites/portal-met-bridge` itself (or you unzip the delivered zip over it). Confirm the state:
+   ```bash
+   cd ~/Sites/portal-met-bridge
+   git status --short                      # should print nothing: the delivery arrives committed
+   git log --oneline origin/main..main     # the commit(s) about to be published
+   ```
+2. **Sync with GitHub first.** Edits made on github.com (the web editor, merging a pull request, deleting a workflow file) live only on GitHub until you fetch them. Skipping this is what produces `! [rejected] main -> main (fetch first)`.
+   ```bash
+   git fetch origin
+   git log --oneline main..origin/main     # anything here is on GitHub but not on your Mac
+   git rebase origin/main                  # put your unpublished commit(s) on top of it
+   ```
+   `git pull --rebase` does the same two steps in one. Do not use plain `git pull` here: it creates a merge commit, which is harmless but clutters the history with "Merge branch 'main' of …" entries.
+3. **Sign the unpublished commit(s).** The session's commits are unsigned (it never has your key). With `commit.gpgsign true` the rebase in step 2 already re-signed them; to be sure, or when nothing needed rebasing:
+   ```bash
+   git rebase --exec 'git commit --amend --no-edit -n -S' origin/main
+   git log --show-signature origin/main..main     # "Good \"git\" signature …" on each
+   ```
+4. **Push and check.**
+   ```bash
+   git push
+   ```
+   Open `https://github.com/privaterra/portal-met-bridge/commits/main` — each new commit should carry the green **Verified** badge; clicking the badge names your key and e-mail.
+
+Or, all of the above in one go, with the same checks:
+```bash
+tools/publish.sh
+```
+It refuses to run on a dirty tree, tells you when no signing key is configured, rebases onto GitHub when needed, signs what is not yet on GitHub, pushes and prints the commit URL.
+
+If the push is still rejected after this, someone pushed between your fetch and your push; run the script (or steps 2–4) once more.
 
 ## D. Vigilant mode (optional, stricter)
 
@@ -173,5 +209,7 @@ GitHub → **Settings** → **SSH and GPG keys** → **Vigilant mode** → tick 
 | `ssh-keygen: unknown option -- Y` | OpenSSH older than 8.8; update macOS or `brew install openssh`. |
 | Signing asks for the passphrase on every commit | `ssh-add --apple-use-keychain ~/.ssh/id_ed25519` (SSH) or tick *Save in Keychain* in the pinentry dialog (GPG). |
 | `git log --show-signature` says "No principal matched" | Local verification only; add the `allowed_signers` file (end of A4). GitHub's badge does not depend on it. |
+| `git push` → `! [rejected] main -> main (fetch first)` | GitHub has commits your Mac does not (web edits, a merged PR). `git pull --rebase`, re-sign (section C2 step 3), push again. |
+| A rebase or amend made a signed commit **Unverified** | Rewriting a commit drops its signature unless Git re-signs it: set `commit.gpgsign true`, or pass `-S` in the `--exec` as in C2. |
 
 References: GitHub Docs → *About commit signature verification*, *Telling Git about your signing key*, *Signing commits*.

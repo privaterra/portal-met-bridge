@@ -16,6 +16,7 @@
     </div>
     <nav class="views" aria-label="Views">
       <button class="view-tab" data-view="shots" aria-selected="true">Shots</button>
+      <button class="view-tab" data-view="history" aria-selected="false">History <span class="count" id="history-tab-count"></span></button>
       <button class="view-tab" data-view="machine" aria-selected="false">Machine</button>
       <button class="view-tab" data-view="settings" aria-selected="false">Settings</button>
     </nav>
@@ -113,12 +114,17 @@
         <label class="field"><span>Grinder</span><input id="ctx-grinder" type="text" list="grinder-list" placeholder="e.g. Zerno Z1" autocomplete="off" /></label>
         <datalist id="grinder-list"></datalist>
         <label class="field"><span>Note for the log</span><textarea id="ctx-note" rows="2"></textarea></label>
-        <p class="hint">Bean, roaster, origin and grinder each offer what you have entered before (press ↓ in an empty field to see the list) or take a new entry, which is remembered. Picking a previous bean fills in its roaster, roast level, process and origin. Calibration is kept per bean name, so keep the name stable while you work through a bag.</p>
+        <p class="hint">Describes the next shot, and is written into the shot you just pulled while it is the most recent one. Each field offers what you have entered before (press ↓ in an empty field) or takes a new entry, which is remembered. Picking a previous bean fills in its roaster, roast level, process and origin. Older shots are edited from <button class="linkish" data-goto="history">History</button>.</p>
       </section>
 
       <section class="rail-section grow">
         <h2>Shots <span class="count" id="shot-count"></span></h2>
-        <ul class="shot-list" id="shot-list"></ul>
+        <div class="row">
+          <button id="shot-prev" class="btn small" title="Newer shot" disabled>◀ newer</button>
+          <button id="shot-next" class="btn small" title="Older shot" disabled>older ▶</button>
+          <button class="btn small" data-goto="history">All shots…</button>
+        </div>
+        <p class="hint" id="shot-saved-note">Every shot is saved here as it is recorded; nothing is lost if the tab closes mid-shot.</p>
         <div class="row">
           <button id="demo-load" class="btn small">Add a demo shot</button>
           <button id="demo-replay" class="btn small">Replay a demo live</button>
@@ -162,6 +168,10 @@
           <label class="field narrow"><span>Portal lag vs cup (s) — positive if liquid reaches the Portal before the cup</span><input id="lag-sec" type="number" min="-2" max="3" step="0.1" value="0" /></label>
           <label class="field narrow"><span>Discard automatic recordings shorter than (s)</span><input id="set-min-shot" type="number" min="0" max="60" step="1" value="5" /></label>
           <label class="check"><input type="checkbox" id="portal-auto-graph" checked /> Switch the Portal's screen to its graph during a shot and back afterwards</label>
+          <h3>Saving</h3>
+          <p class="hint">Every shot is written to this browser's database while it is being recorded (a checkpoint every two seconds) and finalised when the pump stops, so a closed tab or a crash loses at most the last two seconds. The machine's own record is attached afterwards, and any shot still missing it is completed the next time the machine connects.</p>
+          <label class="check"><input type="checkbox" id="set-autosave-files" checked /> Also write each shot's JSON and CSV to the save folder as soon as it is saved (and again when the machine's record arrives)</label>
+          <p class="hint" id="autosave-note">The save folder is chosen under <em>Logging and debug → Where to save</em>; files land in <code>portal-met-bridge/shots/</code>.</p>
         </div>
       </section>
 
@@ -340,6 +350,52 @@
       </section>
     </main>
 
+    <main class="main" id="view-history" hidden>
+      <section class="panel">
+        <div class="panel-head">
+          <h2>History <span class="count" id="hist-count"></span></h2>
+          <div class="panel-tools">
+            <button id="dl-summary" class="btn small">Summary CSV</button>
+            <button id="dl-zip" class="btn small">Everything (zip)</button>
+            <span class="inline-note" id="dl-progress"></span>
+          </div>
+        </div>
+        <div class="hist-toolbar">
+          <input id="hist-search" type="search" placeholder="Search bean, roaster, origin, grinder, profile, note…" autocomplete="off" />
+          <select id="hist-filter" aria-label="Show">
+            <option value="all">all shots</option>
+            <option value="portal">with Portal data</option>
+            <option value="reading">with a refractometer reading</option>
+            <option value="noreading">without a reading</option>
+            <option value="machine">machine only</option>
+            <option value="unsaved">files not yet written</option>
+          </select>
+          <button id="hist-delete-selected" class="btn small danger" disabled>Delete selected</button>
+        </div>
+        <div class="hist-wrap">
+          <table class="hist" id="hist-table">
+            <thead>
+              <tr>
+                <th class="sel"><input type="checkbox" id="hist-select-all" aria-label="Select all shown" /></th>
+                <th data-sort="startedAt" aria-sort="descending">When</th>
+                <th data-sort="bean">Coffee</th>
+                <th data-sort="profileName">Profile</th>
+                <th data-sort="finalWeightG" class="num">In → out</th>
+                <th data-sort="durationSec" class="num">Time</th>
+                <th data-sort="meanEc" class="num" title="mean EC per gram of beverage">EC/g</th>
+                <th data-sort="tds" class="num" title="refractometer reading, or the estimate in italics">TDS</th>
+                <th>Data</th>
+                <th class="actions"></th>
+              </tr>
+            </thead>
+            <tbody id="hist-rows"></tbody>
+          </table>
+          <p class="hint hist-empty" id="hist-empty" hidden>Nothing recorded yet. Connect the machine and pull a shot, or add a demo shot from the Shots tab.</p>
+        </div>
+        <p class="hint">Click a row to select it, <em>Open</em> (or double-click) to show it on the Shots tab. <b>TDS</b> in bold is a refractometer reading; in italics it is the estimate. <b>Data</b> shows how many Portal and machine samples the shot holds, whether the machine's own record is attached (⌂) and whether its files are in the save folder (▤). The summary CSV has one row per shot with the EC metrics, reading and estimate; the zip adds every shot's CSV, JSON, graphs and PDF report.</p>
+      </section>
+    </main>
+
     <main class="main" id="view-shots">
       <section class="live">
         <div class="readouts">
@@ -361,6 +417,7 @@
           <h2 id="shot-title">No shot selected</h2>
           <div class="panel-tools">
             <button id="shot-refresh" class="btn small" title="Replace the live machine samples with the machine's own saved record of this shot" disabled>Refresh from machine</button>
+            <button id="shot-edit" class="btn small" title="Edit this shot's coffee, dose, grind, note and refractometer reading" disabled>Edit details</button>
             <button id="shot-delete" class="btn small danger" disabled>Delete</button>
           </div>
         </div>
@@ -437,13 +494,7 @@
             <button id="dl-jpeg" class="btn small" disabled>Graphs (JPEG)</button>
             <button id="dl-pdf" class="btn small" disabled>Report (PDF)</button>
           </div>
-          <h3>Files for all shots</h3>
-          <div class="row">
-            <button id="dl-summary" class="btn small">Summary CSV</button>
-            <button id="dl-zip" class="btn small">Everything (zip)</button>
-            <span class="inline-note" id="dl-progress"></span>
-          </div>
-          <p class="hint">The summary has one row per shot with the EC metrics, refractometer reading and estimate. The zip adds every shot's CSV, JSON, graphs and PDF report.</p>
+          <p class="hint">Files for <em>all</em> shots (summary CSV, zip of everything) are under <button class="linkish" data-goto="history">History</button>. <span id="shot-files-note"></span></p>
           <h3>Attach a saved machine shot</h3>
           <p class="hint">Pulls the machine's own record and attaches it to the selected recording when the times line up, or creates a new entry without Portal data.</p>
           <div class="row">
@@ -467,6 +518,56 @@
       <div class="row end">
         <button type="button" id="reset-cancel" class="btn">Cancel</button>
         <button type="button" id="reset-go" class="btn danger solid" disabled>Erase and restart</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="shot-dialog" class="modal wide">
+    <form method="dialog" id="shot-form">
+      <h2>Edit shot</h2>
+      <p class="panel-sub" id="shot-dialog-sub"></p>
+      <div class="row two">
+        <label class="field"><span>Bean</span><input id="e-bean" type="text" list="bean-list" autocomplete="off" /></label>
+        <label class="field"><span>Roaster</span><input id="e-roaster" type="text" list="roaster-list" autocomplete="off" /></label>
+      </div>
+      <div class="row two">
+        <label class="field"><span>Roast level</span>
+          <select id="e-roast">
+            <option value="">unknown</option><option value="light">light</option><option value="medium-light">medium-light</option><option value="medium">medium</option><option value="medium-dark">medium-dark</option><option value="dark">dark</option>
+          </select></label>
+        <label class="field"><span>Process</span>
+          <select id="e-process">
+            <option value="">unknown</option><option value="washed">washed</option><option value="natural">natural</option><option value="honey">honey / pulped</option><option value="anaerobic">anaerobic / fermented</option><option value="other">other</option>
+          </select></label>
+      </div>
+      <div class="row two">
+        <label class="field"><span>Origin</span><input id="e-origin" type="text" list="origin-list" autocomplete="off" /></label>
+        <label class="field"><span>Grinder</span><input id="e-grinder" type="text" list="grinder-list" autocomplete="off" /></label>
+      </div>
+      <div class="row two">
+        <label class="field"><span>Dose (g)</span><input id="e-dose" type="number" step="0.1" min="0" /></label>
+        <label class="field"><span>Grind (µm)</span><input id="e-grind" type="number" step="5" min="0" /></label>
+      </div>
+      <div class="row two">
+        <label class="field"><span>Refractometer TDS (%) — blank removes the reading</span><input id="e-tds" type="number" step="0.01" min="0" max="30" /></label>
+        <label class="field"><span>Beverage weighed (g)</span><input id="e-bev" type="number" step="0.1" min="0" /></label>
+      </div>
+      <label class="field"><span>Note</span><textarea id="e-note" rows="2"></textarea></label>
+      <p class="hint">The recorded samples, times and weights are not editable; they are what the machine and the Portal measured.</p>
+      <div class="row end">
+        <button type="button" id="shot-dialog-cancel" class="btn">Cancel</button>
+        <button type="submit" id="shot-dialog-save" class="btn primary">Save changes</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="confirm-dialog" class="modal">
+    <form method="dialog">
+      <h2 id="confirm-title">Are you sure?</h2>
+      <p id="confirm-body"></p>
+      <div class="row end">
+        <button type="button" id="confirm-cancel" class="btn">Cancel</button>
+        <button type="button" id="confirm-go" class="btn danger solid">Delete</button>
       </div>
     </form>
   </dialog>

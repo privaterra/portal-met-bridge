@@ -3,7 +3,7 @@
 import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js';
 import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js';
 import { MachinePanel } from './machine-panel.js';
-import { ShotRecorder } from './recorder.js';
+import { ShotRecorder, finalizeCheckpoint } from './recorder.js';
 import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js';
 import { TimeChart, MassChart, CalibrationChart } from './charts.js';
 import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, DEFAULTS } from './analysis.js';
@@ -24,7 +24,7 @@ const massChart = new MassChart($('chart-mass'));
 const calChart = new CalibrationChart($('chart-cal'));
 const machinePanel = new MachinePanel($('view-machine'));
 
-const VIEWS = ['shots', 'machine', 'settings'];
+const VIEWS = ['shots', 'history', 'machine', 'settings'];
 
 function showView(name) {
   if (!VIEWS.includes(name)) name = 'shots';
@@ -35,6 +35,7 @@ function showView(name) {
   for (const v of VIEWS) $(`view-${v}`).hidden = v !== name;
   document.querySelectorAll('.view-tab').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.view === name)));
   if (name === 'machine') machinePanel.onShown();
+  else if (name === 'history') renderHistory();
   else if (name === 'shots') {
     timeChart.u.setSize({ width: Math.max(320, $('chart-time').clientWidth), height: 320 });
     massChart.u.setSize({ width: Math.max(320, $('chart-mass').clientWidth), height: 300 });
@@ -71,6 +72,7 @@ const SETTINGS = {
   lagSec: { def: 0, el: 'lag-sec', num: true, min: -2, max: 3 },
   minShotSec: { def: 5, el: 'set-min-shot', num: true, min: 0, max: 60 },
   autoGraph: { def: true, el: 'portal-auto-graph', bool: true },
+  autoSaveFiles: { def: true, el: 'set-autosave-files', bool: true },
   minCalibrationShots: { def: 5, el: 'set-min-cal', num: true, min: 2, max: 20 },
   estimatePool: { def: 'auto', el: 'est-pool' },
   logEnabled: { def: false, el: 'log-enabled', bool: true },
@@ -213,7 +215,7 @@ async function resetSettings() {
 // Human-readable names for the save bar.
 const SETTING_LABELS = {
   meticulousHost: 'machine address', autoConnectMeticulous: 'connect on open', autoAttach: 'attach machine record', attachDelaySec: 'attach delay',
-  autoRecord: 'auto-record', settleSec: 'settle window', lagSec: 'Portal lag', minShotSec: 'minimum shot length', autoGraph: 'Portal screen',
+  autoRecord: 'auto-record', settleSec: 'settle window', lagSec: 'Portal lag', minShotSec: 'minimum shot length', autoGraph: 'Portal screen', autoSaveFiles: 'write shot files',
   minCalibrationShots: 'reference shots', estimatePool: 'estimate pool', logEnabled: 'logging', logLevel: 'log detail', logPackets: 'packet logging',
   logSaveExports: 'save exports to folder', logShowTail: 'live tail',
 };
@@ -314,8 +316,8 @@ async function init() {
   log.configure({ enabled: settings.logEnabled, level: settings.logLevel, packets: settings.logPackets });
   await restoreLogFolder();
   renderLogStatus();
-  $('about-version').textContent = 'v0.7.0';
-  log.info('app', `portal-met-bridge v0.7.0 started · ${navigator.userAgent}`);
+  $('about-version').textContent = 'v0.8.0';
+  log.info('app', `portal-met-bridge v0.8.0 started · ${navigator.userAgent}`);
 
   const env = await environmentCheck();
   renderPortalSteps({ secure: env.secure, api: env.api, adapter: env.adapter });
@@ -330,7 +332,9 @@ async function init() {
   if (seeded) log.info('lists', `seeded pick-lists with ${seeded} entries from earlier shots and beans`);
   await refreshBeanLists();
   await refreshShotList();
-  if (state.shots.length) selectShot(state.shots[0].id);
+  await recoverUnfinishedShots();
+  const first = state.shots.find((x) => !x.inProgress);
+  if (first) selectShot(first.id);
   if (await store.getSetting('autoConnectMeticulous', false)) connectMeticulous();
 }
 
@@ -359,6 +363,7 @@ function connectMeticulous() {
     $('meticulous-disconnect').disabled = d.state === 'disconnected';
     $('mach-last').disabled = d.state !== 'connected';
     $('shot-refresh').disabled = d.state !== 'connected' || !state.selected;
+    if (d.state === 'connected') setTimeout(() => backfillMachineRecords().catch(() => {}), 1500);
   });
   meticulous.addEventListener('status', (e) => onStatus(e.detail));
   meticulous.connect();
@@ -545,16 +550,75 @@ recorder.addEventListener('state', (e) => {
 });
 recorder.addEventListener('sample', () => {
   state.liveDirty = true;
+  checkpointLiveShot();
 });
+
+// While a shot is being recorded it is written to the database every
+// CHECKPOINT_MS as an `inProgress` entry under its final id, so a closed tab
+// or a crash mid-shot loses at most that much. recoverUnfinishedShots() turns
+// any leftover checkpoint into a normal shot on the next start.
+const CHECKPOINT_MS = 2000;
+let lastCheckpoint = 0;
+let checkpointPromise = null; // the write in flight, awaited before the final save so it cannot overwrite it
+function checkpointLiveShot(force = false) {
+  const live = recorder.shot;
+  if (!live || checkpointPromise) return checkpointPromise;
+  const now = performance.now();
+  if (!force && now - lastCheckpoint < CHECKPOINT_MS) return null;
+  lastCheckpoint = now;
+  const snap = { ...live, machine: live.machine.slice(), portal: live.portal.slice(), inProgress: true, checkpointAt: Date.now(), context: readContext(), lagSec: settings.lagSec || 0 };
+  snap.durationSec = snap.machine.at(-1)?.t ?? snap.portal.at(-1)?.t ?? 0;
+  checkpointPromise = (async () => {
+    try {
+      await store.putShot(snap);
+      if (!state.shots.some((x) => x.id === live.id)) await refreshShotList(); // first checkpoint: show the row
+    } catch (err) {
+      log.warn('recorder', `checkpoint failed: ${err?.message || err}`);
+    } finally {
+      checkpointPromise = null;
+    }
+  })();
+  return checkpointPromise;
+}
+
+/** Finish any shot that was left as a checkpoint (tab closed or crashed mid-shot). */
+async function recoverUnfinishedShots() {
+  let n = 0;
+  for (const s of state.shots.filter((x) => x.inProgress)) {
+    const shot = await store.getShot(s.id);
+    if (!shot) continue;
+    if (!finalizeCheckpoint(shot)) {
+      await store.deleteShot(shot.id);
+      log.info('recorder', `dropped an empty checkpoint ${shot.id}`);
+      continue;
+    }
+    recomputeCache(shot);
+    await store.putShot(shot);
+    log.warn('recorder', `recovered an unfinished recording from ${fmtDate(shot.startedAt)}: ${fmt(shot.durationSec, 1)} s, ${shot.machine?.length || 0} machine + ${shot.portal?.length || 0} Portal samples`);
+    if (settings.autoSaveFiles) autosaveShotFiles(shot).catch(() => {});
+    n++;
+  }
+  if (n) {
+    await refreshShotList();
+    toast(`Recovered ${n} unfinished recording${n === 1 ? '' : 's'} from the last session.`);
+  }
+  return n;
+}
+
 recorder.addEventListener('shot', async (e) => {
   const shot = e.detail;
+  if (checkpointPromise) await checkpointPromise; // never let a late checkpoint overwrite the final record
   if (shot.machine.length + shot.portal.length < 5 || (!shot.manual && shot.durationSec < settings.minShotSec)) {
     log.info('recorder', `discarded a ${shot.durationSec.toFixed(1)} s recording (${shot.machine.length} machine, ${shot.portal.length} Portal samples; minimum ${settings.minShotSec} s)`);
     toast(`Recording was shorter than ${settings.minShotSec} s and was not kept (change this under Settings → Recording).`);
+    await store.deleteShot(shot.id).catch(() => {}); // remove its checkpoint
+    await refreshShotList();
     return;
   }
   shot.context = readContext();
   shot.lagSec = settings.lagSec || 0;
+  delete shot.inProgress;
+  delete shot.checkpointAt;
   recomputeCache(shot);
   await store.putShot(shot);
   await store.rememberBean(shot.context);
@@ -564,8 +628,79 @@ recorder.addEventListener('shot', async (e) => {
   selectShot(shot.id);
   log.info('recorder', `saved shot ${shot.id}: ${fmt(shot.finalWeightG, 1)} g in ${fmt(shot.durationSec, 1)} s, ${shot.machine.length} machine + ${shot.portal.length} Portal samples`);
   toast(`Saved shot — ${fmt(shot.finalWeightG, 1)} g in ${fmt(shot.durationSec, 1)} s`);
+  if (settings.autoSaveFiles) autosaveShotFiles(shot).catch(() => {});
   if (settings.autoAttach && meticulous?.connected && !shot.manual) setTimeout(() => refreshFromMachine(shot.id, true), settings.attachDelaySec * 1000);
 });
+
+/**
+ * Write a shot's JSON and CSV into <save folder>/portal-met-bridge/shots/ and
+ * remember where. Quiet when no folder is configured: the database copy is the
+ * record of truth; files are a convenience for other tools.
+ */
+async function autosaveShotFiles(shot) {
+  if (!log.folder || log.folderState !== 'granted') return false;
+  const analysis = recomputeCache(shot);
+  let estimate = null;
+  try {
+    estimate = estimateShot(shot, analysis).estimate;
+  } catch {
+    /* no calibration yet */
+  }
+  const base = fileBase(shot);
+  const json = await log.saveFile('shots', `${base}.json`, new Blob([shotJson(shot, analysis, estimate)], { type: 'application/json' }));
+  const csv = await log.saveFile('shots', `${base}.csv`, new Blob([shotSamplesCsv(shot)], { type: 'text/csv' }));
+  shot.files = { json, csv, at: Date.now() };
+  await store.putShot(shot);
+  log.info('export', `shot files written: ${json}, ${csv}`);
+  const i = state.shots.findIndex((x) => x.id === shot.id);
+  if (i >= 0) state.shots[i] = shot;
+  if (state.selected?.id === shot.id) state.selected = shot;
+  renderHistory();
+  if (state.selected?.id === shot.id) $('shot-files-note').textContent = `This shot's JSON and CSV were written to ${json.replace(/[^/]+$/, '')} at ${new Date(shot.files.at).toLocaleTimeString()}.`;
+  return true;
+}
+
+/**
+ * Shots recorded live that never got the machine's own record (the tab was
+ * closed before the attach delay, or the machine was unreachable) are
+ * completed from the machine's history the next time it connects.
+ */
+async function backfillMachineRecords() {
+  if (!meticulous?.connected) return 0;
+  const since = Date.now() - 7 * 86400e3;
+  const missing = state.shots.filter((s) => s.source === 'live' && !s.inProgress && !s.machineSource && !s.manual && s.startedAt > since);
+  if (!missing.length) return 0;
+  let list;
+  try {
+    list = await meticulous.history({ maxResults: 60, dumpData: false });
+  } catch (err) {
+    log.warn('machine', `history lookup for backfill failed: ${err?.message || err}`);
+    return 0;
+  }
+  let n = 0;
+  for (const s of missing) {
+    const hit = list.find((h) => Number.isFinite(h.time) && Math.abs(h.time * 1000 - s.startedAt) < 45000);
+    if (!hit) continue;
+    try {
+      const saved = hit.data?.length ? hit : await meticulous.shotById(hit.id);
+      if (!saved) continue;
+      const shot = await store.getShot(s.id);
+      if (!shot) continue;
+      await attachMachineRecord(shot, saved, machineSamplesFromSavedShot(saved));
+      if (settings.autoSaveFiles) await autosaveShotFiles(shot).catch(() => {});
+      n++;
+      log.info('machine', `attached the machine record ${saved.id} to the ${fmtDate(shot.startedAt)} shot (backfill)`);
+    } catch (err) {
+      log.warn('machine', `backfill for ${s.id} failed: ${err?.message || err}`);
+    }
+  }
+  if (n) {
+    await refreshShotList();
+    if (state.selected) selectShot(state.selected.id);
+    toast(`Attached the machine's record to ${n} earlier shot${n === 1 ? '' : 's'}.`);
+  }
+  return n;
+}
 
 function startLiveLoop() {
   stopLiveLoop();
@@ -588,28 +723,272 @@ function stopLiveLoop() {
 
 async function refreshShotList() {
   state.shots = await store.listShots();
-  const ul = $('shot-list');
-  ul.innerHTML = '';
-  $('shot-count').textContent = state.shots.length ? `(${state.shots.length})` : '';
-  for (const s of state.shots) {
-    const li = document.createElement('li');
-    li.dataset.id = s.id;
-    if (s.id === state.selected?.id) li.classList.add('selected');
-    const a = s.analysisCache;
-    const meanEc = a?.meanEcPerG;
-    li.innerHTML = `<span class="when">${fmtDate(s.startedAt)}</span><span class="ec">${Number.isFinite(meanEc) ? meanEc.toFixed(2) : '—'}</span>` +
-      `<span class="what">${s.refractometer?.tdsPct ? `<b>TDS ${s.refractometer.tdsPct.toFixed(2)}</b> · ` : ''}${esc(s.context?.beanName || 'no bean')} · ${fmt(s.finalWeightG, 1)} g · ${fmt(s.durationSec, 0)} s${s.source === 'demo' ? ' · demo' : s.source === 'machine' ? ' · machine only' : ''}</span>`;
-    li.addEventListener('click', () => selectShot(s.id));
-    ul.appendChild(li);
-  }
+  const n = state.shots.filter((x) => !x.inProgress).length;
+  $('shot-count').textContent = n ? `(${n})` : '';
+  $('history-tab-count').textContent = n ? `(${n})` : '';
+  renderHistory();
+  updateShotNav();
 }
 
-async function selectShot(id) {
+/** Newer/older buttons on the Shots tab step through the saved shots. */
+function updateShotNav() {
+  const list = state.shots.filter((x) => !x.inProgress);
+  const i = list.findIndex((x) => x.id === state.selected?.id);
+  $('shot-prev').disabled = i <= 0;
+  $('shot-next').disabled = i < 0 || i >= list.length - 1;
+}
+function stepShot(delta) {
+  const list = state.shots.filter((x) => !x.inProgress);
+  const i = list.findIndex((x) => x.id === state.selected?.id);
+  const j = i + delta;
+  if (j >= 0 && j < list.length) selectShot(list[j].id);
+}
+
+async function selectShot(id, { show = false } = {}) {
   const shot = await store.getShot(id);
   if (!shot) return;
   state.selected = shot;
-  document.querySelectorAll('.shot-list li').forEach((li) => li.classList.toggle('selected', li.dataset.id === id));
+  document.querySelectorAll('#hist-rows tr').forEach((tr) => tr.classList.toggle('selected', tr.dataset.id === id));
+  updateShotNav();
   renderShot();
+  if (show) showView('shots');
+}
+
+// ---------------------------------------------------------------- history --
+
+const hist = { search: '', filter: 'all', sort: 'startedAt', dir: 'desc', checked: new Set() };
+
+/** The number History sorts and shows for TDS: a reading if there is one, else the estimate. */
+function histTds(shot) {
+  if (shot.refractometer?.tdsPct) return { v: shot.refractometer.tdsPct, measured: true };
+  const a = shot.analysisCache;
+  if (!a || !(a.meanEcPerG > 0) || shot.inProgress) return { v: NaN, measured: false };
+  try {
+    const { estimate } = estimateShot(shot, { status: a.status, meanEcPerG: a.meanEcPerG, coverageRatio: a.coverageRatio, totalMassG: a.totalMassG }, { excludeSelf: true });
+    return { v: estimate.tdsPct, measured: false };
+  } catch {
+    return { v: NaN, measured: false };
+  }
+}
+
+function histMatches(shot) {
+  const q = hist.search.trim().toLowerCase();
+  if (q) {
+    const c = shot.context || {};
+    const hay = [c.beanName, c.roaster, c.origin, c.grinderName, c.note, c.roastLevel, c.process, shot.profileName, fmtDate(shot.startedAt)].join(' ').toLowerCase();
+    if (!hay.includes(q)) return false;
+  }
+  switch (hist.filter) {
+    case 'portal': return (shot.portal?.length || 0) > 0;
+    case 'reading': return !!shot.refractometer?.tdsPct;
+    case 'noreading': return !shot.refractometer?.tdsPct;
+    case 'machine': return shot.source === 'machine' || !(shot.portal?.length);
+    case 'unsaved': return !shot.files?.json;
+    default: return true;
+  }
+}
+
+function histSortValue(shot, key) {
+  switch (key) {
+    case 'bean': return (shot.context?.beanName || '').toLowerCase();
+    case 'profileName': return (shot.profileName || '').toLowerCase();
+    case 'meanEc': return shot.analysisCache?.meanEcPerG ?? -1;
+    case 'tds': return histTds(shot).v || -1;
+    default: return shot[key] ?? -1;
+  }
+}
+
+function renderHistory() {
+  const tbody = $('hist-rows');
+  if (!tbody) return;
+  const rows = state.shots.filter(histMatches);
+  const dir = hist.dir === 'asc' ? 1 : -1;
+  rows.sort((a, b) => {
+    const x = histSortValue(a, hist.sort);
+    const y = histSortValue(b, hist.sort);
+    return (x < y ? -1 : x > y ? 1 : 0) * dir || (b.startedAt - a.startedAt);
+  });
+  document.querySelectorAll('#hist-table th[data-sort]').forEach((th) => th.setAttribute('aria-sort', th.dataset.sort === hist.sort ? (hist.dir === 'asc' ? 'ascending' : 'descending') : 'none'));
+  const total = state.shots.filter((x) => !x.inProgress).length;
+  $('hist-count').textContent = total ? (rows.length === total ? `(${total})` : `(${rows.length} of ${total})`) : '';
+  $('hist-empty').hidden = state.shots.length > 0;
+  for (const id of [...hist.checked]) if (!state.shots.some((x) => x.id === id)) hist.checked.delete(id);
+  tbody.innerHTML = '';
+  for (const s of rows) {
+    const c = s.context || {};
+    const a = s.analysisCache;
+    const tds = histTds(s);
+    const tr = document.createElement('tr');
+    tr.dataset.id = s.id;
+    if (s.id === state.selected?.id) tr.classList.add('selected');
+    if (s.inProgress) tr.classList.add('recording');
+    const when = new Date(s.startedAt);
+    const coffee = s.inProgress ? '<i>recording now…</i>' : `${esc(c.beanName || 'no bean')}${c.roaster || c.origin ? `<small>${esc([c.roaster, c.origin].filter(Boolean).join(' · '))}</small>` : ''}`;
+    const inOut = `${c.doseG ? fmt(Number(c.doseG), 1) : '–'} → ${fmt(s.finalWeightG, 1)} g`;
+    const data = [
+      `<span class="tag ${s.portal?.length ? 'on' : 'off'}" title="Portal samples">P ${s.portal?.length || 0}</span>`,
+      `<span class="tag ${s.machine?.length ? 'on' : 'off'}" title="machine samples">M ${s.machine?.length || 0}</span>`,
+      s.inProgress ? '<span class="tag rec">● recording</span>' : `<span class="tag ${s.machineSource ? 'on' : 'off'}" title="${s.machineSource ? 'machine record attached' : 'machine record not attached'}">⌂</span>`,
+      s.inProgress ? '' : `<span class="tag ${s.files?.json ? 'on' : 'off'}" title="${s.files?.json ? 'JSON + CSV in the save folder: ' + s.files.json : 'files not written to a folder'}">▤</span>`,
+      s.source === 'demo' ? '<span class="tag off">demo</span>' : '',
+      s.recovered ? '<span class="tag off" title="recovered from a checkpoint after the tab closed mid-shot">recovered</span>' : '',
+    ].join('');
+    tr.innerHTML = `<td class="sel"><input type="checkbox" aria-label="Select shot" ${hist.checked.has(s.id) ? 'checked' : ''} ${s.inProgress ? 'disabled' : ''} /></td>` +
+      `<td class="when">${esc(when.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }))}<small>${esc(when.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }))}</small></td>` +
+      `<td class="coffee">${coffee}</td>` +
+      `<td class="prof">${esc(s.profileName || '–')}</td>` +
+      `<td class="num">${inOut}</td>` +
+      `<td class="num">${fmt(s.durationSec, 0)} s</td>` +
+      `<td class="num ec">${Number.isFinite(a?.meanEcPerG) ? a.meanEcPerG.toFixed(2) : '–'}</td>` +
+      `<td class="num tds">${Number.isFinite(tds.v) ? (tds.measured ? `<b>${tds.v.toFixed(2)}</b>` : `<i>~${tds.v.toFixed(2)}</i>`) : '–'}</td>` +
+      `<td class="data">${data}</td>` +
+      `<td class="actions">${s.inProgress ? '' : '<button class="btn small" data-act="open">Open</button><button class="btn small" data-act="edit">Edit</button><button class="btn small danger" data-act="delete">Delete</button>'}</td>`;
+    tbody.appendChild(tr);
+  }
+  $('hist-delete-selected').disabled = hist.checked.size === 0;
+  $('hist-delete-selected').textContent = hist.checked.size ? `Delete selected (${hist.checked.size})` : 'Delete selected';
+  const all = $('hist-select-all');
+  const selectable = rows.filter((x) => !x.inProgress);
+  all.checked = selectable.length > 0 && selectable.every((x) => hist.checked.has(x.id));
+  all.indeterminate = !all.checked && selectable.some((x) => hist.checked.has(x.id));
+}
+
+async function onHistoryClick(ev) {
+  const tr = ev.target.closest('tr[data-id]');
+  if (!tr) return;
+  const id = tr.dataset.id;
+  const shot = state.shots.find((x) => x.id === id);
+  if (!shot || shot.inProgress) return;
+  if (ev.target.matches('input[type="checkbox"]')) {
+    if (ev.target.checked) hist.checked.add(id);
+    else hist.checked.delete(id);
+    renderHistory();
+    return;
+  }
+  const act = ev.target.closest('button[data-act]')?.dataset.act;
+  if (act === 'open') return selectShot(id, { show: true });
+  if (act === 'edit') return openShotDialog(await store.getShot(id));
+  if (act === 'delete') return deleteShots([id]);
+  selectShot(id);
+}
+
+/** A generic confirm box (the browser's confirm() blocks the page and is not styleable). */
+function confirmDialog({ title, body, action = 'Delete' }) {
+  return new Promise((resolve) => {
+    const dlg = $('confirm-dialog');
+    $('confirm-title').textContent = title;
+    $('confirm-body').textContent = body;
+    $('confirm-go').textContent = action;
+    const done = (ok) => {
+      dlg.removeEventListener('close', onClose);
+      $('confirm-go').removeEventListener('click', onGo);
+      $('confirm-cancel').removeEventListener('click', onCancel);
+      if (dlg.open) dlg.close();
+      resolve(ok);
+    };
+    const onGo = () => done(true);
+    const onCancel = () => done(false);
+    const onClose = () => done(false);
+    $('confirm-go').addEventListener('click', onGo);
+    $('confirm-cancel').addEventListener('click', onCancel);
+    dlg.addEventListener('close', onClose);
+    dlg.showModal();
+  });
+}
+
+async function deleteShots(ids) {
+  ids = ids.filter((id) => state.shots.some((x) => x.id === id && !x.inProgress));
+  if (!ids.length) return;
+  const first = state.shots.find((x) => x.id === ids[0]);
+  const body = ids.length === 1
+    ? `${fmtDate(first.startedAt)}${first.context?.beanName ? ' — ' + first.context.beanName : ''}: its samples, analysis and refractometer reading are removed from this browser. Files already written to the save folder stay there.`
+    : `${ids.length} shots and their readings are removed from this browser. Files already written to the save folder stay there.`;
+  const ok = await confirmDialog({ title: ids.length === 1 ? 'Delete this shot?' : `Delete ${ids.length} shots?`, body, action: ids.length === 1 ? 'Delete shot' : `Delete ${ids.length} shots` });
+  if (!ok) return;
+  for (const id of ids) {
+    await store.deleteShot(id);
+    hist.checked.delete(id);
+  }
+  log.info('shots', `deleted ${ids.length} shot(s): ${ids.join(', ')}`);
+  const wasSelected = ids.includes(state.selected?.id);
+  if (wasSelected) state.selected = null;
+  await refreshShotList();
+  if (wasSelected) {
+    const next = state.shots.find((x) => !x.inProgress);
+    if (next) selectShot(next.id);
+    else clearShotPanel();
+  }
+  toast(ids.length === 1 ? 'Shot deleted.' : `${ids.length} shots deleted.`);
+}
+
+function clearShotPanel() {
+  $('shot-title').textContent = 'No shot selected';
+  $('shot-sub').textContent = '';
+  timeChart.setShot([], []);
+  massChart.setAnalysis(null);
+  $('metrics').innerHTML = '';
+  $('qr').innerHTML = '';
+  for (const id of ['shot-delete', 'shot-edit', 'shot-refresh', 'bc-copy', 'bc-open', 'bc-json', 'dl-csv', 'dl-json', 'dl-jpeg', 'dl-pdf', 'ref-save', 'ref-clear']) $(id).disabled = true;
+  updateShotNav();
+}
+
+// ------------------------------------------------------------ edit dialog --
+
+let editingId = null;
+function openShotDialog(shot) {
+  if (!shot) return;
+  editingId = shot.id;
+  const c = shot.context || {};
+  $('shot-dialog-sub').textContent = `${fmtDate(shot.startedAt)}${shot.profileName ? ' — ' + shot.profileName : ''} · ${fmt(shot.finalWeightG, 1)} g in ${fmt(shot.durationSec, 1)} s · ${shot.portal?.length || 0} Portal + ${shot.machine?.length || 0} machine samples`;
+  $('e-bean').value = c.beanName || '';
+  $('e-roaster').value = c.roaster || '';
+  $('e-roast').value = c.roastLevel || '';
+  $('e-process').value = c.process || '';
+  $('e-origin').value = c.origin || '';
+  $('e-grinder').value = c.grinderName || '';
+  $('e-dose').value = c.doseG || '';
+  $('e-grind').value = (c.grindSize || '').replace(/\s*µm$/, '');
+  $('e-note').value = c.note || '';
+  $('e-tds').value = shot.refractometer?.tdsPct ?? '';
+  $('e-bev').value = shot.refractometer?.beverageG ?? '';
+  $('e-bev').placeholder = fmt(shot.finalWeightG, 1);
+  $('shot-dialog').showModal();
+  $('e-bean').focus();
+}
+
+async function saveShotDialog() {
+  const shot = await store.getShot(editingId);
+  if (!shot) return;
+  const grind = $('e-grind').value;
+  shot.context = {
+    beanName: $('e-bean').value.trim(),
+    roaster: $('e-roaster').value.trim(),
+    roastLevel: $('e-roast').value,
+    process: $('e-process').value,
+    origin: $('e-origin').value.trim(),
+    doseG: Number($('e-dose').value) || 0,
+    grindSize: grind ? `${grind} µm` : '',
+    grinderName: $('e-grinder').value.trim(),
+    note: $('e-note').value.trim(),
+  };
+  const tds = Number($('e-tds').value);
+  if (tds > 0 && tds < 30) {
+    const bev = Number($('e-bev').value) || shot.finalWeightG;
+    shot.refractometer = { ...(shot.refractometer || {}), tdsPct: tds, beverageG: bev, eyPct: extractionYield(tds, bev, shot.context.doseG), at: shot.refractometer?.at || Date.now() };
+  } else {
+    delete shot.refractometer;
+  }
+  recomputeCache(shot);
+  await store.putShot(shot);
+  if (shot.context.beanName && shot.source !== 'demo') await store.rememberBean(shot.context);
+  await rememberContextValues(shot.context);
+  await refreshBeanLists();
+  log.info('shots', `edited shot ${shot.id}`);
+  await refreshShotList();
+  if (state.selected?.id === shot.id) await selectShot(shot.id);
+  if (settings.autoSaveFiles) autosaveShotFiles(shot).catch(() => {});
+  $('shot-dialog').close();
+  toast('Shot updated.');
 }
 
 function renderShot() {
@@ -623,8 +1002,11 @@ function renderShot() {
     `${fmt(shot.durationSec, 1)} s`,
     `${shot.machine.length} machine · ${shot.portal.length} Portal samples`,
     shot.machineSource ? 'machine record attached' : null,
+    shot.recovered ? 'recovered from a checkpoint' : null,
   ].filter(Boolean).join(' · ');
+  $('shot-files-note').textContent = shot.files?.json ? `This shot's JSON and CSV were written to ${shot.files.json.replace(/[^/]+$/, '')} at ${new Date(shot.files.at).toLocaleTimeString()}.` : '';
   $('shot-delete').disabled = false;
+  $('shot-edit').disabled = false;
   $('shot-refresh').disabled = !meticulous?.connected;
   for (const id of ['bc-copy', 'bc-open', 'bc-json', 'dl-csv', 'dl-json', 'dl-jpeg', 'dl-pdf', 'ref-save']) $(id).disabled = false;
   $('ref-clear').disabled = !shot.refractometer;
@@ -767,20 +1149,7 @@ function updateRefEy() {
 }
 
 async function deleteShot() {
-  const shot = state.selected;
-  if (!shot || !confirm('Delete this shot and its readings?')) return;
-  await store.deleteShot(shot.id);
-  state.selected = null;
-  await refreshShotList();
-  if (state.shots.length) selectShot(state.shots[0].id);
-  else {
-    $('shot-title').textContent = 'No shot selected';
-    $('shot-sub').textContent = '';
-    timeChart.setShot([], []);
-    massChart.setAnalysis(null);
-    $('metrics').innerHTML = '';
-    $('qr').innerHTML = '';
-  }
+  if (state.selected) await deleteShots([state.selected.id]);
 }
 
 /** Keep the numbers the list and calibration need without re-running analysis per shot. */
@@ -890,6 +1259,7 @@ async function attachMachineRecord(shot, saved, samples) {
   shot.machineSource = { id: saved.id, time: saved.time, profile: saved.profile ?? null, profile_name: saved.profile_name ?? null };
   recomputeCache(shot);
   await store.putShot(shot);
+  if (settings.autoSaveFiles) autosaveShotFiles(shot).catch((err) => log.warn('export', `shot files after attach failed: ${err?.message || err}`));
 }
 
 // ----------------------------------------------------------------- export --
@@ -1297,8 +1667,11 @@ async function contextChanged(ev) {
     if (value && (await store.rememberValue(kind, value))) listsTouched = true;
   }
   if (listsTouched) await refreshBeanLists();
-  // Apply to the selected shot too, so a bag name typed after the shot still counts.
-  if (state.selected && state.selected.source !== 'demo') {
+  // Apply to the shot shown too — but only while it is the most recent one, so a bag
+  // name typed right after a shot still counts and older shots are edited deliberately
+  // (History → Edit) rather than overwritten by preparing the next brew.
+  const newest = state.shots.find((x) => !x.inProgress);
+  if (state.selected && state.selected.source !== 'demo' && newest?.id === state.selected.id) {
     const prev = state.selected.context || {};
     const changed = CONTEXT_KEYS.some((k) => (prev[k] ?? '') !== (ctx[k] ?? ''));
     if (changed) {
@@ -1618,7 +1991,9 @@ document.addEventListener('keydown', (e) => {
   }
 });
 window.addEventListener('beforeunload', (e) => {
-  if (!$('view-settings').hidden && dirtySettings().length && !erasing) {
+  if (erasing) return;
+  if (recorder.isRecording) checkpointLiveShot(true); // best effort; the periodic checkpoint is the real guarantee
+  if ((!$('view-settings').hidden && dirtySettings().length) || recorder.isRecording) {
     e.preventDefault();
     e.returnValue = '';
   }
@@ -1672,6 +2047,35 @@ $('ref-bev').addEventListener('input', updateRefEy);
 $('ref-save').addEventListener('click', saveRefractometer);
 $('ref-clear').addEventListener('click', clearRefractometer);
 $('shot-delete').addEventListener('click', deleteShot);
+$('shot-edit').addEventListener('click', () => state.selected && openShotDialog(state.selected));
+$('shot-prev').addEventListener('click', () => stepShot(-1));
+$('shot-next').addEventListener('click', () => stepShot(1));
+$('hist-rows').addEventListener('click', onHistoryClick);
+$('hist-rows').addEventListener('dblclick', (ev) => {
+  const tr = ev.target.closest('tr[data-id]');
+  if (tr && !ev.target.matches('input, button')) selectShot(tr.dataset.id, { show: true });
+});
+$('hist-rows').addEventListener('keydown', (ev) => {
+  const tr = ev.target.closest('tr[data-id]');
+  if (tr && ev.key === 'Enter' && !ev.target.matches('input, button')) selectShot(tr.dataset.id, { show: true });
+});
+$('hist-search').addEventListener('input', () => { hist.search = $('hist-search').value; renderHistory(); });
+$('hist-filter').addEventListener('change', () => { hist.filter = $('hist-filter').value; renderHistory(); });
+document.querySelectorAll('#hist-table th[data-sort]').forEach((th) => th.addEventListener('click', () => {
+  const key = th.dataset.sort;
+  if (hist.sort === key) hist.dir = hist.dir === 'asc' ? 'desc' : 'asc';
+  else { hist.sort = key; hist.dir = key === 'startedAt' || key === 'meanEc' || key === 'tds' || key === 'finalWeightG' || key === 'durationSec' ? 'desc' : 'asc'; }
+  renderHistory();
+}));
+$('hist-select-all').addEventListener('change', () => {
+  const rows = state.shots.filter((x) => histMatches(x) && !x.inProgress);
+  if ($('hist-select-all').checked) rows.forEach((x) => hist.checked.add(x.id));
+  else rows.forEach((x) => hist.checked.delete(x.id));
+  renderHistory();
+});
+$('hist-delete-selected').addEventListener('click', () => deleteShots([...hist.checked]));
+$('shot-form').addEventListener('submit', (ev) => { ev.preventDefault(); saveShotDialog().catch((err) => toast(`Could not save: ${err?.message || err}`, 'error')); });
+$('shot-dialog-cancel').addEventListener('click', () => $('shot-dialog').close());
 $('shot-refresh').addEventListener('click', () => state.selected && refreshFromMachine(state.selected.id));
 $('mach-last').addEventListener('click', fetchLastFromMachine);
 $('bc-copy').addEventListener('click', copyFullLink);
@@ -1705,7 +2109,7 @@ $('backup-import').addEventListener('change', async (e) => {
 });
 
 // Handy in the console while debugging: window.__pb.state.selected, .massChart.u, ...
-window.__pb = { state, store, portal, recorder, timeChart, massChart, calChart, machinePanel, settings, log, get meticulous() { return meticulous; } };
+window.__pb = { state, store, portal, recorder, timeChart, massChart, calChart, machinePanel, settings, log, hist, openShotDialog, recoverUnfinishedShots, backfillMachineRecords, autosaveShotFiles, get meticulous() { return meticulous; } };
 
 init().catch((err) => {
   console.error(err);

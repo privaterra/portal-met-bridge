@@ -74,6 +74,19 @@ Before v0.7 every setting input saved on its `change` event, i.e. on blur. Typin
 
 Now: toggles and `<select>`s still commit on change; text and number inputs are compared against the stored value on every keystroke (`dirtySettings()`), listed in the save bar, and committed only by Enter, ⌘/Ctrl+S, the Save button, or `showView()` leaving Settings (`saveAllSettings({quiet:true})`). `beforeunload` warns while something is pending. Every commit funnels through `flashSaved(keys)`, which keeps the keys saved during the current 4 s flash so the button can report fields that landed a moment earlier. `applySetting('meticulousHost')` updates `#meticulous-addr` and reconnects.
 
+## Shot persistence (v0.8)
+
+Record of truth is IndexedDB (`shots` store). Lifecycle of a live shot:
+
+1. `extracting` rises → `ShotRecorder` starts; every `sample` event calls `checkpointLiveShot()`, which at most every 2 s writes a snapshot `{…shot, inProgress: true, checkpointAt}` under the shot's final id. The first checkpoint makes the row appear in History as "recording now…".
+2. Pump stops → settle window → `shot` event. The handler awaits any checkpoint write still in flight, then overwrites the id with the finished record (`inProgress` removed). Too-short recordings delete their checkpoint instead.
+3. `autoSaveFiles` (default on): JSON + CSV written to `<folder>/portal-met-bridge/shots/<base>.json|csv` via `log.saveFile`; `shot.files = {json, csv, at}`. Repeated after the machine record attaches (same names, overwritten).
+4. `autoAttach`: after `attachDelaySec`, `/history/last` is matched by time (±45 s) and swapped in. Shots that still lack `machineSource` after 7 days-worth of lookback get `backfillMachineRecords()` 1.5 s after every machine connect: `POST /history` (60 newest, no data) → match by time → `shotById` for the data.
+5. On start, `recoverUnfinishedShots()` runs `finalizeCheckpoint()` over any `inProgress` rows (pure, in `recorder.js`): duration = last sample time, `recovered: true`, `endedAt = checkpointAt`. Fewer than 5 samples → dropped.
+6. `beforeunload` warns while recording and fires one last best-effort checkpoint.
+
+History (`renderHistory`) is a plain sorted/filtered render of `state.shots` (the `listShots()` result, 200 newest); TDS column = reading, else `estimateShot()` over the cached analysis summary. Edits go through `openShotDialog/saveShotDialog`, deletes through `deleteShots()` + `confirmDialog()`. The "This coffee" fields write into the selected shot only while it is the newest one.
+
 ## Ideas not done yet
 
 - Read the Portal's status byte on a real unit to decide whether it is a battery percentage.

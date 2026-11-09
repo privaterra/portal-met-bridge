@@ -109,6 +109,7 @@ a { color: var(--cobalt); }
 .count { color: var(--ink-3); font-weight: 400; }
 
 .main {
+  min-width: 0; /* a wide table scrolls inside its panel instead of widening the page */
   padding: 16px 24px 48px;
   display: flex;
   flex-direction: column;
@@ -240,24 +241,49 @@ a { color: var(--cobalt); }
 .btn.danger { color: var(--bad); border-color: var(--bad); }
 .btn.file { display: inline-block; }
 
-/* shots */
-.shot-list { list-style: none; margin: 0 0 10px; padding: 0; max-height: 40vh; overflow: auto; border-top: 1px solid var(--rule); }
-.shot-list li {
-  padding: 8px 6px;
-  border-bottom: 1px solid var(--rule);
-  cursor: pointer;
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 2px 8px;
-  font-size: 13px;
-}
-.shot-list li:hover { background: #fff; }
-.shot-list li.selected { background: #fff; box-shadow: inset 3px 0 0 var(--cobalt); }
-.shot-list .when { color: var(--ink-2); }
-.shot-list .ec { color: var(--cobalt); font-weight: 600; text-align: right; }
-.shot-list .what { grid-column: 1 / -1; color: var(--ink-3); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.shot-list .what b { color: var(--ink-2); font-weight: 600; }
-.shot-list:empty::after { content: "Nothing recorded yet."; display: block; padding: 10px 6px; color: var(--ink-3); font-size: 13px; }
+/* history */
+.view-tab .count { margin-left: 2px; }
+.hist-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 10px 0 8px; }
+.hist-toolbar input[type="search"] { flex: 1 1 260px; min-width: 200px; border: 1px solid var(--rule); border-radius: 3px; padding: 6px 10px; background: #fff; }
+.hist-toolbar select { border: 1px solid var(--rule); border-radius: 3px; padding: 6px 8px; background: #fff; }
+.hist-wrap { overflow: auto; border: 1px solid var(--rule); }
+table.hist { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.hist th, table.hist td { padding: 7px 8px; border-bottom: 1px solid var(--rule); text-align: left; vertical-align: top; white-space: nowrap; }
+table.hist td.prof { white-space: normal; min-width: 110px; max-width: 200px; color: var(--ink-2); }
+table.hist th.actions, table.hist td.actions { position: sticky; right: 0; background: #fff; box-shadow: -8px 0 8px -8px rgba(0, 0, 0, 0.18); }
+table.hist th.actions { background: var(--paper-2); z-index: 2; }
+table.hist tbody tr:hover td.actions { background: var(--paper); }
+table.hist tbody tr.selected td.actions { background: #e9ecf8; }
+table.hist th { position: sticky; top: 0; background: var(--paper-2); color: var(--ink-2); font-weight: 600; font-size: 12px; z-index: 1; }
+table.hist th[data-sort] { cursor: pointer; user-select: none; }
+table.hist th[data-sort]:hover { color: var(--ink); }
+table.hist th[aria-sort="ascending"]::after { content: " ▲"; font-size: 9px; }
+table.hist th[aria-sort="descending"]::after { content: " ▼"; font-size: 9px; }
+table.hist th.sel, table.hist td.sel { width: 28px; padding-right: 0; }
+table.hist .num { text-align: right; }
+table.hist td.coffee { white-space: normal; min-width: 140px; max-width: 260px; }
+table.hist td.coffee small { display: block; color: var(--ink-3); font-size: 12px; }
+table.hist td.ec { color: var(--cobalt); font-weight: 600; }
+table.hist td.tds b { color: var(--ink); }
+table.hist td.tds i { color: var(--ink-2); }
+table.hist td.when { color: var(--ink-2); }
+table.hist td.when small { display: block; color: var(--ink-3); font-size: 11px; }
+table.hist td.data { font-size: 12px; color: var(--ink-2); }
+table.hist td.data .tag { display: inline-block; padding: 0 5px; border: 1px solid var(--rule); border-radius: 10px; margin-right: 3px; background: #fff; font-size: 11px; }
+table.hist td.data .tag.on { border-color: var(--teal); color: var(--teal); }
+table.hist td.data .tag.off { color: var(--ink-3); }
+table.hist td.data .tag.rec { border-color: var(--bad); color: var(--bad); }
+table.hist td.actions { text-align: right; }
+table.hist td.actions .btn { padding: 2px 7px; font-size: 12px; margin-left: 3px; }
+table.hist td.actions .btn.danger { color: var(--ink-2); border-color: var(--rule); }
+table.hist td.actions .btn.danger:hover { color: var(--bad); border-color: var(--bad); }
+table.hist tbody tr { cursor: pointer; }
+table.hist tbody tr:hover { background: var(--paper); }
+table.hist tbody tr.selected { background: var(--cobalt-soft); box-shadow: inset 3px 0 0 var(--cobalt); }
+table.hist tbody tr.recording td { font-style: italic; }
+.hist-empty { padding: 14px 10px; }
+.modal.wide { width: min(94vw, 640px); }
+.modal .row.two .field { margin-top: 6px; }
 
 /* live strip */
 .live { display: flex; flex-direction: column; gap: 10px; }

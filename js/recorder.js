@@ -128,6 +128,26 @@ export class ShotRecorder extends EventTarget {
   }
 }
 
+/**
+ * Turn a checkpoint left behind by an interrupted session (a shot saved with
+ * inProgress=true) into a finished shot. Pure: returns the same object, edited.
+ * Returns null when the checkpoint holds too little to be worth keeping.
+ */
+export function finalizeCheckpoint(shot, { minSamples = 5 } = {}) {
+  if (!shot) return null;
+  const machine = shot.machine || [];
+  const portal = shot.portal || [];
+  if (machine.length + portal.length < minSamples) return null;
+  delete shot.inProgress;
+  shot.recovered = true;
+  shot.durationSec = round3(machine.at(-1)?.t ?? portal.at(-1)?.t ?? 0);
+  shot.recordedUntilSec = shot.durationSec;
+  shot.endedAt = shot.checkpointAt || shot.startedAt + shot.durationSec * 1000;
+  delete shot.checkpointAt;
+  if (!shot.finalWeightG) shot.finalWeightG = Math.max(0, ...machine.map((m) => m.w || 0));
+  return shot;
+}
+
 const round3 = (x) => Math.round(x * 1000) / 1000;
 function cryptoId() {
   if (globalThis.crypto?.randomUUID) return crypto.randomUUID();

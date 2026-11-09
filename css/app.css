@@ -265,7 +265,9 @@ table.hist td.coffee { white-space: normal; min-width: 140px; max-width: 260px; 
 table.hist td.coffee small { display: block; color: var(--ink-3); font-size: 12px; }
 table.hist td.ec { color: var(--cobalt); font-weight: 600; }
 table.hist .weighed { margin-left: 3px; font-size: 11px; color: var(--ink-3); cursor: help; }
+table.hist .weighed.target { color: var(--cobalt); font-size: 12px; }
 table.hist td.ratio { color: var(--ink-2); }
+table.hist td.grind small { color: var(--ink-3); font-size: 11px; }
 /* compare */
 .inline-field { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); }
 .inline-field select { border: 1px solid var(--rule); border-radius: 3px; padding: 4px 6px; background: #fff; font-size: 12px; }

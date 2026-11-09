@@ -1,6 +1,6 @@
 // Run with:  node tests/run.mjs
 import assert from 'node:assert/strict';
-import { analyzeShot, fitCalibration, predictTds, estimateForShot, buildSegments, evalEcAt, beverageOf, beverageOverridden } from '../js/analysis.js';
+import { analyzeShot, fitCalibration, predictTds, estimateForShot, buildSegments, evalEcAt, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, setBeveragePreference, getBeveragePreference, grindMicrons, measuredEy } from '../js/analysis.js';
 import { buildEnvelope, encodeHandoff, decodeHandoff, encodeForQr, CHUNK, QR_MAX_URL_CHARS } from '../js/beanconqueror.js';
 import { summaryRow as summaryRowEarly, SUMMARY_COLUMNS as SUMMARY_COLUMNS_EARLY } from '../js/export.js';
 import { makeDemoShot } from '../js/demo.js';
@@ -143,12 +143,52 @@ await test('Beanconqueror envelope round-trips through gzip/base64url/chunks', a
   assert.equal(env.brew.beverageOut.value, Math.round(shot.finalWeightG * 10) / 10);
   assert.equal(beverageOf({ finalWeightG: 40 }), 40);
   assert.equal(beverageOf({ finalWeightG: 40, beverageG: 41.5 }), 41.5);
-  assert.equal(beverageOf({ finalWeightG: 40, refractometer: { beverageG: 39 } }), 39, 'legacy shots keep the beverage typed with the reading');
+  assert.equal(beverageOf({ finalWeightG: 40, refractometer: { beverageG: 39, tdsPct: 9 } }), 40, 'the reading no longer carries a beverage of its own (store.promoteLegacyBeverage moves old ones to the shot)');
   assert.equal(beverageOverridden({ finalWeightG: 40, beverageG: 41.5 }), true);
   assert.equal(beverageOverridden({ finalWeightG: 40, beverageG: 40 }), false);
   const row = summaryRowEarly({ ...shot, beverageG: 41.5, context: { doseG: 18 } }, r, est);
   assert.equal(row[SUMMARY_COLUMNS_EARLY.indexOf('beverage_g')], 41.5);
+  assert.equal(row[SUMMARY_COLUMNS_EARLY.indexOf('beverage_source')], 'weighed');
   assert.equal(row[SUMMARY_COLUMNS_EARLY.indexOf('machine_weight_g')], Math.round(shot.finalWeightG * 10) / 10);
+  // the profile's target output weight stands in for the scale by default (v0.10)
+  assert.equal(getBeveragePreference(), 'profile');
+  const targeted = { finalWeightG: 41.2, profileTargetG: 40 };
+  assert.equal(beverageSource(targeted), 'profile');
+  assert.equal(beverageOf(targeted), 40);
+  assert.equal(beverageOverridden(targeted), true, 'target differs from the scale → marked');
+  assert.equal(beverageOverridden({ finalWeightG: 40.02, profileTargetG: 40 }), false, 'within 0.05 g of the scale → not marked');
+  assert.equal(beverageOf({ ...targeted, beverageG: 42 }), 42, 'a hand-weighed cup still wins');
+  assert.equal(beverageSource({ ...targeted, refractometer: { beverageG: 39 } }), 'profile');
+  assert.ok(Math.abs(measuredEy({ ...targeted, refractometer: { tdsPct: 9.1 }, context: { doseG: 18.5 } }) - (9.1 * 40) / 18.5) < 1e-9, 'EY follows the beverage in use');
+  assert.equal(measuredEy({ ...targeted, context: { doseG: 18.5 } }), null);
+  assert.equal(profileTargetOf({ machineSource: { profile: { name: 'x', final_weight: 38 } } }), 38, 'older shots read the target off the attached record');
+  assert.equal(beverageOf({ finalWeightG: 39.4, machineSource: { profile: { final_weight: 38 } } }), 38);
+  assert.equal(beverageOf({ finalWeightG: 39.4, machineSource: { profile: { name: 'no target' } } }), 39.4, 'no target → the scale');
+  assert.equal(beverageOf({ profileTargetG: 40 }), 40, 'no scale reading → the target even when the scale is preferred');
+  assert.equal(beverageDefaultOf({ ...targeted, beverageG: 42 }), 40, 'default ignores the typed value');
+  assert.equal(beverageOf(targeted, { prefer: 'scale' }), 41.2);
+  const trow = summaryRowEarly({ ...shot, profileTargetG: 40, context: { doseG: 18 } }, r, est);
+  assert.equal(trow[SUMMARY_COLUMNS_EARLY.indexOf('beverage_g')], 40);
+  assert.equal(trow[SUMMARY_COLUMNS_EARLY.indexOf('beverage_source')], 'profile');
+  assert.equal(trow[SUMMARY_COLUMNS_EARLY.indexOf('profile_target_g')], 40);
+  assert.equal(trow[SUMMARY_COLUMNS_EARLY.indexOf('machine_weight_g')], Math.round(shot.finalWeightG * 10) / 10);
+  const targetedEnv = buildEnvelope({ ...shot, profileTargetG: 40 }, r, est, { beanName: 'Test coffee', doseG: 18 });
+  assert.equal(targetedEnv.brew.beverageOut.value, 40, 'the hand-off uses the same beverage as the app');
+  setBeveragePreference('scale');
+  assert.equal(getBeveragePreference(), 'scale');
+  assert.equal(beverageSource(targeted), 'scale');
+  assert.equal(beverageOf(targeted), 41.2);
+  assert.equal(beverageOverridden(targeted), false);
+  assert.equal(beverageOf({ profileTargetG: 40 }), 40, 'still the target when the scale has nothing');
+  setBeveragePreference('nonsense');
+  assert.equal(getBeveragePreference(), 'profile', 'unknown values fall back to the default');
+  // grind size parsing for the History column
+  assert.equal(grindMicrons({ grindSize: '420 µm' }), 420);
+  assert.equal(grindMicrons({ grindSize: '415' }), 415);
+  assert.equal(grindMicrons({ grindSize: 400 }), 400);
+  assert.equal(grindMicrons({ grindSize: '' }), null);
+  assert.equal(grindMicrons({}), null);
+  assert.equal(grindMicrons(null), null);
   // weight deltas accumulate to the final weight in decigrams
   const sumW = env.flow.weight.reduce((a, b) => a + b, 0) / 10;
   assert.ok(Math.abs(sumW - shot.finalWeightG) < 0.15, `sum weight ${sumW} vs ${shot.finalWeightG}`);

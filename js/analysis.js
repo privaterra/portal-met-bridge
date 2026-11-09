@@ -414,21 +414,82 @@ export function predictTds(fit, meanEcPerG) {
 
 /** Extraction yield from TDS%, beverage mass and dose. */
 /**
- * The beverage mass to use for yield, EY and the hand-off: what the user
- * weighed by hand when they entered it (`shot.beverageG`, editable for any saved
- * shot), else the cup weight the machine's scale reported during the shot.
+ * Which weight stands in for the beverage when nobody weighed the cup:
+ *   'profile' — the output weight the brewed profile was set to (the machine
+ *               stops the pump there; what ends up in the cup is that plus drips),
+ *   'scale'   — the cup weight the machine's scale reported during the shot.
+ * The app sets this from Settings; tests may set it explicitly.
  */
-export function beverageOf(shot) {
-  if (!shot) return null;
-  if (Number.isFinite(shot.beverageG) && shot.beverageG > 0) return shot.beverageG;
-  if (Number.isFinite(shot.refractometer?.beverageG) && shot.refractometer.beverageG > 0) return shot.refractometer.beverageG;
-  return Number.isFinite(shot.finalWeightG) ? shot.finalWeightG : null;
+let beveragePreference = 'profile';
+export function setBeveragePreference(pref) {
+  beveragePreference = pref === 'scale' ? 'scale' : 'profile';
+}
+export function getBeveragePreference() {
+  return beveragePreference;
 }
 
-/** True when the user's weighed value differs from what the machine saw. */
-export function beverageOverridden(shot) {
-  const b = beverageOf(shot);
-  return Number.isFinite(shot?.beverageG) && shot.beverageG > 0 && Number.isFinite(shot.finalWeightG) && Math.abs(b - shot.finalWeightG) >= 0.05;
+/** The profile's target output weight for this shot, when known. */
+export function profileTargetOf(shot) {
+  const direct = Number(shot?.profileTargetG);
+  if (direct > 0) return direct;
+  const fromRecord = Number(shot?.machineSource?.profile?.final_weight);
+  return fromRecord > 0 ? fromRecord : null;
+}
+
+/**
+ * Where a shot's beverage weight comes from, in order of trust:
+ *   'weighed' — typed by the user for this shot (History → Edit, or with a reading),
+ *   'profile' — the profile's target output weight (default stand-in),
+ *   'scale'   — the machine's scale during the shot,
+ *   null      — nothing known.
+ * (Before v0.10 a cup weighed with a reading lived in refractometer.beverageG;
+ * store.promoteLegacyBeverage() moves those to shot.beverageG once.)
+ */
+export function beverageSource(shot, { prefer = beveragePreference } = {}) {
+  if (!shot) return null;
+  if (Number.isFinite(shot.beverageG) && shot.beverageG > 0) return 'weighed';
+  if (prefer === 'profile' && profileTargetOf(shot) > 0) return 'profile';
+  if (Number.isFinite(shot.finalWeightG) && shot.finalWeightG > 0) return 'scale';
+  return profileTargetOf(shot) > 0 ? 'profile' : null;
+}
+
+/** The beverage mass to use for yield, EY, the summary and the hand-off. */
+export function beverageOf(shot, opts) {
+  switch (beverageSource(shot, opts)) {
+    case 'weighed': return shot.beverageG;
+    case 'profile': return profileTargetOf(shot);
+    case 'scale': return shot.finalWeightG;
+    default: return null;
+  }
+}
+
+/** What the beverage falls back to when the user has not weighed the cup: the profile target or the scale. */
+export function beverageDefaultOf(shot, opts) {
+  if (!shot) return null;
+  return beverageOf({ ...shot, beverageG: undefined }, opts);
+}
+
+/** Extraction yield of the refractometer reading against the beverage in use right now (null without a reading or dose). */
+export function measuredEy(shot) {
+  const tds = Number(shot?.refractometer?.tdsPct);
+  if (!(tds > 0)) return null;
+  return extractionYield(tds, beverageOf(shot), Number(shot.context?.doseG) || 0);
+}
+
+/** True when the beverage used is not what the machine's scale saw. */
+export function beverageOverridden(shot, opts) {
+  const src = beverageSource(shot, opts);
+  if (!src || src === 'scale') return false;
+  const b = beverageOf(shot, opts);
+  return !Number.isFinite(shot.finalWeightG) || Math.abs(b - shot.finalWeightG) >= 0.05;
+}
+
+/** Parse "420 µm" / "420" into a number of microns; null when absent. */
+export function grindMicrons(context) {
+  const raw = context?.grindSize;
+  if (raw === null || raw === undefined || raw === '') return null;
+  const n = typeof raw === 'number' ? raw : Number(String(raw).replace(/[^\d.]/g, ''));
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
 export function extractionYield(tdsPct, beverageG, doseG) {

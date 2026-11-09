@@ -91,6 +91,8 @@ try {
   await page.dispatchEvent('#ctx-origin', 'change');
   await page.fill('#ctx-grinder', 'Zerno Z1');
   await page.dispatchEvent('#ctx-grinder', 'change');
+  await page.fill('#ctx-grind', '420');
+  await page.dispatchEvent('#ctx-grind', 'change');
   await page.fill('#ctx-dose', '18');
   await page.dispatchEvent('#ctx-dose', 'change');
   await page.waitForTimeout(300);
@@ -196,9 +198,10 @@ try {
     const live = window.__pb.recorder.shot;
     const rows = await window.__pb.store.listShots();
     const row = rows.find((r) => r.id === live?.id);
-    return { liveId: live?.id, found: !!row, inProgress: !!row?.inProgress, portal: row?.portal?.length || 0, machine: row?.machine?.length || 0, histRow: document.querySelector('#hist-rows tr.recording') ? document.querySelector('#hist-rows tr.recording').textContent : null };
+    return { liveId: live?.id, found: !!row, inProgress: !!row?.inProgress, portal: row?.portal?.length || 0, machine: row?.machine?.length || 0, target: live?.profileTargetG, sub: document.querySelector('#shot-sub').textContent, histRow: document.querySelector('#hist-rows tr.recording') ? document.querySelector('#hist-rows tr.recording').textContent : null };
   });
   check('live shot is checkpointed to IndexedDB while recording', ckpt.found && ckpt.inProgress && ckpt.machine > 3, JSON.stringify(ckpt).slice(0, 200));
+  check('live shot picks up the profile\'s target weight from the machine\'s profile list at the start', ckpt.target === 38 && /target 38\.0 g/.test(ckpt.sub), JSON.stringify({ target: ckpt.target, sub: ckpt.sub }));
   const writes = await page.evaluate(() => window.__fakePortalWrites || []);
   const dbg = await page.evaluate(() => ({ autoGraph: window.__pb.settings.autoGraph, connected: window.__pb.portal.connected, cmd: !!window.__pb.portal.command, log: window.__pb.log.ring.filter((e) => /graph|command/i.test(e.msg)).map((e) => e.msg) }));
   check('show-graph command written at shot start (40 00 01 2D)', JSON.stringify(writes).includes('[64,0,1,45]'), JSON.stringify(writes) + ' ' + JSON.stringify(dbg));
@@ -210,10 +213,11 @@ try {
   const sel = await page.evaluate(() => {
     const s = window.__pb.state.selected;
     const a = window.__pb.state.analysis;
-    return { portal: s.portal.length, machine: s.machine.length, status: a.status, coverage: a.coverageRatio, meanEc: a.meanEcPerG, peak: a.mainPeakEc, machineRecord: !!s.machineShotId };
+    return { portal: s.portal.length, machine: s.machine.length, status: a.status, coverage: a.coverageRatio, meanEc: a.meanEcPerG, peak: a.mainPeakEc, machineRecord: !!s.machineShotId, target: s.profileTargetG, recordTarget: s.machineSource?.profile?.final_weight, scale: s.finalWeightG, sub: document.querySelector('#shot-sub').textContent };
   });
   check('shot has Portal samples at ~8 Hz', sel.portal > 150, `${sel.portal} samples`);
   check('machine record attached', sel.machineRecord);
+  check('profile target kept from the attached record; beverage defaults to it, not the scale', sel.target === 38 && sel.recordTarget === 38 && Math.abs(sel.scale - 40) < 0.3 && /38\.0 g out \(profile target; machine 40\.0 g\)/.test(sel.sub), JSON.stringify({ target: sel.target, recordTarget: sel.recordTarget, scale: sel.scale, sub: sel.sub }));
   check('analysis status ok with ≥ 85 % coverage', sel.status === 'ok' && sel.coverage >= 0.85, `${sel.status}, coverage ${(sel.coverage * 100).toFixed(0)} %`);
   check('mean EC and peak are plausible', sel.meanEc > 0.5 && sel.peak > sel.meanEc, `mean ${sel.meanEc.toFixed(3)} peak ${sel.peak.toFixed(3)}`);
   const finalRows = await page.evaluate(async () => (await window.__pb.store.listShots()).map((r) => ({ id: r.id, inProgress: !!r.inProgress, files: r.files?.json || null })));
@@ -227,6 +231,16 @@ try {
   await page.click('.view-tab[data-view="history"]');
   const histRows = await page.evaluate(() => [...document.querySelectorAll('#hist-rows tr')].map((tr) => tr.textContent.replace(/\s+/g, ' ').trim()));
   check('History lists the shot with its coffee, EC/g and data tags', histRows.length === 1 && /E2E coffee/.test(histRows[0]) && /P \d+/.test(histRows[0]) && /M \d+/.test(histRows[0]), histRows.join(' | ').slice(0, 200));
+  check('History has a Grind column (µm) before In → out', /420 µm.*18\.0 → 38\.0 g◎/.test(histRows[0]), histRows[0].slice(0, 160));
+  check('History In → out shows the profile target with the ◎ mark and the ratio from it', /→ 38\.0 g◎\s*1 : 2\.11/.test(histRows[0]), histRows[0].slice(0, 160));
+  const grindTh = await page.evaluate(() => [...document.querySelectorAll('#hist-table th')].map((th) => th.textContent.trim()));
+  check('Grind header sits between Profile and In → out', grindTh.indexOf('Grind') === grindTh.indexOf('Profile') + 1 && grindTh.indexOf('In → out') === grindTh.indexOf('Grind') + 1, grindTh.join(' | '));
+  await page.click('#hist-table th[data-sort="grind"]');
+  check('Grind column is sortable', (await page.getAttribute('#hist-table th[data-sort="grind"]', 'aria-sort')) !== 'none');
+  await page.click('#hist-table th[data-sort="startedAt"]');
+  await page.fill('#hist-search', '420');
+  check('History search matches the grind size', (await page.evaluate(() => document.querySelectorAll('#hist-rows tr').length)) === 1);
+  await page.fill('#hist-search', '');
   await page.fill('#hist-search', 'zzz-nothing');
   check('History search filters rows', (await page.evaluate(() => document.querySelectorAll('#hist-rows tr').length)) === 0);
   await page.fill('#hist-search', 'E2E');
@@ -249,13 +263,26 @@ try {
   // blanking the field returns to the machine's scale
   await page.click('#hist-rows tr button[data-act="edit"]');
   await page.waitForSelector('#shot-dialog[open]');
-  check('edit dialog shows the weighed value and the machine value as placeholder', (await page.inputValue('#e-bev')) === '41.5' && /\(machine\)/.test(await page.getAttribute('#e-bev', 'placeholder')));
+  check('edit dialog shows the weighed value, the profile target as placeholder and both values in the hint', (await page.inputValue('#e-bev')) === '41.5' && /^38\.0 \(profile target\)$/.test(await page.getAttribute('#e-bev', 'placeholder')) && /Profile target 38\.0 g · machine's scale 40\.0 g/.test(await page.textContent('#e-bev-hint')), `${await page.getAttribute('#e-bev', 'placeholder')} | ${(await page.textContent('#e-bev-hint')).trim()}`);
   await page.fill('#e-bev', '');
   await page.click('#shot-dialog-save');
   await page.waitForTimeout(400);
-  const reverted = await page.evaluate(() => ({ bev: window.__pb.state.selected?.beverageG, row: document.querySelector('#hist-rows tr')?.textContent.replace(/\s+/g, ' '), machineW: window.__pb.state.selected?.finalWeightG, refBev: window.__pb.state.selected?.refractometer?.beverageG }));
-  check('blank beverage weighed reverts to the machine weight', reverted.bev === undefined && !/⚖/.test(reverted.row) && reverted.refBev === reverted.machineW, JSON.stringify(reverted).slice(0, 200));
-  check('History shows the brew ratio (dose : beverage) after In → out', /40\.0 g\s*1 : 2\.16/.test(reverted.row), reverted.row.slice(0, 160));
+  const reverted = await page.evaluate(() => ({ bev: window.__pb.state.selected?.beverageG, row: document.querySelector('#hist-rows tr')?.textContent.replace(/\s+/g, ' '), machineW: window.__pb.state.selected?.finalWeightG, ey: window.__pb.state.selected?.refractometer?.eyPct, refBev: window.__pb.state.selected?.refractometer?.beverageG }));
+  check('blank beverage weighed reverts to the profile target (the reading\'s EY follows)', reverted.bev === undefined && !/⚖/.test(reverted.row) && /→ 38\.0 g◎/.test(reverted.row) && Math.abs(reverted.ey - (9.1 * 38) / 18.5) < 0.01 && reverted.refBev === undefined && Math.abs(reverted.machineW - 40) < 0.3, JSON.stringify(reverted).slice(0, 200));
+  check('History shows the brew ratio (dose : beverage) after In → out', /38\.0 g◎\s*1 : 2\.05/.test(reverted.row), reverted.row.slice(0, 160));
+  // Settings → Recording → Beverage weight: back to the machine's scale, for every shot
+  await page.click('.view-tab[data-view="settings"]');
+  await page.selectOption('#set-beverage-default', 'scale');
+  await page.waitForTimeout(300);
+  check('beverage-weight setting saves on change', (await page.evaluate(() => window.__pb.settings.beverageDefault)) === 'scale' && /Saved 1 setting/.test(await page.textContent('#savebar-status')), (await page.textContent('#savebar-status')).trim());
+  await page.click('.view-tab[data-view="history"]');
+  const scaled = await page.evaluate(() => ({ row: document.querySelector('#hist-rows tr')?.textContent.replace(/\s+/g, ' '), sub: document.querySelector('#shot-sub').textContent }));
+  check('with "machine\'s scale" chosen, History and the shot header use the scale weight without a mark', /→ 40\.0 g\s*1 : 2\.16/.test(scaled.row) && !/◎/.test(scaled.row) && /40\.0 g out · 1 : 2\.16/.test(scaled.sub), JSON.stringify(scaled).slice(0, 220));
+  await page.click('.view-tab[data-view="settings"]');
+  await page.selectOption('#set-beverage-default', 'profile');
+  await page.waitForTimeout(300);
+  await page.click('.view-tab[data-view="history"]');
+  check('back to "profile target" restores the target everywhere', /→ 38\.0 g◎/.test(await page.evaluate(() => document.querySelector('#hist-rows tr')?.textContent.replace(/\s+/g, ' '))));
   await page.click('#hist-rows tr button[data-act="open"]');
   await page.waitForTimeout(200);
   const opened = await page.evaluate(() => ({ shotsVisible: !document.querySelector('#view-shots').hidden, histHidden: document.querySelector('#view-history').hidden, sub: document.querySelector('#shot-sub').textContent }));
@@ -272,7 +299,7 @@ try {
   await page.click('#hist-compare');
   await page.waitForTimeout(500);
   const cmp = await page.evaluate(() => ({ visible: !document.querySelector('#compare-panel').hidden, series: window.__pb.compareChart.u?.series.length, legendRows: document.querySelectorAll('#cmp-legend tbody tr').length, legendText: document.querySelector('#cmp-legend').textContent.replace(/\s+/g, ' ').slice(0, 300), xField: !document.querySelector('#cmp-x-field').hidden }));
-  check('Compare overlays two shots on one EC-vs-mass chart with a legend', cmp.visible && cmp.series === 3 && cmp.legendRows === 2 && /E2E coffee/.test(cmp.legendText) && /1 : 2\.16/.test(cmp.legendText) && cmp.xField, JSON.stringify(cmp).slice(0, 260));
+  check('Compare overlays two shots on one EC-vs-mass chart with a legend', cmp.visible && cmp.series === 3 && cmp.legendRows === 2 && /E2E coffee/.test(cmp.legendText) && /1 : 2\.05/.test(cmp.legendText) && cmp.xField, JSON.stringify(cmp).slice(0, 260));
   await page.selectOption('#cmp-x', 'ratio');
   await page.waitForTimeout(300);
   const cmpRatio = await page.evaluate(() => ({ series: window.__pb.compareChart.u?.series.length, xmax: window.__pb.compareChart.u?.scales.x.max, excluded: document.querySelectorAll('#cmp-legend tr.excluded').length }));
@@ -322,7 +349,7 @@ try {
   await page.click('#settings-export');
   await page.waitForTimeout(500);
   const settingsDoc = await page.evaluate(() => { const k = Object.keys(window.__fakeFolderFiles).find((f) => /backups\/portal-met-bridge-settings-.*\.json$/.test(f)); return k ? JSON.parse(window.__fakeFolderFiles[k]) : null; });
-  check('settings export has the machine address and recording options', settingsDoc?.app === 'portal-met-bridge-settings' && settingsDoc.settings.meticulousHost === `localhost:${MOCK_PORT}` && 'settleSec' in settingsDoc.settings && 'logEnabled' in settingsDoc.settings, JSON.stringify(settingsDoc?.settings || {}).slice(0, 120));
+  check('settings export has the machine address and recording options', settingsDoc?.app === 'portal-met-bridge-settings' && settingsDoc.settings.meticulousHost === `localhost:${MOCK_PORT}` && 'settleSec' in settingsDoc.settings && 'logEnabled' in settingsDoc.settings && settingsDoc.settings.beverageDefault === 'profile', JSON.stringify(settingsDoc?.settings || {}).slice(0, 120));
   // Back to browser downloads for the rest
   await page.uncheck('#log-save-exports');
   await page.dispatchEvent('#log-save-exports', 'change');
@@ -394,10 +421,17 @@ try {
     const machine = Array.from({ length: 40 }, (_, i) => ({ t: i * 0.5, p: 6 + Math.sin(i / 5), f: 2, w: i * 1.1, temp: 92, status: 'Extract' }));
     const portal = Array.from({ length: 160 }, (_, i) => ({ t: i * 0.125, ec: 3 - i / 100, tOut: 60, tInt: 30, status: 1 }));
     await window.__pb.store.putShot({ id: 'ckpt-test', startedAt: t0, inProgress: true, checkpointAt: t0 + 20000, source: 'live', manual: false, profileName: 'Interrupted', machine, portal, finalWeightG: 43, durationSec: 19.5, context: { beanName: 'Interrupted bean' } });
+    // Two pre-v0.10 shots: one whose cup was weighed with the reading (differs from the scale), one whose reading just carried the scale's value
+    const legacy = { startedAt: t0 - 86400000, source: 'live', manual: false, profileName: 'Old', machine, portal, durationSec: 19.5, context: { beanName: 'Legacy bean', doseG: 18 } };
+    await window.__pb.store.putShot({ ...legacy, id: 'legacy-weighed', finalWeightG: 41, refractometer: { tdsPct: 9, beverageG: 39.2, eyPct: 19.6, at: t0 } });
+    await window.__pb.store.putShot({ ...legacy, id: 'legacy-scale', startedAt: t0 - 86000000, finalWeightG: 41, refractometer: { tdsPct: 9, beverageG: 41, eyPct: 20.5, at: t0 } });
+    await window.__pb.store.setSetting('beveragePromoted', false); // as a browser upgrading from v0.9 would have it
   });
   await page.reload({ waitUntil: 'networkidle' });
   await page.waitForTimeout(1200);
   const recovered = await page.evaluate(async () => { const r = (await window.__pb.store.listShots()).find((x) => x.id === 'ckpt-test'); return r ? { inProgress: !!r.inProgress, recovered: !!r.recovered, duration: r.durationSec, weight: r.finalWeightG, cache: !!r.analysisCache, toast: document.querySelector('#toast')?.textContent } : null; });
+  const promoted = await page.evaluate(async () => { const rows = await window.__pb.store.listShots(); const w = rows.find((x) => x.id === 'legacy-weighed'); const sc = rows.find((x) => x.id === 'legacy-scale'); return { weighed: w?.beverageG, scale: sc?.beverageG, flag: await window.__pb.store.getSetting('beveragePromoted', false) }; });
+  check('upgrade: a cup weighed with a reading on an older version becomes the shot\'s own weighed value; a scale-equal one does not', promoted.weighed === 39.2 && promoted.scale === undefined && promoted.flag === true, JSON.stringify(promoted));
   check('unfinished checkpoint recovered as a shot after restart', recovered && !recovered.inProgress && recovered.recovered && recovered.duration === 19.5 && recovered.weight === 43 && recovered.cache, JSON.stringify(recovered));
   check('no page errors', errors.length === 0, errors.join(' | ').slice(0, 300));
 

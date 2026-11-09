@@ -202,6 +202,27 @@ export class Store {
     return n;
   }
 
+  /**
+   * One-time (v0.10): before shot.beverageG existed, a cup weighed by hand was
+   * kept only on the refractometer reading. Promote those to the shot's own field
+   * when they differ from what the scale saw; a value equal to the scale was the
+   * app's own fallback, not something the user typed.
+   */
+  async promoteLegacyBeverage() {
+    if (await this.getSetting('beveragePromoted', false)) return 0;
+    let n = 0;
+    for (const s of await this.listShots({ limit: 100000 })) {
+      const typed = Number(s.refractometer?.beverageG);
+      if (!(typed > 0) || Number(s.beverageG) > 0) continue;
+      if (Number.isFinite(s.finalWeightG) && Math.abs(typed - s.finalWeightG) < 0.25) continue;
+      s.beverageG = Math.round(typed * 10) / 10;
+      await this.putShot(s);
+      n++;
+    }
+    await this.setSetting('beveragePromoted', true);
+    return n;
+  }
+
   // -------------------------------------------------------------- settings --
 
   async getSetting(key, fallback = null) {

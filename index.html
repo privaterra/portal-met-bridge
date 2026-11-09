@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>portal-met-bridge</title>
   <link rel="stylesheet" href="vendor/uPlot.min.css" />
-  <link rel="stylesheet" href="css/app.css?v=0.9.0" />
+  <link rel="stylesheet" href="css/app.css?v=0.10.0" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M4 26 L10 8 L16 20 L22 6 L28 26' fill='none' stroke='%232447B8' stroke-width='3' stroke-linejoin='round'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -168,6 +168,14 @@
           <label class="field narrow"><span>Portal lag vs cup (s) — positive if liquid reaches the Portal before the cup</span><input id="lag-sec" type="number" min="-2" max="3" step="0.1" value="0" /></label>
           <label class="field narrow"><span>Discard automatic recordings shorter than (s)</span><input id="set-min-shot" type="number" min="0" max="60" step="1" value="5" /></label>
           <label class="check"><input type="checkbox" id="portal-auto-graph" checked /> Switch the Portal's screen to its graph during a shot and back afterwards</label>
+          <h3>Beverage weight</h3>
+          <label class="field"><span>When the cup was not weighed by hand, the beverage weight is</span>
+            <select id="set-beverage-default">
+              <option value="profile">the output weight the brewed profile was set to (its target)</option>
+              <option value="scale">what the machine's scale read during the shot</option>
+            </select>
+          </label>
+          <p class="hint">The machine stops the pump at the profile's target, so the cup usually ends up at the target plus a few drips; the scale's reading during the shot misses those drips and can be unsettled. Each shot picks up its profile's target when recording starts and again from the machine's record. A weight you type under History → Edit always wins. This choice applies to every shot, including earlier ones.</p>
           <h3>Saving</h3>
           <p class="hint">Every shot is written to this browser's database while it is being recorded (a checkpoint every two seconds) and finalised when the pump stops, so a closed tab or a crash loses at most the last two seconds. The machine's own record is attached afterwards, and any shot still missing it is completed the next time the machine connects.</p>
           <label class="check"><input type="checkbox" id="set-autosave-files" checked /> Also write each shot's JSON and CSV to the save folder as soon as it is saved (and again when the machine's record arrives)</label>
@@ -381,7 +389,8 @@
                 <th data-sort="startedAt" aria-sort="descending">When</th>
                 <th data-sort="bean">Coffee</th>
                 <th data-sort="profileName">Profile</th>
-                <th data-sort="finalWeightG" class="num">In → out</th>
+                <th data-sort="grind" class="num" title="grind size in microns">Grind</th>
+                <th data-sort="finalWeightG" class="num" title="dose → beverage; ◎ the profile's target weight, ⚖ weighed by hand">In → out</th>
                 <th data-sort="ratio" class="num" title="dose : beverage">Ratio</th>
                 <th data-sort="durationSec" class="num">Time</th>
                 <th data-sort="meanEc" class="num" title="mean EC per gram of beverage">EC/g</th>
@@ -581,10 +590,11 @@
       </div>
       <div class="row two">
         <label class="field"><span>Refractometer TDS (%) — blank removes the reading</span><input id="e-tds" type="number" step="0.01" min="0" max="30" /></label>
-        <label class="field"><span>Beverage weighed (g) — blank uses the machine's scale</span><input id="e-bev" type="number" step="0.1" min="0" /></label>
+        <label class="field"><span>Beverage weighed (g) — blank uses the default</span><input id="e-bev" type="number" step="0.1" min="0" /></label>
       </div>
+      <p class="hint" id="e-bev-hint"></p>
       <label class="field"><span>Note</span><textarea id="e-note" rows="2"></textarea></label>
-      <p class="hint">The beverage you weighed replaces the machine's cup weight for yield, EY, the summary and the Beanconqueror hand-off; the recorded samples and times stay as measured. Blank it to go back to the machine's value.</p>
+      <p class="hint">The beverage you weighed replaces the default (the profile's target weight or the machine's scale, as chosen under Settings → Recording) for yield, EY, the summary and the Beanconqueror hand-off; the recorded samples and times stay as measured. Blank it to go back to the default.</p>
       <div class="row end">
         <button type="button" id="shot-dialog-cancel" class="btn">Cancel</button>
         <button type="submit" id="shot-dialog-save" class="btn primary">Save changes</button>
@@ -604,6 +614,6 @@
   </dialog>
 
   <div class="toast" id="toast" hidden></div>
-  <script type="module" src="js/main.js?v=0.9.0"></script>
+  <script type="module" src="js/main.js?v=0.10.0"></script>
 </body>
 </html>

@@ -255,6 +255,7 @@ try {
   await page.waitForTimeout(400);
   const reverted = await page.evaluate(() => ({ bev: window.__pb.state.selected?.beverageG, row: document.querySelector('#hist-rows tr')?.textContent.replace(/\s+/g, ' '), machineW: window.__pb.state.selected?.finalWeightG, refBev: window.__pb.state.selected?.refractometer?.beverageG }));
   check('blank beverage weighed reverts to the machine weight', reverted.bev === undefined && !/⚖/.test(reverted.row) && reverted.refBev === reverted.machineW, JSON.stringify(reverted).slice(0, 200));
+  check('History shows the brew ratio (dose : beverage) after In → out', /40\.0 g\s*1 : 2\.16/.test(reverted.row), reverted.row.slice(0, 160));
   await page.click('#hist-rows tr button[data-act="open"]');
   await page.waitForTimeout(200);
   const opened = await page.evaluate(() => ({ shotsVisible: !document.querySelector('#view-shots').hidden, histHidden: document.querySelector('#view-history').hidden, sub: document.querySelector('#shot-sub').textContent }));
@@ -265,7 +266,24 @@ try {
   const rowsWithDemo = await page.evaluate(() => [...document.querySelectorAll('#hist-rows tr')].map((tr) => ({ id: tr.dataset.id, demo: /demo/.test(tr.textContent) })));
   check('demo shot appears in History', rowsWithDemo.length === 2 && rowsWithDemo.some((r) => r.demo), JSON.stringify(rowsWithDemo));
   const demoId = rowsWithDemo.find((r) => r.demo).id;
-  await page.check(`#hist-rows tr[data-id="${demoId}"] input[type="checkbox"]`);
+  // Compare: tick both shots and overlay their graphs
+  for (const r of rowsWithDemo) await page.check(`#hist-rows tr[data-id="${r.id}"] input[type="checkbox"]`);
+  check('Compare selected is enabled with two ticked shots', /Compare selected \(2\)/.test(await page.textContent('#hist-compare')) && !(await page.isDisabled('#hist-compare')));
+  await page.click('#hist-compare');
+  await page.waitForTimeout(500);
+  const cmp = await page.evaluate(() => ({ visible: !document.querySelector('#compare-panel').hidden, series: window.__pb.compareChart.u?.series.length, legendRows: document.querySelectorAll('#cmp-legend tbody tr').length, legendText: document.querySelector('#cmp-legend').textContent.replace(/\s+/g, ' ').slice(0, 300), xField: !document.querySelector('#cmp-x-field').hidden }));
+  check('Compare overlays two shots on one EC-vs-mass chart with a legend', cmp.visible && cmp.series === 3 && cmp.legendRows === 2 && /E2E coffee/.test(cmp.legendText) && /1 : 2\.16/.test(cmp.legendText) && cmp.xField, JSON.stringify(cmp).slice(0, 260));
+  await page.selectOption('#cmp-x', 'ratio');
+  await page.waitForTimeout(300);
+  const cmpRatio = await page.evaluate(() => ({ series: window.__pb.compareChart.u?.series.length, xmax: window.__pb.compareChart.u?.scales.x.max, excluded: document.querySelectorAll('#cmp-legend tr.excluded').length }));
+  check('brew-ratio axis rescales both shots (x spans ~2.2 instead of ~40 g)', cmpRatio.series === 3 && cmpRatio.xmax > 1.5 && cmpRatio.xmax < 4 && cmpRatio.excluded === 0, JSON.stringify(cmpRatio));
+  await page.selectOption('#cmp-series', 'pressure-time');
+  await page.waitForTimeout(300);
+  const cmpTime = await page.evaluate(() => ({ series: window.__pb.compareChart.u?.series.length, xField: !document.querySelector('#cmp-x-field').hidden, xmax: window.__pb.compareChart.u?.scales.x.max, ylabel: document.querySelector('#cmp-chart .u-axis:nth-of-type(2) .u-label, #cmp-chart .u-label')?.textContent }));
+  check('time-based graphs hide the mass-axis option and span the shot duration', cmpTime.series === 3 && !cmpTime.xField && cmpTime.xmax > 25, JSON.stringify(cmpTime));
+  await page.click('#cmp-close');
+  check('Close hides the comparison', await page.evaluate(() => document.querySelector('#compare-panel').hidden));
+  await page.uncheck(`#hist-rows tr[data-id="${rowsWithDemo.find((r) => r.id !== demoId).id}"] input[type="checkbox"]`);
   check('selecting a row enables Delete selected', /Delete selected \(1\)/.test(await page.textContent('#hist-delete-selected')) && !(await page.isDisabled('#hist-delete-selected')));
   await page.click('#hist-delete-selected');
   await page.waitForSelector('#confirm-dialog[open]');

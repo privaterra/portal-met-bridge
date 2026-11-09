@@ -91,6 +91,10 @@ History (`renderHistory`) is a plain sorted/filtered render of `state.shots` (th
 
 `shot.finalWeightG` is what the machine's scale reported (max cup weight during the shot) and is never edited. `shot.beverageG` is optional: the cup weight the user measured on their own scale, entered in History → Edit or with a refractometer reading. `beverageOf(shot)` (analysis.js) returns `beverageG`, else the beverage typed with a reading on pre-0.8.2 shots (`refractometer.beverageG`), else `finalWeightG`; it is what yield, EY, the summary CSV (`beverage_g`, next to `machine_weight_g`), the PDF and the Beanconqueror `beverageOut` use. Blanking the field deletes `beverageG` and rewrites `refractometer.beverageG` from the machine value, so a stale typed value cannot linger. The History row marks an override with ⚖ (tooltip shows the machine value); the Shots header says "41.5 g out (weighed; machine 40.0 g)". Analysis and calibration stay in machine-mass space: EC is integrated against the scale's curve, not the hand weight.
 
+## Ratio and compare (v0.9)
+
+`ratioOf(shot)` = `beverageOf(shot) / context.doseG` (null without a dose) feeds the History column, the shot header, the compare legend and the summary CSV (`ratio`). Compare (`openCompare(ids)` in main.js, `CompareChart` in charts.js) overlays up to eight ticked shots (`COMPARE_COLORS`) on one uPlot: series are aligned with `uPlot.join` and drawn with `spanGaps`, so the x grid is the union of every shot's x values. Graph choices are in `COMPARE_SERIES` (mass-based: EC and ∫EC dm from `analyzeShot().curve`; time-based: EC from the Portal samples, cup weight / flow / pressure from the machine samples). For mass-based graphs the x-axis can be grams or brew ratio (x ÷ dose); shots without a dose are listed but not drawn in that view. The chart is rebuilt on every change — the series count varies and uPlot construction is cheap.
+
 ## Ideas not done yet
 
 - Read the Portal's status byte on a real unit to decide whether it is a battery percentage.

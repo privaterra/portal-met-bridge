@@ -254,6 +254,53 @@ export class CalibrationChart {
   }
 }
 
+/** Distinct, print-safe colours for up to eight overlaid shots. */
+export const COMPARE_COLORS = ['#2447B8', '#8A1C2B', '#0E7C7B', '#C98A14', '#6B3FA0', '#2E7D32', '#AD1457', '#455A64'];
+
+/**
+ * Several shots on one pair of axes. Each call rebuilds the chart: the number
+ * of series changes with the selection, and uPlot is cheap to construct.
+ */
+export class CompareChart {
+  constructor(el) {
+    this.el = el;
+    this.u = null;
+    this._resize = () => this.u?.setSize(size(el, 340));
+    window.addEventListener('resize', this._resize);
+  }
+
+  /**
+   * series: [{ label, color, xs: number[], ys: number[] }] — x must be ascending per series.
+   * Series are aligned on the union of x values; gaps introduced by alignment are spanned.
+   */
+  setSeries(series, { xLabel = '', yLabel = '', xUnit = '', yUnit = '', xDigits = 1, yDigits = 2 } = {}) {
+    if (this.u) {
+      this.u.destroy();
+      this.u = null;
+    }
+    this.el.innerHTML = '';
+    const usable = series.filter((s) => s.xs.length > 1);
+    if (!usable.length) return;
+    const joined = uPlot.join(usable.map((s) => [s.xs, s.ys]));
+    const { width, height } = size(this.el, 340);
+    const opts = {
+      ...baseOpts('', width, height),
+      scales: { x: { time: false }, y: {} },
+      series: [
+        { label: xLabel, value: fmt(xDigits, xUnit ? ` ${xUnit}` : '') },
+        ...usable.map((s) => ({ label: s.label, stroke: s.color, width: 2, scale: 'y', spanGaps: true, points: { show: false }, value: fmt(yDigits, yUnit ? ` ${yUnit}` : '') })),
+      ],
+      axes: [axis('x', 2, xLabel), axis('y', 3, yLabel)],
+    };
+    this.u = new uPlot(opts, joined, this.el);
+  }
+
+  destroy() {
+    window.removeEventListener('resize', this._resize);
+    this.u?.destroy();
+  }
+}
+
 function size(el, h) {
   return { width: Math.max(320, el.clientWidth || 640), height: h };
 }

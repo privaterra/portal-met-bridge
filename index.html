@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>portal-met-bridge</title>
   <link rel="stylesheet" href="vendor/uPlot.min.css" />
-  <link rel="stylesheet" href="css/app.css?v=0.8.2" />
+  <link rel="stylesheet" href="css/app.css?v=0.9.0" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M4 26 L10 8 L16 20 L22 6 L28 26' fill='none' stroke='%232447B8' stroke-width='3' stroke-linejoin='round'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -370,6 +370,7 @@
             <option value="machine">machine only</option>
             <option value="unsaved">files not yet written</option>
           </select>
+          <button id="hist-compare" class="btn small primary" disabled title="Overlay the graphs of the ticked shots (2–8)">Compare selected</button>
           <button id="hist-delete-selected" class="btn small danger" disabled>Delete selected</button>
         </div>
         <div class="hist-wrap">
@@ -381,6 +382,7 @@
                 <th data-sort="bean">Coffee</th>
                 <th data-sort="profileName">Profile</th>
                 <th data-sort="finalWeightG" class="num">In → out</th>
+                <th data-sort="ratio" class="num" title="dose : beverage">Ratio</th>
                 <th data-sort="durationSec" class="num">Time</th>
                 <th data-sort="meanEc" class="num" title="mean EC per gram of beverage">EC/g</th>
                 <th data-sort="tds" class="num" title="refractometer reading, or the estimate in italics">TDS</th>
@@ -392,7 +394,36 @@
           </table>
           <p class="hint hist-empty" id="hist-empty" hidden>Nothing recorded yet. Connect the machine and pull a shot, or add a demo shot from the Shots tab.</p>
         </div>
-        <p class="hint">Click a row to select it, <em>Open</em> (or double-click) to show it on the Shots tab. <b>TDS</b> in bold is a refractometer reading; in italics it is the estimate. <b>Data</b> shows how many Portal and machine samples the shot holds, whether the machine's own record is attached (⌂) and whether its files are in the save folder (▤). The summary CSV has one row per shot with the EC metrics, reading and estimate; the zip adds every shot's CSV, JSON, graphs and PDF report.</p>
+        <p class="hint">Tick two or more shots and press <em>Compare selected</em> to overlay their graphs below. Click a row to select it, <em>Open</em> (or double-click) to show it on the Shots tab. <b>TDS</b> in bold is a refractometer reading; in italics it is the estimate. <b>Data</b> shows how many Portal and machine samples the shot holds, whether the machine's own record is attached (⌂) and whether its files are in the save folder (▤). The summary CSV has one row per shot with the EC metrics, reading and estimate; the zip adds every shot's CSV, JSON, graphs and PDF report.</p>
+      </section>
+
+      <section class="panel" id="compare-panel" hidden>
+        <div class="panel-head">
+          <h2>Compare <span class="count" id="cmp-count"></span></h2>
+          <div class="panel-tools">
+            <label class="inline-field">Graph
+              <select id="cmp-series">
+                <option value="ec-mass">EC vs cup mass</option>
+                <option value="integral-mass">∫EC dm vs cup mass</option>
+                <option value="ec-time">EC vs time</option>
+                <option value="weight-time">Cup weight vs time</option>
+                <option value="flow-time">Flow vs time</option>
+                <option value="pressure-time">Pressure vs time</option>
+              </select>
+            </label>
+            <label class="inline-field" id="cmp-x-field">Mass axis
+              <select id="cmp-x">
+                <option value="g">grams</option>
+                <option value="ratio">brew ratio (out ÷ dose)</option>
+              </select>
+            </label>
+            <button id="cmp-close" class="btn small">Close</button>
+          </div>
+        </div>
+        <div class="chart" id="cmp-chart"></div>
+        <table class="cmp-legend" id="cmp-legend"></table>
+        <p class="hint" id="cmp-note"></p>
+        <p class="hint">Hover the chart to read every shot at the same point; drag to zoom, double-click to reset. <em>Brew ratio</em> puts cup mass over dose on the x-axis so shots with different doses line up; shots without a dose are left out of that view.</p>
       </section>
     </main>
 
@@ -573,6 +604,6 @@
   </dialog>
 
   <div class="toast" id="toast" hidden></div>
-  <script type="module" src="js/main.js?v=0.8.2"></script>
+  <script type="module" src="js/main.js?v=0.9.0"></script>
 </body>
 </html>

@@ -1,16 +1,16 @@
 // main.js — wires the devices, the recorder, storage, charts and export together.
 
-import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.8.2';
-import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.8.2';
-import { MachinePanel } from './machine-panel.js?v=0.8.2';
-import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.8.2';
-import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.8.2';
-import { TimeChart, MassChart, CalibrationChart } from './charts.js?v=0.8.2';
-import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, DEFAULTS } from './analysis.js?v=0.8.2';
-import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.8.2';
-import { makeDemoShot } from './demo.js?v=0.8.2';
-import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug } from './export.js?v=0.8.2';
-import { log, Logger, formatLine } from './log.js?v=0.8.2';
+import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.9.0';
+import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.9.0';
+import { MachinePanel } from './machine-panel.js?v=0.9.0';
+import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.9.0';
+import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.9.0';
+import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.9.0';
+import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, DEFAULTS } from './analysis.js?v=0.9.0';
+import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.9.0';
+import { makeDemoShot } from './demo.js?v=0.9.0';
+import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug } from './export.js?v=0.9.0';
+import { log, Logger, formatLine } from './log.js?v=0.9.0';
 import qrcode from '../vendor/qrcode.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -22,6 +22,7 @@ const recorder = new ShotRecorder();
 const timeChart = new TimeChart($('chart-time'));
 const massChart = new MassChart($('chart-mass'));
 const calChart = new CalibrationChart($('chart-cal'));
+const compareChart = new CompareChart($('cmp-chart'));
 const machinePanel = new MachinePanel($('view-machine'));
 
 const VIEWS = ['shots', 'history', 'machine', 'settings'];
@@ -316,8 +317,8 @@ async function init() {
   log.configure({ enabled: settings.logEnabled, level: settings.logLevel, packets: settings.logPackets });
   await restoreLogFolder();
   renderLogStatus();
-  $('about-version').textContent = 'v0.8.2';
-  log.info('app', `portal-met-bridge v0.8.2 started · ${navigator.userAgent}`);
+  $('about-version').textContent = 'v0.9.0';
+  log.info('app', `portal-met-bridge v0.9.0 started · ${navigator.userAgent}`);
 
   const env = await environmentCheck();
   renderPortalSteps({ secure: env.secure, api: env.api, adapter: env.adapter });
@@ -771,6 +772,14 @@ function histTds(shot) {
   }
 }
 
+/** Brew ratio as beverage ÷ dose (e.g. 2.24 for 18.5 g → 41.5 g); null without a dose. */
+function ratioOf(shot) {
+  const dose = Number(shot?.context?.doseG);
+  const out = beverageOf(shot);
+  return dose > 0 && Number.isFinite(out) && out > 0 ? out / dose : null;
+}
+const fmtRatio = (r) => (Number.isFinite(r) ? `1 : ${r.toFixed(r >= 10 ? 1 : 2)}` : '–');
+
 function histMatches(shot) {
   const q = hist.search.trim().toLowerCase();
   if (q) {
@@ -795,6 +804,7 @@ function histSortValue(shot, key) {
     case 'meanEc': return shot.analysisCache?.meanEcPerG ?? -1;
     case 'tds': return histTds(shot).v || -1;
     case 'finalWeightG': return beverageOf(shot) ?? -1;
+    case 'ratio': return ratioOf(shot) ?? -1;
     default: return shot[key] ?? -1;
   }
 }
@@ -817,7 +827,8 @@ function renderHistory() {
   tbody.innerHTML = '';
   for (const s of rows) {
     const c = s.context || {};
-    const a = s.analysisCache;
+    // Shots restored from an older backup may lack the cached summary; compute it once, in memory.
+    const a = s.analysisCache || (!s.inProgress && s.portal?.length ? recomputeCache(s) : null);
     const tds = histTds(s);
     const tr = document.createElement('tr');
     tr.dataset.id = s.id;
@@ -840,6 +851,7 @@ function renderHistory() {
       `<td class="coffee">${coffee}</td>` +
       `<td class="prof">${esc(s.profileName || '–')}</td>` +
       `<td class="num">${inOut}</td>` +
+      `<td class="num ratio" title="${c.doseG ? 'beverage ÷ dose' : 'enter a dose to get the ratio'}">${fmtRatio(ratioOf(s))}</td>` +
       `<td class="num">${fmt(s.durationSec, 0)} s</td>` +
       `<td class="num ec">${Number.isFinite(a?.meanEcPerG) ? a.meanEcPerG.toFixed(2) : '–'}</td>` +
       `<td class="num tds">${Number.isFinite(tds.v) ? (tds.measured ? `<b>${tds.v.toFixed(2)}</b>` : `<i>~${tds.v.toFixed(2)}</i>`) : '–'}</td>` +
@@ -849,6 +861,15 @@ function renderHistory() {
   }
   $('hist-delete-selected').disabled = hist.checked.size === 0;
   $('hist-delete-selected').textContent = hist.checked.size ? `Delete selected (${hist.checked.size})` : 'Delete selected';
+  const n = hist.checked.size;
+  $('hist-compare').disabled = n < 2 || n > COMPARE_MAX;
+  $('hist-compare').textContent = n >= 2 ? `Compare selected (${n})` : 'Compare selected';
+  $('hist-compare').title = n > COMPARE_MAX ? `Up to ${COMPARE_MAX} shots can be overlaid at once` : 'Overlay the graphs of the ticked shots (2–8)';
+  if (compare.ids.length && compare.ids.some((id) => !state.shots.some((x) => x.id === id))) {
+    compare.ids = compare.ids.filter((id) => state.shots.some((x) => x.id === id));
+    if (compare.ids.length < 2) closeCompare();
+    else renderCompare().catch(() => {});
+  }
   const all = $('hist-select-all');
   const selectable = rows.filter((x) => !x.inProgress);
   all.checked = selectable.length > 0 && selectable.every((x) => hist.checked.has(x.id));
@@ -934,6 +955,107 @@ function clearShotPanel() {
   updateShotNav();
 }
 
+// ---------------------------------------------------------------- compare --
+
+const COMPARE_MAX = COMPARE_COLORS.length;
+const compare = { ids: [], series: 'ec-mass', x: 'g' };
+
+/** What can be overlaid. `kind` decides whether the mass-axis option applies. */
+const COMPARE_SERIES = {
+  'ec-mass': { kind: 'mass', yLabel: 'EC (mS/cm)', yUnit: 'mS/cm', yDigits: 3, pick: (shot, a) => a.curve.filter((k) => k.ec !== null).map((k) => [k.m, k.ec]) },
+  'integral-mass': { kind: 'mass', yLabel: '∫EC dm (mS·g/cm)', yUnit: 'mS·g/cm', yDigits: 1, pick: (shot, a) => a.curve.map((k) => [k.m, k.I]) },
+  'ec-time': { kind: 'time', yLabel: 'EC (mS/cm)', yUnit: 'mS/cm', yDigits: 3, pick: (shot) => (shot.portal || []).filter((s) => Number.isFinite(s.ec)).map((s) => [s.t, s.ec]) },
+  'weight-time': { kind: 'time', yLabel: 'Cup weight (g)', yUnit: 'g', yDigits: 1, pick: (shot) => (shot.machine || []).filter((s) => Number.isFinite(s.w)).map((s) => [s.t, s.w]) },
+  'flow-time': { kind: 'time', yLabel: 'Flow (ml/s)', yUnit: 'ml/s', yDigits: 2, pick: (shot) => (shot.machine || []).filter((s) => Number.isFinite(s.f)).map((s) => [s.t, s.f]) },
+  'pressure-time': { kind: 'time', yLabel: 'Pressure (bar)', yUnit: 'bar', yDigits: 2, pick: (shot) => (shot.machine || []).filter((s) => Number.isFinite(s.p)).map((s) => [s.t, s.p]) },
+};
+
+function compareLabel(shot) {
+  const c = shot.context || {};
+  const when = new Date(shot.startedAt);
+  return `${when.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${when.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}${c.beanName ? ' · ' + c.beanName : ''}`;
+}
+
+async function openCompare(ids) {
+  compare.ids = ids.slice(0, COMPARE_MAX);
+  $('compare-panel').hidden = false;
+  await renderCompare();
+  $('compare-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  log.info('history', `comparing ${compare.ids.length} shots: ${compare.ids.join(', ')}`);
+}
+
+function closeCompare() {
+  compare.ids = [];
+  $('compare-panel').hidden = true;
+  compareChart.setSeries([]);
+  $('cmp-legend').innerHTML = '';
+}
+
+async function renderCompare() {
+  const def = COMPARE_SERIES[compare.series] || COMPARE_SERIES['ec-mass'];
+  const massAxis = def.kind === 'mass';
+  $('cmp-x-field').hidden = !massAxis;
+  const byRatio = massAxis && compare.x === 'ratio';
+  const shots = [];
+  for (const id of compare.ids) {
+    const shot = await store.getShot(id);
+    if (shot) shots.push(shot);
+  }
+  $('cmp-count').textContent = `(${shots.length})`;
+  const rows = [];
+  const series = [];
+  const excluded = [];
+  shots.forEach((shot, i) => {
+    const color = COMPARE_COLORS[i % COMPARE_COLORS.length];
+    const analysis = recomputeCache(shot);
+    const dose = Number(shot.context?.doseG) || 0;
+    let pts = def.pick(shot, analysis).filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y));
+    let note = '';
+    if (byRatio) {
+      if (dose > 0) pts = pts.map(([x, y]) => [x / dose, y]);
+      else {
+        excluded.push(shot);
+        note = 'no dose — left out of the ratio view';
+        pts = [];
+      }
+    } else if (!pts.length) {
+      note = def.kind === 'mass' ? 'no Portal + weight data' : 'no data for this graph';
+    }
+    // uPlot needs ascending x: mass curves are monotone already; time series are sorted by t.
+    pts.sort((a, b) => a[0] - b[0]);
+    series.push({ label: compareLabel(shot), color, xs: pts.map((p) => p[0]), ys: pts.map((p) => p[1]) });
+    const est = histTds(shot);
+    rows.push({ shot, color, analysis, note, tds: est });
+  });
+  compareChart.setSeries(series, {
+    xLabel: massAxis ? (byRatio ? 'Brew ratio (cup mass ÷ dose)' : 'Cup mass (g)') : 'Time (s)',
+    xUnit: massAxis ? (byRatio ? '×' : 'g') : 's',
+    xDigits: byRatio ? 2 : 1,
+    yLabel: def.yLabel,
+    yUnit: def.yUnit,
+    yDigits: def.yDigits,
+  });
+  const legend = $('cmp-legend');
+  legend.innerHTML = `<thead><tr><th></th><th>Shot</th><th>Coffee</th><th>Profile</th><th class="num">In → out</th><th class="num">Ratio</th><th class="num">Time</th><th class="num">Peak EC</th><th class="num">EC/g</th><th class="num">TDS</th><th></th></tr></thead>` +
+    '<tbody>' + rows.map(({ shot, color, analysis, note, tds }) => {
+      const c = shot.context || {};
+      return `<tr data-id="${shot.id}" class="${note ? 'excluded' : ''}">` +
+        `<td><span class="swatch" style="background:${color}"></span></td>` +
+        `<td>${esc(fmtDate(shot.startedAt))}</td>` +
+        `<td class="coffee">${esc([c.beanName, c.roaster].filter(Boolean).join(' · ') || '–')}${note ? `<br><small>${esc(note)}</small>` : ''}</td>` +
+        `<td>${esc(shot.profileName || '–')}</td>` +
+        `<td class="num">${c.doseG ? fmt(Number(c.doseG), 1) : '–'} → ${fmt(beverageOf(shot), 1)} g</td>` +
+        `<td class="num">${fmtRatio(ratioOf(shot))}</td>` +
+        `<td class="num">${fmt(shot.durationSec, 1)} s</td>` +
+        `<td class="num">${Number.isFinite(analysis?.mainPeakEc) && analysis.mainPeakEc > 0 ? analysis.mainPeakEc.toFixed(3) : '–'}</td>` +
+        `<td class="num">${Number.isFinite(analysis?.meanEcPerG) && analysis.meanEcPerG > 0 ? analysis.meanEcPerG.toFixed(3) : '–'}</td>` +
+        `<td class="num">${Number.isFinite(tds.v) ? (tds.measured ? `<b>${tds.v.toFixed(2)}</b>` : `<i>~${tds.v.toFixed(2)}</i>`) : '–'}</td>` +
+        `<td><button class="linkish" data-act="open">Open</button></td>` +
+        '</tr>';
+    }).join('') + '</tbody>';
+  $('cmp-note').textContent = excluded.length ? `${excluded.length} shot${excluded.length === 1 ? ' has' : 's have'} no dose and ${excluded.length === 1 ? 'is' : 'are'} not drawn in the brew-ratio view; add the dose under Edit to include ${excluded.length === 1 ? 'it' : 'them'}.` : '';
+}
+
 // ------------------------------------------------------------ edit dialog --
 
 let editingId = null;
@@ -1005,6 +1127,7 @@ function renderShot() {
     ctx.beanName,
     ctx.doseG ? `${ctx.doseG} g in` : null,
     `${fmt(beverageOf(shot), 1)} g out${beverageOverridden(shot) ? ` (weighed; machine ${fmt(shot.finalWeightG, 1)} g)` : ''}`,
+    ratioOf(shot) ? fmtRatio(ratioOf(shot)) : null,
     `${fmt(shot.durationSec, 1)} s`,
     `${shot.machine.length} machine · ${shot.portal.length} Portal samples`,
     shot.machineSource ? 'machine record attached' : null,
@@ -2083,6 +2206,14 @@ $('hist-select-all').addEventListener('change', () => {
   renderHistory();
 });
 $('hist-delete-selected').addEventListener('click', () => deleteShots([...hist.checked]));
+$('hist-compare').addEventListener('click', () => openCompare([...hist.checked]));
+$('cmp-close').addEventListener('click', closeCompare);
+$('cmp-series').addEventListener('change', () => { compare.series = $('cmp-series').value; renderCompare().catch((err) => toast(`Could not draw the comparison: ${err?.message || err}`, 'error')); });
+$('cmp-x').addEventListener('change', () => { compare.x = $('cmp-x').value; renderCompare().catch((err) => toast(`Could not draw the comparison: ${err?.message || err}`, 'error')); });
+$('cmp-legend').addEventListener('click', (ev) => {
+  const tr = ev.target.closest('tr[data-id]');
+  if (tr && ev.target.closest('button[data-act="open"]')) selectShot(tr.dataset.id, { show: true });
+});
 $('shot-form').addEventListener('submit', (ev) => { ev.preventDefault(); saveShotDialog().catch((err) => toast(`Could not save: ${err?.message || err}`, 'error')); });
 $('shot-dialog-cancel').addEventListener('click', () => $('shot-dialog').close());
 $('shot-refresh').addEventListener('click', () => state.selected && refreshFromMachine(state.selected.id));
@@ -2118,7 +2249,7 @@ $('backup-import').addEventListener('change', async (e) => {
 });
 
 // Handy in the console while debugging: window.__pb.state.selected, .massChart.u, ...
-window.__pb = { state, store, portal, recorder, timeChart, massChart, calChart, machinePanel, settings, log, hist, openShotDialog, recoverUnfinishedShots, backfillMachineRecords, autosaveShotFiles, get meticulous() { return meticulous; } };
+window.__pb = { state, store, portal, recorder, timeChart, massChart, calChart, compareChart, compare, machinePanel, settings, log, hist, openShotDialog, openCompare, recoverUnfinishedShots, backfillMachineRecords, autosaveShotFiles, get meticulous() { return meticulous; } };
 
 init().catch((err) => {
   console.error(err);

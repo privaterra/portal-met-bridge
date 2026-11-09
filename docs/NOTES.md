@@ -68,6 +68,12 @@ Source: [graphefruit/Beanconqueror](https://github.com/graphefruit/Beanconqueror
 - Removing the app's files: `folder.removeEntry('portal-met-bridge', { recursive: true })`; only that subfolder is ever touched. `BluetoothDevice.forget()` (Chrome 110+) drops the pairing permission; `indexedDB.deleteDatabase()` never settles while another tab holds the database open, so the wipe reports that case instead of hanging.
 - `tests/fake-folder.js` stands in for all of this in tests.
 
+## Settings save model (v0.7)
+
+Before v0.7 every setting input saved on its `change` event, i.e. on blur. Typing an address and pressing Enter, reloading, or closing the tab never blurred the field, so the value was lost and the Shots-tab address kept the old value — the bug reported as "the machine address does not change on the main screen". There is no `<form>`, so Enter did nothing.
+
+Now: toggles and `<select>`s still commit on change; text and number inputs are compared against the stored value on every keystroke (`dirtySettings()`), listed in the save bar, and committed only by Enter, ⌘/Ctrl+S, the Save button, or `showView()` leaving Settings (`saveAllSettings({quiet:true})`). `beforeunload` warns while something is pending. Every commit funnels through `flashSaved(keys)`, which keeps the keys saved during the current 4 s flash so the button can report fields that landed a moment earlier. `applySetting('meticulousHost')` updates `#meticulous-addr` and reconnects.
+
 ## Ideas not done yet
 
 - Read the Portal's status byte on a real unit to decide whether it is a battery percentage.

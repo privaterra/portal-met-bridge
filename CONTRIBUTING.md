@@ -15,7 +15,7 @@ Thanks for looking. This is a small, vibe-coded tool (see "How this was built" i
 npm start                 # http://localhost:8787  (or: node serve.mjs)
 npm test                  # unit tests: analysis maths, calibration pools, packet parser, CSV, hand-off round-trip
 npm i -D playwright socket.io
-npm run test:e2e          # Chrome + simulated Portal + mock machine, 38 checks; add --headed to watch
+npm run test:e2e          # Chrome + simulated Portal + mock machine, 44 checks; add --headed to watch
 npm run mock              # mock machine on :8080 (PORT=… to change); point the app at localhost:8080
 ```
 
@@ -33,7 +33,7 @@ Please keep these invariants:
 
 - EC is never displayed as TDS without a calibration, and estimates always carry their flags — including which pool (bean / roaster / roast level / all) they were borrowed from.
 - `js/export.js` and `js/analysis.js` stay free of DOM access beyond canvases, so exports can be scripted.
-- New user-facing options go through the `SETTINGS` table in `js/main.js` (one line: key, default, input id), so they are persisted, exported, imported and reset together.
+- New user-facing options go through the `SETTINGS` table in `js/main.js` (one line: key, default, input id) plus a label in `SETTING_LABELS`, so they are persisted, exported, imported, reset and shown in the save bar together. Typed inputs are saved by Enter / ⌘S / *Save settings* / leaving the tab, never by blur alone; toggles and selects save on change.
 - Nothing is sent anywhere but the machine on the LAN and the Portal over BLE.
 - The app never sends `/api/v1/action/*` commands unless a future feature explicitly adds a control panel with confirmation.
 - The only destructive action is *Start over*; it stays behind a typed confirmation, lists what it deletes, and touches nothing on disk outside the app's own `portal-met-bridge/` subfolder.
@@ -41,6 +41,8 @@ Please keep these invariants:
 ## Pull requests
 
 Small and focused, with a sentence on what you tested it against (firmware version, Portal yes/no, browser). If an AI assistant wrote part of the change, say so in the PR — it helps reviewers know where to look harder.
+
+Signed commits are welcome but not required. `docs/SIGNED-COMMITS.md` walks through getting the green **Verified** badge on GitHub with an SSH key (about five minutes on a Mac), including how to sign commits an AI session produced before you push them.
 
 ## License
 

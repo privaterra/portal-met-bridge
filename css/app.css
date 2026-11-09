@@ -169,6 +169,20 @@ a { color: var(--cobalt); }
 .log-tail:empty::after { content: "Nothing logged yet."; color: #8a94a3; }
 .badge { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 3px; background: var(--amber); color: #fff; margin-left: 8px; vertical-align: middle; }
 
+/* settings save bar */
+.savebar {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  max-width: 860px; padding: 8px 14px; margin-bottom: -6px;
+  background: #fff; border: 1px solid var(--rule); border-left: 4px solid var(--ok);
+  font-size: 13px; color: var(--ink-2);
+}
+.savebar[data-state="dirty"] { border-left-color: var(--amber); background: #fff9ec; }
+.savebar[data-state="saved"] { border-left-color: var(--ok); }
+.savebar[data-state="error"] { border-left-color: var(--bad); }
+.savebar-actions { display: flex; gap: 8px; }
+.savebar kbd { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; border: 1px solid var(--rule); border-radius: 3px; padding: 0 4px; background: var(--paper-2); }
+
 /* pick-list chips */
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chips:empty::after { content: "Nothing saved yet."; color: var(--ink-3); font-size: 12px; }

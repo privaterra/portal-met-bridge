@@ -128,13 +128,21 @@
     </aside>
 
     <main class="main" id="view-settings" hidden>
+      <div class="savebar" id="savebar" data-state="clean">
+        <span class="savebar-status" id="savebar-status">All changes saved</span>
+        <span class="savebar-actions">
+          <button id="settings-discard" class="btn small" disabled>Discard changes</button>
+          <button id="settings-save" class="btn primary small">Save settings</button>
+        </span>
+      </div>
+
       <section class="panel settings">
         <div class="panel-head">
           <h2>Machine</h2>
           <span class="panel-note" id="set-machine-note"></span>
         </div>
         <div class="settings-grid">
-          <label class="field"><span>Address — the machine's IP or <code>meticulous.local</code>; it serves on port 80</span>
+          <label class="field"><span>Address — the machine's IP or <code>meticulous.local</code>; it serves on port 80. Press Enter or <em>Save settings</em> after typing.</span>
             <input id="meticulous-host" type="text" placeholder="127.0.0.1" spellcheck="false" autocomplete="off" /></label>
           <div class="row align-end">
             <button id="meticulous-test" class="btn small">Test connection</button>

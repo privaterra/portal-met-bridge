@@ -49,9 +49,11 @@ Then, in the app:
 
 ### Settings
 
-The **Settings** tab (top bar) holds everything that is not about one shot:
+The **Settings** tab (top bar) holds everything that is not about one shot. A **save bar** sits at the top of it: toggles and drop-downs commit the moment you change them, while typed fields (the machine address, seconds, counts) wait until you press **Enter**, **⌘S** / Ctrl+S, or the **Save settings** button — the bar lists what is still pending and *Discard changes* puts the saved values back. Switching to another tab saves anything pending, and Chrome warns before closing the page with unsaved edits. Every save is confirmed in the bar ("Saved 1 setting (machine address) at 7:42:10 PM").
 
-- **Machine** — address, *Test connection*, connect on open, and whether to fetch the machine's own saved record after each shot (and how long to wait for it).
+![Settings save bar](docs/screenshot-settings-savebar.png)
+
+- **Machine** — address, *Test connection* (tests the address as typed, saved or not), connect on open, and whether to fetch the machine's own saved record after each shot (and how long to wait for it). Once the address is saved, the **Address** shown on the Shots tab (with its *change* link) follows it, and the app reconnects to the new address.
 - **Recording** — automatic start on `extracting` (or manual only), the settle window after the pump stops, the Portal-vs-cup lag, the minimum length an automatic recording must have to be kept, and whether to switch the Portal's screen to its graph during a shot.
 - **Estimates** — how many reference shots an estimate needs before it stops being *preliminary*.
 - **Pick-lists** — the beans, roasters, origins and grinders the coffee fields offer, with use counts; remove an entry here (shots keep their values).
@@ -84,7 +86,7 @@ npm run test:e2e         # real Chrome + simulated Portal + mock machine: connec
 npm run mock             # a stand-in machine on :8080 for manual poking
 ```
 
-The end-to-end test injects `tests/fake-bluetooth.js`, a stand-in `navigator.bluetooth` that behaves like a Portal (service `0x7400`, 13-byte notifications at 8 Hz, command acks), and `tests/fake-folder.js`, an in-memory folder picker, and checks 38 things from the chooser filter through recording, pick-lists, logging, settings export, the zip export and a full erase-and-restart. It proves the code path; a physical Portal still has to prove the protocol.
+The end-to-end test injects `tests/fake-bluetooth.js`, a stand-in `navigator.bluetooth` that behaves like a Portal (service `0x7400`, 13-byte notifications at 8 Hz, command acks), and `tests/fake-folder.js`, an in-memory folder picker, and checks 44 things from the chooser filter through recording, pick-lists, the settings save bar, logging, settings export, the zip export and a full erase-and-restart. It proves the code path; a physical Portal still has to prove the protocol.
 
 ## What is in the box
 
@@ -143,7 +145,7 @@ No build step, no framework, no bundler: plain ES modules served statically.
 
 **Platform APIs**: Web Bluetooth (Portal), `fetch` + socket.io over CORS (machine), `CompressionStream` (gzip for the hand-off), IndexedDB (storage), File System Access API (optional log/export folder; Chrome and Edge only).
 
-**To replicate or extend with an AI assistant**, the prompts that mattered were, roughly: (1) the four source links above plus "build a tool to integrate the Portal with the Meticulous, graph it, show TDS, integrate with Beanconqueror"; (2) "the machine is at <its LAN IP>" (which surfaced the port-80 issue); (3) "add graphs of real-time brewing data, machine status, profiles, statistics, device info, connectivity" — the add-on's feature list; (4) "confirm the code connects to the Portal on macOS with Chrome; save data and graphs per shot (JSON, CSV, PDF, JPEG); estimate TDS from bean/roaster information when the bean has no readings; pick beans and roasters from previous entries" — which produced the connection check, the simulated-Portal test, the exports, the calibration pools and the bean library; (5) "add a settings menu: machine IP, recording settings, backup/restore settings, enable log/debug and where to save" — the Settings tab and `js/log.js`; (6) "add a hard reset that deletes all saved data, shots, logs, confirms first, then restarts as a fresh install" — the Start over section; (7) "for bean, roaster, origin and grinder, select from previous or enter new, saved for reuse" — the pick-list store and Settings → Pick-lists. Give the assistant the machine's real `/api/v1/machine`, `/api/v1/history/last`, `/api/v1/profile/list`, `/api/v1/wifi/config` and `/api/v1/settings` responses early; the saved shot JSON contains bare `NaN` tokens that break strict parsers, which is the kind of thing only real data reveals.
+**To replicate or extend with an AI assistant**, the prompts that mattered were, roughly: (1) the four source links above plus "build a tool to integrate the Portal with the Meticulous, graph it, show TDS, integrate with Beanconqueror"; (2) "the machine is at <its LAN IP>" (which surfaced the port-80 issue); (3) "add graphs of real-time brewing data, machine status, profiles, statistics, device info, connectivity" — the add-on's feature list; (4) "confirm the code connects to the Portal on macOS with Chrome; save data and graphs per shot (JSON, CSV, PDF, JPEG); estimate TDS from bean/roaster information when the bean has no readings; pick beans and roasters from previous entries" — which produced the connection check, the simulated-Portal test, the exports, the calibration pools and the bean library; (5) "add a settings menu: machine IP, recording settings, backup/restore settings, enable log/debug and where to save" — the Settings tab and `js/log.js`; (6) "add a hard reset that deletes all saved data, shots, logs, confirms first, then restarts as a fresh install" — the Start over section; (7) "for bean, roaster, origin and grinder, select from previous or enter new, saved for reuse" — the pick-list store and Settings → Pick-lists; (8) "add a save button in settings, and make the machine address on the main screen follow the one saved in settings" — which turned up that a typed address followed by Enter or a reload was never committed, and produced the save bar. Give the assistant the machine's real `/api/v1/machine`, `/api/v1/history/last`, `/api/v1/profile/list`, `/api/v1/wifi/config` and `/api/v1/settings` responses early; the saved shot JSON contains bare `NaN` tokens that break strict parsers, which is the kind of thing only real data reveals.
 
 ## Protocol notes
 
@@ -164,6 +166,10 @@ See [docs/NOTES.md](docs/NOTES.md) for the Portal BLE layout, the Meticulous end
 - Estimates borrowed from a wider pool (same roaster, same roast level, all coffees) are rougher than the bean's own; the flag says which pool was used. Different coffees really do have different EC-to-TDS ratios.
 - The machine's saved shot carries the external-probe temperatures but no "brew temperature" field; the live stream's `sensors.t` is kept when the saved record is attached.
 - Everything about EC → TDS is empirical. Keep the same Portal, water and mounting while you collect references, and expect k to shift between coffees.
+
+## Contributing
+
+[CONTRIBUTING.md](CONTRIBUTING.md) lists what would help most (a real Portal, refractometer comparisons, other firmware). If you want your commits to carry GitHub's green **Verified** badge, [docs/SIGNED-COMMITS.md](docs/SIGNED-COMMITS.md) is a step-by-step for macOS, including how to sign commits an AI session produced before pushing them.
 
 ## License
 

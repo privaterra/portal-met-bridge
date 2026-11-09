@@ -28,6 +28,10 @@ const VIEWS = ['shots', 'machine', 'settings'];
 
 function showView(name) {
   if (!VIEWS.includes(name)) name = 'shots';
+  if (name !== 'settings' && !$('view-settings').hidden && dirtySettings().length) {
+    // Leaving Settings with edits still in the inputs: keep them rather than lose them.
+    saveAllSettings({ quiet: true }).catch(() => {});
+  }
   for (const v of VIEWS) $(`view-${v}`).hidden = v !== name;
   document.querySelectorAll('.view-tab').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.view === name)));
   if (name === 'machine') machinePanel.onShown();
@@ -114,6 +118,7 @@ async function settingChanged(key) {
   await store.setSetting(key, v);
   applySetting(key, v);
   log.info('settings', `${key} = ${JSON.stringify(v)}`);
+  flashSaved([key]);
   return v;
 }
 
@@ -187,6 +192,7 @@ async function importSettingsDocument(doc) {
   }
   writeSettings();
   for (const key of Object.keys(SETTINGS)) applySetting(key, settings[key]);
+  renderSavebar();
   if (doc.context && typeof doc.context === 'object') {
     writeContext(doc.context);
     await store.setSetting('context', readContext());
@@ -201,6 +207,97 @@ async function resetSettings() {
   }
   writeSettings();
   for (const key of Object.keys(SETTINGS)) applySetting(key, settings[key]);
+  renderSavebar();
+}
+
+// Human-readable names for the save bar.
+const SETTING_LABELS = {
+  meticulousHost: 'machine address', autoConnectMeticulous: 'connect on open', autoAttach: 'attach machine record', attachDelaySec: 'attach delay',
+  autoRecord: 'auto-record', settleSec: 'settle window', lagSec: 'Portal lag', minShotSec: 'minimum shot length', autoGraph: 'Portal screen',
+  minCalibrationShots: 'reference shots', estimatePool: 'estimate pool', logEnabled: 'logging', logLevel: 'log detail', logPackets: 'packet logging',
+  logSaveExports: 'save exports to folder', logShowTail: 'live tail',
+};
+
+/** Read an input's current value in the setting's type, without persisting. */
+function inputValue(key) {
+  const spec = SETTINGS[key];
+  const el = $(spec.el);
+  if (!el) return settings[key];
+  if (spec.bool) return !!el.checked;
+  if (spec.num) {
+    const n = Number(el.value);
+    return Number.isFinite(n) ? Math.min(spec.max, Math.max(spec.min, n)) : settings[key];
+  }
+  return String(el.value ?? '').trim();
+}
+
+/** Keys whose input differs from what is stored. */
+function dirtySettings() {
+  return Object.keys(SETTINGS).filter((k) => inputValue(k) !== settings[k]);
+}
+
+let savebarTimer = null;
+const flashKeys = new Set(); // settings saved during the current "Saved …" flash
+function renderSavebar(stateOverride, text) {
+  const bar = $('savebar');
+  if (!bar) return;
+  const dirty = dirtySettings();
+  if (stateOverride) {
+    bar.dataset.state = stateOverride;
+    $('savebar-status').textContent = text;
+  } else if (dirty.length) {
+    bar.dataset.state = 'dirty';
+    $('savebar-status').textContent = `Unsaved: ${dirty.map((k) => SETTING_LABELS[k] || k).join(', ')} — press Enter, ⌘S or Save settings`;
+  } else if (savebarTimer) {
+    // a "Saved …" flash is showing and nothing new is pending: leave it until its timer runs out
+  } else {
+    bar.dataset.state = 'clean';
+    $('savebar-status').textContent = 'All changes saved';
+  }
+  $('settings-discard').disabled = dirty.length === 0;
+}
+
+/**
+ * Confirm a save in the bar. Every path that persists a setting (blur, Enter, ⌘S, the Save
+ * button, leaving the tab) ends here, so the Save button reports the fields a blur committed
+ * a moment before the click as well: "Saved 2 settings (machine address, settle) at 12:59:32".
+ */
+function flashSaved(keys) {
+  keys.forEach((k) => flashKeys.add(k));
+  const when = new Date().toLocaleTimeString();
+  const names = [...flashKeys].map((k) => SETTING_LABELS[k] || k).join(', ');
+  const n = flashKeys.size;
+  renderSavebar('saved', n ? `Saved ${n} setting${n === 1 ? '' : 's'} (${names}) at ${when}` : `All settings saved — nothing was pending (${when})`);
+  if (savebarTimer) clearTimeout(savebarTimer);
+  savebarTimer = setTimeout(() => { savebarTimer = null; flashKeys.clear(); renderSavebar(); }, 4000);
+}
+
+/** Save every setting from its input (used by the Save button, Enter, ⌘S and when leaving the tab). */
+async function saveAllSettings({ quiet = false } = {}) {
+  const dirty = dirtySettings();
+  const errors = [];
+  for (const key of dirty) {
+    try {
+      await settingChanged(key); // flashes each key as it lands
+    } catch (err) {
+      errors.push(`${SETTING_LABELS[key] || key}: ${err?.message || err}`);
+    }
+  }
+  if (errors.length) {
+    if (savebarTimer) { clearTimeout(savebarTimer); savebarTimer = null; }
+    renderSavebar('error', `Could not save ${errors.join('; ')}`);
+    return false;
+  }
+  if (!quiet) flashSaved([]); // button/Enter/⌘S: always confirm, even if blur already committed the fields
+  if (dirty.length) log.info('settings', `saved ${dirty.length} setting(s): ${dirty.join(', ')}`);
+  return true;
+}
+
+function discardSettingChanges() {
+  writeSettings();
+  if (savebarTimer) { clearTimeout(savebarTimer); savebarTimer = null; }
+  flashKeys.clear();
+  renderSavebar();
 }
 
 // ------------------------------------------------------------------- setup --
@@ -217,8 +314,8 @@ async function init() {
   log.configure({ enabled: settings.logEnabled, level: settings.logLevel, packets: settings.logPackets });
   await restoreLogFolder();
   renderLogStatus();
-  $('about-version').textContent = 'v0.6.0';
-  log.info('app', `portal-met-bridge v0.6.0 started · ${navigator.userAgent}`);
+  $('about-version').textContent = 'v0.7.0';
+  log.info('app', `portal-met-bridge v0.7.0 started · ${navigator.userAgent}`);
 
   const env = await environmentCheck();
   renderPortalSteps({ secure: env.secure, api: env.api, adapter: env.adapter });
@@ -294,7 +391,8 @@ async function testMeticulous() {
     const t0 = performance.now();
     const [stats, info] = await Promise.all([probe.ping(), probe.machineInfo().catch(() => null)]);
     const ms = Math.round(performance.now() - t0);
-    out.textContent = `OK in ${ms} ms — ${info?.name || 'machine'} · firmware ${info?.firmware || '?'} · ${stats?.totalSavedShots ?? '?'} saved shots`;
+    const pending = dirtySettings().includes('meticulousHost') ? ' — press Enter or Save settings to keep this address' : '';
+    out.textContent = `OK in ${ms} ms — ${info?.name || 'machine'} · firmware ${info?.firmware || '?'} · ${stats?.totalSavedShots ?? '?'} saved shots${pending}`;
     log.info('machine', `test ${url}: ok ${ms} ms`, { firmware: info?.firmware, shots: stats?.totalSavedShots });
   } catch (err) {
     out.textContent = `No answer: ${err?.message || err}. The machine serves on port 80; check the IP and that you are on the same network.`;
@@ -1489,10 +1587,42 @@ $('portal-show-graph').addEventListener('click', () => portal.showGraph().then((
 $('portal-hide-graph').addEventListener('click', () => portal.hideGraph().then(() => toast('Portal acknowledged the graph-off command.')).catch((e) => toast(e.message, 'error')));
 
 $('rec-manual').addEventListener('click', () => (recorder.isRecording ? recorder.stopManual() : recorder.startManual()));
+// Two kinds of setting control:
+//  - toggles and drop-downs commit the moment they change (one click, nothing to mistype);
+//  - typed fields (address, seconds, counts) wait for Enter, ⌘/Ctrl+S, the Save button or
+//    leaving the tab, so a half-typed address is never committed by a stray click and
+//    "Discard changes" can really discard it. The save bar shows which fields are pending.
 for (const [key, spec] of Object.entries(SETTINGS)) {
   const el = $(spec.el);
-  if (el) el.addEventListener('change', () => settingChanged(key));
+  if (!el) continue;
+  const typed = el.tagName === 'INPUT' && (el.type === 'text' || el.type === 'number');
+  if (typed) {
+    el.addEventListener('input', () => renderSavebar());
+    el.addEventListener('change', () => renderSavebar()); // blur just refreshes the bar; nothing is saved yet
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        saveAllSettings();
+      }
+    });
+  } else {
+    el.addEventListener('change', () => settingChanged(key).catch((err) => renderSavebar('error', `Could not save ${SETTING_LABELS[key] || key}: ${err?.message || err}`)));
+  }
 }
+$('settings-save').addEventListener('click', () => saveAllSettings());
+$('settings-discard').addEventListener('click', discardSettingChanges);
+document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's' && !$('view-settings').hidden) {
+    e.preventDefault();
+    saveAllSettings();
+  }
+});
+window.addEventListener('beforeunload', (e) => {
+  if (!$('view-settings').hidden && dirtySettings().length && !erasing) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
 document.querySelectorAll('[data-goto]').forEach((b) => b.addEventListener('click', () => showView(b.dataset.goto)));
 $('meticulous-test').addEventListener('click', testMeticulous);
 $('settings-export').addEventListener('click', () => deliver(`portal-met-bridge-settings-${stamp(Date.now())}.json`, JSON.stringify(settingsDocument(), null, 2), 'application/json', 'backups'));

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>portal-met-bridge</title>
   <link rel="stylesheet" href="vendor/uPlot.min.css" />
-  <link rel="stylesheet" href="css/app.css?v=0.10.0" />
+  <link rel="stylesheet" href="css/app.css?v=0.11.0" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M4 26 L10 8 L16 20 L22 6 L28 26' fill='none' stroke='%232447B8' stroke-width='3' stroke-linejoin='round'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -17,6 +17,7 @@
     <nav class="views" aria-label="Views">
       <button class="view-tab" data-view="shots" aria-selected="true">Shots</button>
       <button class="view-tab" data-view="history" aria-selected="false">History <span class="count" id="history-tab-count"></span></button>
+      <button class="view-tab" data-view="analysis" aria-selected="false">Analysis <span class="count" id="analysis-tab-count"></span></button>
       <button class="view-tab" data-view="machine" aria-selected="false">Machine</button>
       <button class="view-tab" data-view="settings" aria-selected="false">Settings</button>
     </nav>
@@ -44,6 +45,23 @@
           <button id="meticulous-disconnect" class="btn" disabled>Disconnect</button>
         </div>
         <p class="hint" id="meticulous-hint">Shots start recording on their own when the machine begins extracting.</p>
+        <div class="brew" id="brew-controls" hidden>
+          <h3>Brew</h3>
+          <label class="field"><span>Profile</span>
+            <div class="row tight">
+              <select id="brew-profile" aria-label="Profile to brew"></select>
+              <button id="brew-load" class="btn small" title="Send this profile to the machine so the next start brews it">Load</button>
+            </div>
+          </label>
+          <p class="brew-state" id="brew-state">—</p>
+          <div class="row">
+            <button id="brew-preheat" class="btn small" title="Heat the group without starting a shot">Preheat</button>
+            <button id="brew-start" class="btn small primary" title="The dial click, sent over the network: from idle the machine heats and waits; at &quot;click to start&quot; the shot begins">Start brew</button>
+            <button id="brew-stop" class="btn small danger" title="End the running profile (retracts the piston the normal way)">Stop</button>
+            <button id="brew-tare" class="btn small" title="Tare the machine's scale">Tare</button>
+          </div>
+          <p class="hint" id="brew-note">Pick a profile and press <em>Start brew</em>; when the machine shows <em>click to start</em>, press it again (or once more here) to begin the shot. The machine's own <em>auto-start after preheat</em> setting removes that second press.</p>
+        </div>
       </section>
 
       <section class="rail-section">
@@ -191,6 +209,57 @@
         </div>
       </section>
 
+      <section class="panel settings" id="set-ai-panel">
+        <div class="panel-head">
+          <h2>AI review</h2>
+          <span class="panel-note" id="set-ai-note"></span>
+        </div>
+        <div class="settings-grid">
+          <label class="field narrow"><span>Provider</span>
+            <select id="set-ai-provider">
+              <option value="anthropic">Claude (Anthropic)</option>
+              <option value="openai">OpenAI</option>
+              <option value="google">Gemini (Google)</option>
+            </select>
+          </label>
+          <div class="ai-provider" data-provider="anthropic">
+            <label class="field"><span>Anthropic API key — <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">create one</a>; press Enter or <em>Save settings</em> after pasting</span>
+              <div class="row tight"><input id="set-ai-key-anthropic" type="password" placeholder="sk-ant-…" spellcheck="false" autocomplete="off" /><button class="btn small reveal" data-reveal="set-ai-key-anthropic" type="button">Show</button></div></label>
+            <label class="field"><span>Model</span><div class="row tight"><input id="set-ai-model-anthropic" type="text" list="ai-models-anthropic" placeholder="claude-sonnet-5-5" spellcheck="false" autocomplete="off" /><datalist id="ai-models-anthropic"></datalist></div></label>
+          </div>
+          <div class="ai-provider" data-provider="openai" hidden>
+            <label class="field"><span>OpenAI API key — <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">create one</a>; press Enter or <em>Save settings</em> after pasting</span>
+              <div class="row tight"><input id="set-ai-key-openai" type="password" placeholder="sk-…" spellcheck="false" autocomplete="off" /><button class="btn small reveal" data-reveal="set-ai-key-openai" type="button">Show</button></div></label>
+            <label class="field"><span>Model</span><div class="row tight"><input id="set-ai-model-openai" type="text" list="ai-models-openai" placeholder="gpt-6.1-sol" spellcheck="false" autocomplete="off" /><datalist id="ai-models-openai"></datalist></div></label>
+            <label class="field"><span>OpenAI-compatible endpoint (advanced, optional) — base URL of another server that speaks the OpenAI chat API, e.g. OpenRouter or a local model; blank = api.openai.com</span>
+              <input id="set-ai-base-openai" type="url" placeholder="https://" spellcheck="false" autocomplete="off" /></label>
+          </div>
+          <div class="ai-provider" data-provider="google" hidden>
+            <label class="field"><span>Gemini API key — <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">create one</a>; press Enter or <em>Save settings</em> after pasting</span>
+              <div class="row tight"><input id="set-ai-key-google" type="password" placeholder="AIza…" spellcheck="false" autocomplete="off" /><button class="btn small reveal" data-reveal="set-ai-key-google" type="button">Show</button></div></label>
+            <label class="field"><span>Model</span><div class="row tight"><input id="set-ai-model-google" type="text" list="ai-models-google" placeholder="gemini-3.8-flash" spellcheck="false" autocomplete="off" /><datalist id="ai-models-google"></datalist></div></label>
+          </div>
+          <div class="row align-end">
+            <button id="set-ai-models" class="btn small">List models</button>
+            <button id="set-ai-test" class="btn small">Test key</button>
+            <span class="inline-note" id="set-ai-test-result"></span>
+          </div>
+          <h3>About you and your gear</h3>
+          <label class="field narrow"><span>Grinder adjusts in steps of (µm)</span><input id="set-ai-grind-step" type="number" min="1" max="100" step="1" value="5" /></label>
+          <label class="field narrow"><span>You usually drink this coffee as</span>
+            <select id="set-ai-drink">
+              <option value="espresso">straight espresso</option>
+              <option value="cortado">a cortado</option>
+              <option value="milk">a milk drink (latte, flat white)</option>
+              <option value="both">sometimes straight, sometimes with milk</option>
+            </select>
+          </label>
+          <label class="field"><span>Standing notes for every review (optional) — burrs, water, basket, anything the recording cannot know</span>
+            <textarea id="set-ai-notes" rows="3" placeholder="e.g. Zerno Z1 with SSP HU blind burrs; BWT magnesium-filtered Toronto tap water; 18 g VST basket"></textarea></label>
+          <p class="hint">The key is kept in this browser's database on this computer and sent only to the provider you chose, with the shot digest, the brewed profile and your notes. It is left out of settings exports and backups. Each review costs a few cents of API usage; the README explains how to create a key with a spending limit.</p>
+        </div>
+      </section>
+
       <section class="panel settings">
         <div class="panel-head">
           <h2>Pick-lists</h2>
@@ -271,7 +340,7 @@
       <section class="panel settings danger-zone">
         <div class="panel-head"><h2>Start over</h2></div>
         <div class="settings-grid">
-          <p class="hint">Erases everything this app has stored in this browser — shots and their samples, refractometer readings, the bean library, all settings, the debug log and the Portal pairing — and, if you choose, the files it wrote in your save folder. The app then restarts as if freshly installed. There is no undo; take a backup first if in doubt.</p>
+          <p class="hint">Erases everything this app has stored in this browser — shots and their samples, refractometer readings, the bean library, saved AI reviews, all settings including API keys, the debug log and the Portal pairing — and, if you choose, the files it wrote in your save folder. The app then restarts as if freshly installed. There is no undo; take a backup first if in doubt.</p>
           <div class="row">
             <button id="reset-all" class="btn danger">Erase everything and start fresh…</button>
           </div>
@@ -280,7 +349,75 @@
 
       <section class="panel settings">
         <div class="panel-head"><h2>About</h2></div>
-        <p class="hint">portal-met-bridge <span id="about-version"></span> · MIT · <a href="https://github.com/privaterra/portal-met-bridge" target="_blank" rel="noopener">github.com/privaterra/portal-met-bridge</a> · vibe-coded with Claude; see the README for how. Nothing leaves this computer except requests to the machine on your LAN and the Portal over Bluetooth.</p>
+        <p class="hint">portal-met-bridge <span id="about-version"></span> · MIT · <a href="https://github.com/privaterra/portal-met-bridge" target="_blank" rel="noopener">github.com/privaterra/portal-met-bridge</a> · vibe-coded with Claude; see the README for how. Nothing leaves this computer except requests to the machine on your LAN, the Portal over Bluetooth and — only when you press <em>Review with AI</em> — the shot digest sent to the AI provider you configured.</p>
+      </section>
+    </main>
+
+    <main class="main" id="view-analysis" hidden>
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Review shots with AI</h2>
+          <span class="panel-note" id="an-provider-note"></span>
+        </div>
+        <div class="an-grid">
+          <div class="an-col">
+            <h3>Shots in this review <span class="count" id="an-sel-count"></span></h3>
+            <div class="an-picker">
+              <input id="an-search" type="search" placeholder="Find a shot: bean, profile, date…" autocomplete="off" />
+              <ul class="an-list" id="an-list"></ul>
+            </div>
+            <p class="hint">Tick one shot for a stage-by-stage review, or several of the same coffee to have them compared as a series. Shots without Portal data are reviewed from the machine's pressure, flow, weight and temperature alone.</p>
+          </div>
+          <div class="an-col">
+            <h3>Questions for the reviewer</h3>
+            <label class="field"><span>How did it taste? (optional)</span><textarea id="an-taste" rows="2" placeholder="e.g. sweet but a little thin; slightly sour finish"></textarea></label>
+            <label class="field"><span>What do you want to know? (optional)</span><textarea id="an-question" rows="3" placeholder="e.g. Should I change the bloom or the grind first? Is the second shot really better than the first?"></textarea></label>
+            <div class="row">
+              <button id="an-run" class="btn primary" disabled>Review with AI</button>
+              <button id="an-stop" class="btn" hidden>Stop</button>
+              <span class="inline-note" id="an-status"></span>
+            </div>
+            <p class="hint" id="an-size"></p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" id="an-digest-panel" hidden>
+        <div class="panel-head">
+          <h2>Stages, from the recording</h2>
+          <div class="panel-tools">
+            <label class="inline-field">Graph
+              <select id="an-chart-shot"></select>
+            </label>
+          </div>
+        </div>
+        <div class="chart" id="an-chart"></div>
+        <div id="an-digest"></div>
+        <p class="hint">Computed locally from the samples — this is what the model is given, with the brewed profile and a one-row-per-second trace. The machine's stage names come from its own record; without the record attached they are approximate.</p>
+      </section>
+
+      <section class="panel" id="an-report-panel" hidden>
+        <div class="panel-head">
+          <h2 id="an-report-title">Review</h2>
+          <div class="panel-tools">
+            <button id="an-save" class="btn small primary" disabled>Save review</button>
+            <button id="an-download" class="btn small" disabled>Download .md</button>
+            <button id="an-copy" class="btn small" disabled>Copy</button>
+          </div>
+        </div>
+        <p class="hint" id="an-report-meta"></p>
+        <article class="md" id="an-report"></article>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Saved reviews <span class="count" id="an-saved-count"></span></h2>
+        </div>
+        <table class="reviews" id="an-saved">
+          <thead><tr><th>When</th><th>Title</th><th>Shots</th><th>Model</th><th class="actions"></th></tr></thead>
+          <tbody id="an-saved-rows"></tbody>
+        </table>
+        <p class="hint" id="an-saved-empty">No reviews saved yet. Run one above and press <em>Save review</em>; saved reviews are kept in this browser (and in backups) and can be reopened, downloaded or deleted here.</p>
       </section>
     </main>
 
@@ -379,6 +516,7 @@
             <option value="unsaved">files not yet written</option>
           </select>
           <button id="hist-compare" class="btn small primary" disabled title="Overlay the graphs of the ticked shots (2–8)">Compare selected</button>
+          <button id="hist-analyze" class="btn small" disabled title="Review the ticked shots with the AI provider chosen in Settings">Analyze selected</button>
           <button id="hist-delete-selected" class="btn small danger" disabled>Delete selected</button>
         </div>
         <div class="hist-wrap">
@@ -614,6 +752,6 @@
   </dialog>
 
   <div class="toast" id="toast" hidden></div>
-  <script type="module" src="js/main.js?v=0.10.0"></script>
+  <script type="module" src="js/main.js?v=0.11.0"></script>
 </body>
 </html>

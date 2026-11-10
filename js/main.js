@@ -1,16 +1,18 @@
 // main.js — wires the devices, the recorder, storage, charts and export together.
 
-import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.10.0';
-import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.10.0';
-import { MachinePanel } from './machine-panel.js?v=0.10.0';
-import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.10.0';
-import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.10.0';
-import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.10.0';
-import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, setBeveragePreference, grindMicrons, measuredEy, DEFAULTS } from './analysis.js?v=0.10.0';
-import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.10.0';
-import { makeDemoShot } from './demo.js?v=0.10.0';
-import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug } from './export.js?v=0.10.0';
-import { log, Logger, formatLine } from './log.js?v=0.10.0';
+import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.11.0';
+import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.11.0';
+import { MachinePanel } from './machine-panel.js?v=0.11.0';
+import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.11.0';
+import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.11.0';
+import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.11.0';
+import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, setBeveragePreference, grindMicrons, measuredEy, DEFAULTS } from './analysis.js?v=0.11.0';
+import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, approxTokens } from './review.js?v=0.11.0';
+import { PROVIDERS, streamCompletion, listModels, testKey, maskKey } from './ai.js?v=0.11.0';
+import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.11.0';
+import { makeDemoShot } from './demo.js?v=0.11.0';
+import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug } from './export.js?v=0.11.0';
+import { log, Logger, formatLine } from './log.js?v=0.11.0';
 import qrcode from '../vendor/qrcode.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -25,7 +27,7 @@ const calChart = new CalibrationChart($('chart-cal'));
 const compareChart = new CompareChart($('cmp-chart'));
 const machinePanel = new MachinePanel($('view-machine'));
 
-const VIEWS = ['shots', 'history', 'machine', 'settings'];
+const VIEWS = ['shots', 'history', 'analysis', 'machine', 'settings'];
 
 function showView(name) {
   if (!VIEWS.includes(name)) name = 'shots';
@@ -37,6 +39,7 @@ function showView(name) {
   document.querySelectorAll('.view-tab').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.view === name)));
   if (name === 'machine') machinePanel.onShown();
   else if (name === 'history') renderHistory();
+  else if (name === 'analysis') renderAnalysis();
   else if (name === 'shots') {
     timeChart.u.setSize({ width: Math.max(320, $('chart-time').clientWidth), height: 320 });
     massChart.u.setSize({ width: Math.max(320, $('chart-mass').clientWidth), height: 300 });
@@ -77,6 +80,17 @@ const SETTINGS = {
   beverageDefault: { def: 'profile', el: 'set-beverage-default' },
   minCalibrationShots: { def: 5, el: 'set-min-cal', num: true, min: 2, max: 20 },
   estimatePool: { def: 'auto', el: 'est-pool' },
+  aiProvider: { def: 'anthropic', el: 'set-ai-provider' },
+  aiKeyAnthropic: { def: '', el: 'set-ai-key-anthropic', secret: true },
+  aiModelAnthropic: { def: '', el: 'set-ai-model-anthropic' },
+  aiKeyOpenai: { def: '', el: 'set-ai-key-openai', secret: true },
+  aiModelOpenai: { def: '', el: 'set-ai-model-openai' },
+  aiBaseOpenai: { def: '', el: 'set-ai-base-openai' },
+  aiKeyGoogle: { def: '', el: 'set-ai-key-google', secret: true },
+  aiModelGoogle: { def: '', el: 'set-ai-model-google' },
+  aiGrindStepUm: { def: 5, el: 'set-ai-grind-step', num: true, min: 1, max: 100 },
+  aiDrink: { def: 'espresso', el: 'set-ai-drink' },
+  aiNotes: { def: '', el: 'set-ai-notes' },
   logEnabled: { def: false, el: 'log-enabled', bool: true },
   logLevel: { def: 'info', el: 'log-level' },
   logPackets: { def: false, el: 'log-packets', bool: true },
@@ -121,7 +135,7 @@ async function settingChanged(key) {
   settings[key] = v;
   await store.setSetting(key, v);
   applySetting(key, v);
-  log.info('settings', `${key} = ${JSON.stringify(v)}`);
+  log.info('settings', `${key} = ${spec.secret ? (v ? `(key ${maskKey(v)})` : '(cleared)') : JSON.stringify(v)}`);
   flashSaved([key]);
   return v;
 }
@@ -171,6 +185,16 @@ function applySetting(key, v) {
     case 'logShowTail':
       renderLogTail();
       break;
+    case 'aiProvider':
+    case 'aiKeyAnthropic':
+    case 'aiKeyOpenai':
+    case 'aiKeyGoogle':
+    case 'aiModelAnthropic':
+    case 'aiModelOpenai':
+    case 'aiModelGoogle':
+    case 'aiBaseOpenai':
+      renderAiSettings();
+      break;
     default:
       break;
   }
@@ -179,7 +203,7 @@ function applySetting(key, v) {
 /** Settings as a portable JSON document (no file handles, no shots). */
 function settingsDocument() {
   const out = { app: 'portal-met-bridge-settings', version: 1, exportedAt: new Date().toISOString(), settings: {}, context: readContext() };
-  for (const key of Object.keys(SETTINGS)) out.settings[key] = settings[key];
+  for (const [key, spec] of Object.entries(SETTINGS)) if (!spec.secret) out.settings[key] = settings[key]; // API keys never leave the browser's database
   return out;
 }
 
@@ -225,6 +249,8 @@ const SETTING_LABELS = {
   autoRecord: 'auto-record', settleSec: 'settle window', lagSec: 'Portal lag', minShotSec: 'minimum shot length', autoGraph: 'Portal screen', autoSaveFiles: 'write shot files', beverageDefault: 'beverage weight',
   minCalibrationShots: 'reference shots', estimatePool: 'estimate pool', logEnabled: 'logging', logLevel: 'log detail', logPackets: 'packet logging',
   logSaveExports: 'save exports to folder', logShowTail: 'live tail',
+  aiProvider: 'AI provider', aiKeyAnthropic: 'Anthropic key', aiModelAnthropic: 'Claude model', aiKeyOpenai: 'OpenAI key', aiModelOpenai: 'OpenAI model', aiBaseOpenai: 'OpenAI endpoint',
+  aiKeyGoogle: 'Gemini key', aiModelGoogle: 'Gemini model', aiGrindStepUm: 'grinder step', aiDrink: 'usual drink', aiNotes: 'standing notes',
 };
 
 /** Read an input's current value in the setting's type, without persisting. */
@@ -324,8 +350,8 @@ async function init() {
   log.configure({ enabled: settings.logEnabled, level: settings.logLevel, packets: settings.logPackets });
   await restoreLogFolder();
   renderLogStatus();
-  $('about-version').textContent = 'v0.10.0';
-  log.info('app', `portal-met-bridge v0.10.0 started · ${navigator.userAgent}`);
+  $('about-version').textContent = 'v0.11.0';
+  log.info('app', `portal-met-bridge v0.11.0 started · ${navigator.userAgent}`);
 
   const env = await environmentCheck();
   renderPortalSteps({ secure: env.secure, api: env.api, adapter: env.adapter });
@@ -343,6 +369,8 @@ async function init() {
   await refreshBeanLists();
   await refreshShotList();
   await recoverUnfinishedShots();
+  renderAiSettings();
+  await renderSavedReviews();
   const first = state.shots.find((x) => !x.inProgress);
   if (first) selectShot(first.id);
   if (await store.getSetting('autoConnectMeticulous', false)) connectMeticulous();
@@ -377,6 +405,8 @@ function connectMeticulous() {
       refreshProfileTargets().catch(() => {});
       setTimeout(() => backfillMachineRecords().catch(() => {}), 1500);
     }
+    $('brew-controls').hidden = d.state !== 'connected';
+    if (d.state !== 'connected') $('brew-state').textContent = '—';
   });
   meticulous.addEventListener('status', (e) => onStatus(e.detail));
   meticulous.connect();
@@ -438,6 +468,7 @@ function onStatus(s) {
   setText('ro-weight', fmt(s.w, 1));
   setText('ro-flow', fmt(s.f, 2));
   setText('ro-pressure', fmt(s.p, 1));
+  renderBrewState(s);
   if (recorder.isRecording) {
     setText('ro-time', fmt((performance.now() - recorder.wallZero) / 1000, 1));
     setText('ro-stage', s.name || s.state || 'extracting');
@@ -587,6 +618,8 @@ async function refreshProfileTargets() {
         if (p?.name && target > 0) next.set(p.name, target);
       }
       state.profileTargets = next;
+      state.profileList = (Array.isArray(list) ? list : []).filter((p) => p?.id && p?.name).map((p) => ({ id: p.id, name: p.name, finalWeightG: Number(p.final_weight) || null, temperatureC: Number(p.temperature) || null }));
+      renderBrewProfiles();
       log.info('machine', `profile list: ${next.size} profiles with a target weight`);
       if (recorder.shot && !recorder.shot.profileTargetG) applyProfileTarget(recorder.shot);
     } catch (err) {
@@ -952,6 +985,8 @@ function renderHistory() {
   $('hist-compare').disabled = n < 2 || n > COMPARE_MAX;
   $('hist-compare').textContent = n >= 2 ? `Compare selected (${n})` : 'Compare selected';
   $('hist-compare').title = n > COMPARE_MAX ? `Up to ${COMPARE_MAX} shots can be overlaid at once` : 'Overlay the graphs of the ticked shots (2–8)';
+  $('hist-analyze').disabled = n < 1 || n > REVIEW_MAX;
+  $('hist-analyze').textContent = n >= 1 ? `Analyze selected (${n})` : 'Analyze selected';
   if (compare.ids.length && compare.ids.some((id) => !state.shots.some((x) => x.id === id))) {
     compare.ids = compare.ids.filter((id) => state.shots.some((x) => x.id === id));
     if (compare.ids.length < 2) closeCompare();
@@ -2065,10 +2100,13 @@ async function openResetDialog() {
   const shots = await store.listShots({ limit: 100000 });
   const beans = await store.listBeans({ limit: 100000 });
   const withReadings = shots.filter((s) => s.refractometer?.tdsPct).length;
+  const reviews = await store.listReviews({ limit: 100000 });
+  const keys = ['aiKeyAnthropic', 'aiKeyOpenai', 'aiKeyGoogle'].filter((k) => settings[k]).length;
   const items = [
     `${shots.length} shot${shots.length === 1 ? '' : 's'} with ${shots.length === 1 ? 'its' : 'their'} samples${withReadings ? ` (${withReadings} with refractometer readings)` : ''}`,
     `${beans.length} bean${beans.length === 1 ? '' : 's'} in the bean library and the roaster / origin / grinder pick-lists`,
-    'all settings (machine address, recording, estimates, logging) and the current coffee',
+    `${reviews.length} saved AI review${reviews.length === 1 ? '' : 's'}`,
+    `all settings (machine address, recording, estimates, logging, AI review${keys ? ` including ${keys} API key${keys === 1 ? '' : 's'}` : ''}) and the current coffee`,
     `the debug log in this page (${log.ring.length} lines)`,
   ];
   if (portal.device) items.push(`the Bluetooth pairing with ${portal.device.name || 'the Portal'} (Chrome will ask you to pick it again)`);
@@ -2303,6 +2341,7 @@ $('hist-select-all').addEventListener('change', () => {
 });
 $('hist-delete-selected').addEventListener('click', () => deleteShots([...hist.checked]));
 $('hist-compare').addEventListener('click', () => openCompare([...hist.checked]));
+$('hist-analyze').addEventListener('click', () => openAnalysis([...hist.checked]));
 $('cmp-close').addEventListener('click', closeCompare);
 $('cmp-series').addEventListener('change', () => { compare.series = $('cmp-series').value; renderCompare().catch((err) => toast(`Could not draw the comparison: ${err?.message || err}`, 'error')); });
 $('cmp-x').addEventListener('change', () => { compare.x = $('cmp-x').value; renderCompare().catch((err) => toast(`Could not draw the comparison: ${err?.message || err}`, 'error')); });
@@ -2345,7 +2384,451 @@ $('backup-import').addEventListener('change', async (e) => {
 });
 
 // Handy in the console while debugging: window.__pb.state.selected, .massChart.u, ...
-window.__pb = { state, store, portal, recorder, timeChart, massChart, calChart, compareChart, compare, machinePanel, settings, log, hist, openShotDialog, openCompare, recoverUnfinishedShots, backfillMachineRecords, autosaveShotFiles, refreshProfileTargets, get meticulous() { return meticulous; } };
+
+// ------------------------------------------------------------ brew control --
+// The dial's actions, over the machine's own API (api/action.py): start is the
+// dial click, abort ends a running profile safely, preheat heats the group.
+
+function renderBrewProfiles() {
+  const sel = $('brew-profile');
+  if (!sel) return;
+  const current = sel.value;
+  const list = state.profileList || [];
+  sel.innerHTML = list.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}${p.finalWeightG ? ` · ${fmt(p.finalWeightG, 0)} g` : ''}${p.temperatureC ? ` · ${fmt(p.temperatureC, 0)} °C` : ''}</option>`).join('');
+  const loaded = meticulous?.lastStatus?.profile;
+  const match = list.find((p) => p.id === current) || list.find((p) => p.name === loaded) || list[0];
+  if (match) sel.value = match.id;
+  $('brew-load').disabled = !list.length;
+}
+
+let brewStateText = '';
+function renderBrewState(s) {
+  const el = $('brew-state');
+  if (!el || $('brew-controls').hidden) return;
+  const name = (s.name || '').trim();
+  const ready = /click to start/i.test(name);
+  const heating = /heating/i.test(name) || /heating/i.test(s.state || '');
+  const busy = s.extracting || (s.state === 'brewing' && !ready && !heating);
+  const text = `${ready ? 'Ready — click to start' : heating ? 'Heating' : busy ? name || 'Brewing' : name || s.state || 'idle'}${Number.isFinite(s.temp) ? ` · ${fmt(s.temp, 1)} °C` : ''}${s.profile ? ` · ${s.profile}` : ''}`;
+  if (text !== brewStateText) {
+    brewStateText = text;
+    el.textContent = text;
+    el.dataset.ready = String(ready);
+    $('brew-start').textContent = ready ? 'Start brew now' : s.extracting ? 'Brewing…' : 'Start brew';
+    $('brew-start').disabled = !!s.extracting;
+    $('brew-stop').disabled = !(s.extracting || heating || ready || s.state === 'brewing');
+    $('brew-preheat').disabled = !!s.extracting || heating || ready;
+    $('brew-load').disabled = !!s.extracting || !(state.profileList || []).length;
+  }
+}
+
+async function brewAction(name, label) {
+  if (!meticulous?.connected) return toast('Connect the machine first.', 'error');
+  const btn = { start: 'brew-start', abort: 'brew-stop', preheat: 'brew-preheat', tare: 'brew-tare' }[name];
+  const el = btn && $(btn);
+  if (el) el.disabled = true;
+  try {
+    await meticulous.action(name);
+    log.info('machine', `action ${name} accepted`);
+    toast(label);
+  } catch (err) {
+    log.warn('machine', `action ${name} failed: ${err?.message || err}`);
+    toast(`The machine did not accept "${name}": ${err?.message || err}`, 'error');
+  } finally {
+    if (el) setTimeout(() => (el.disabled = false), 800);
+    brewStateText = ''; // force the next status to re-render the buttons
+  }
+}
+
+$('brew-start').addEventListener('click', () => brewAction('start', /click to start/i.test(meticulous?.lastStatus?.name || '') ? 'Shot started.' : 'Start sent — the machine heats and then waits at "click to start"; press again (or press the dial) to begin the shot.'));
+$('brew-stop').addEventListener('click', () => brewAction('abort', 'Stop sent.'));
+$('brew-preheat').addEventListener('click', () => brewAction('preheat', 'Preheating.'));
+$('brew-tare').addEventListener('click', () => brewAction('tare', 'Scale tared.'));
+$('brew-load').addEventListener('click', async () => {
+  const id = $('brew-profile').value;
+  const p = (state.profileList || []).find((x) => x.id === id);
+  if (!p || !meticulous?.connected) return;
+  $('brew-load').disabled = true;
+  try {
+    const r = await meticulous.loadProfile(id);
+    log.info('machine', `profile loaded: ${r?.name || p.name}`);
+    toast(`Loaded "${r?.name || p.name}" on the machine.`);
+  } catch (err) {
+    toast(`Could not load the profile: ${err?.message || err}`, 'error');
+  } finally {
+    $('brew-load').disabled = false;
+  }
+});
+
+// -------------------------------------------------------------- AI review --
+
+const REVIEW_MAX = 8;
+const an = { ids: [], search: '', running: false, failed: false, abort: null, markdown: '', digests: [], shots: [], meta: null, savedId: null, chartShotId: null, chart: null };
+
+/** Provider, key and model currently chosen in Settings. */
+function aiConfig() {
+  const provider = PROVIDERS[settings.aiProvider] ? settings.aiProvider : 'anthropic';
+  const keyKey = { anthropic: 'aiKeyAnthropic', openai: 'aiKeyOpenai', google: 'aiKeyGoogle' }[provider];
+  const modelKey = { anthropic: 'aiModelAnthropic', openai: 'aiModelOpenai', google: 'aiModelGoogle' }[provider];
+  return { provider, key: settings[keyKey] || '', model: (settings[modelKey] || '').trim() || PROVIDERS[provider].defaultModel, baseUrl: provider === 'openai' ? settings.aiBaseOpenai || '' : '' };
+}
+
+function renderAiSettings() {
+  const { provider, key, model, baseUrl } = aiConfig();
+  document.querySelectorAll('.ai-provider').forEach((el) => (el.hidden = el.dataset.provider !== provider));
+  const label = PROVIDERS[provider].label;
+  const note = key ? `${label} · ${model}${baseUrl ? ` · ${baseUrl.replace(/^https?:\/\//, '')}` : ''} · key ${maskKey(key)}` : `${label} · no API key yet`;
+  setText('set-ai-note', note);
+  setText('an-provider-note', note);
+  const run = $('an-run');
+  if (run) {
+    run.textContent = `Review with ${label.replace(/ \(.*\)$/, '')}`;
+    run.disabled = an.running || !an.ids.length || !key;
+  }
+}
+
+$('set-ai-provider').addEventListener('input', renderAiSettings); // provider is a select → saves on change; keep the blocks in step while picking
+document.querySelectorAll('button.reveal').forEach((b) =>
+  b.addEventListener('click', () => {
+    const input = $(b.dataset.reveal);
+    input.type = input.type === 'password' ? 'text' : 'password';
+    b.textContent = input.type === 'password' ? 'Show' : 'Hide';
+  }),
+);
+
+/** The key/model typed right now (unsaved edits count), so Test and List work before Save. */
+function aiConfigFromInputs() {
+  const provider = $('set-ai-provider').value;
+  const key = $(`set-ai-key-${provider}`).value.trim();
+  const model = $(`set-ai-model-${provider}`).value.trim() || PROVIDERS[provider].defaultModel;
+  const baseUrl = provider === 'openai' ? $('set-ai-base-openai').value.trim() : '';
+  return { provider, key, model, baseUrl };
+}
+
+$('set-ai-models').addEventListener('click', async () => {
+  const { provider, key, baseUrl } = aiConfigFromInputs();
+  const out = $('set-ai-test-result');
+  if (!key) return (out.textContent = 'Paste an API key first.');
+  out.textContent = 'Asking for the model list…';
+  try {
+    const models = await listModels(provider, { key, baseUrl });
+    const dl = $(`ai-models-${provider}`);
+    dl.innerHTML = models.map((m) => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join('');
+    out.textContent = models.length ? `${models.length} models — start typing in the Model field to pick one${models[0] ? ` (newest: ${models[0].id})` : ''}.` : 'The key works but the list came back empty.';
+    log.info('ai', `${provider}: ${models.length} models listed`);
+  } catch (err) {
+    out.textContent = err?.message || String(err);
+    log.warn('ai', `list models failed: ${err?.message || err}`);
+  }
+});
+
+$('set-ai-test').addEventListener('click', async () => {
+  const { provider, key, model, baseUrl } = aiConfigFromInputs();
+  const out = $('set-ai-test-result');
+  if (!key) return (out.textContent = 'Paste an API key first.');
+  out.textContent = `Testing ${model}…`;
+  try {
+    const t0 = performance.now();
+    const reply = await testKey(provider, { key, model, baseUrl });
+    out.textContent = `${PROVIDERS[provider].label} answered in ${((performance.now() - t0) / 1000).toFixed(1)} s with “${reply.slice(0, 40)}”.${dirtySettings().some((k) => k.startsWith('ai')) ? ' Press Save settings to keep the key.' : ''}`;
+    log.info('ai', `${provider}/${model}: key test ok`);
+  } catch (err) {
+    out.textContent = err?.message || String(err);
+    log.warn('ai', `key test failed: ${err?.message || err}`);
+  }
+});
+
+/** Open the Analysis tab with these shots ticked. */
+function openAnalysis(ids) {
+  const valid = (ids || []).filter((id) => state.shots.some((s) => s.id === id && !s.inProgress)).slice(0, REVIEW_MAX);
+  an.ids = valid;
+  an.savedId = null;
+  showView('analysis');
+}
+
+function shotLabel(s) {
+  const c = s.context || {};
+  return `${fmtDate(s.startedAt)} · ${c.beanName || 'unnamed coffee'} · ${s.profileName || 'no profile'}${c.doseG ? ` · ${fmt(Number(c.doseG), 1)} → ${fmt(beverageOf(s), 1)} g` : ''}`;
+}
+
+function renderAnalysis() {
+  renderAnalysisList();
+  renderAiSettings();
+  renderAnalysisDigest();
+  renderAnalysisSize();
+}
+
+function renderAnalysisList() {
+  const ul = $('an-list');
+  const q = an.search.trim().toLowerCase();
+  const shots = state.shots.filter((s) => !s.inProgress).filter((s) => !q || histMatches({ ...s, context: s.context || {} }) || shotLabel(s).toLowerCase().includes(q));
+  const shown = shots.slice(0, 60);
+  ul.innerHTML = shown
+    .map((s) => {
+      const on = an.ids.includes(s.id);
+      const c = s.context || {};
+      const tags = [s.portal?.length ? `P ${s.portal.length}` : 'no Portal', s.machineShotId ? 'record' : 'live', c.grindSize ? `${esc(c.grindSize)}` : ''].filter(Boolean);
+      return `<li class="${on ? 'on' : ''}"><label><input type="checkbox" data-id="${esc(s.id)}" ${on ? 'checked' : ''} /> <span class="when">${esc(fmtDate(s.startedAt))}</span> <span class="what">${esc(c.beanName || 'unnamed coffee')} <small>${esc(s.profileName || '')}</small></span> <span class="tags">${tags.map((t) => `<span class="tag">${t}</span>`).join('')}</span></label></li>`;
+    })
+    .join('');
+  if (!shown.length) ul.innerHTML = `<li class="empty">${state.shots.length ? 'No shot matches.' : 'No shots recorded yet.'}</li>`;
+  setText('an-sel-count', an.ids.length ? `(${an.ids.length})` : '');
+  $('an-run').disabled = an.running || !an.ids.length || !aiConfig().key;
+}
+
+$('an-search').addEventListener('input', () => {
+  an.search = $('an-search').value;
+  renderAnalysisList();
+});
+$('an-list').addEventListener('change', (e) => {
+  const cb = e.target.closest('input[type=checkbox]');
+  if (!cb) return;
+  const id = cb.dataset.id;
+  if (cb.checked) {
+    if (an.ids.length >= REVIEW_MAX) {
+      cb.checked = false;
+      return toast(`Up to ${REVIEW_MAX} shots per review.`, 'error');
+    }
+    an.ids.push(id);
+  } else an.ids = an.ids.filter((x) => x !== id);
+  an.ids.sort((a, b) => (state.shots.find((s) => s.id === a)?.startedAt || 0) - (state.shots.find((s) => s.id === b)?.startedAt || 0));
+  an.savedId = null;
+  renderAnalysis();
+});
+
+/** Full analysis (not the cached summary) for the digest. */
+function fullAnalysis(shot) {
+  const lag = Number.isFinite(shot.lagSec) ? shot.lagSec : 0;
+  return analyzeShot(shot.portal || [], (shot.machine || []).map((s) => ({ t: s.t, w: s.w })), { doseG: Number(shot.context?.doseG) || 0, lagSec: lag, stopTimeSec: shot.durationSec });
+}
+
+/** Digest + compact profile for every ticked shot, oldest first. */
+function prepareReview() {
+  const shots = an.ids.map((id) => state.shots.find((s) => s.id === id)).filter(Boolean).sort((a, b) => a.startedAt - b.startedAt);
+  const items = shots.map((shot) => {
+    const digest = buildShotDigest(shot, fullAnalysis(shot));
+    const profile = compactProfile(shot.machineSource?.profile);
+    return { shot, digest, profile };
+  });
+  an.shots = items.map((x) => x.shot);
+  an.digests = items.map((x) => x.digest);
+  return items;
+}
+
+function renderAnalysisSize() {
+  const el = $('an-size');
+  if (!an.ids.length) return (el.textContent = '');
+  const items = prepareReview();
+  const { system, user } = buildReviewMessages(items.map(({ digest, profile }) => ({ digest, profile })), reviewOptions());
+  const tokens = approxTokens(system + user);
+  const noPortal = items.filter((x) => !x.digest.hasPortal).length;
+  el.textContent = `About ${tokens.toLocaleString()} tokens will be sent (${items.length} shot${items.length === 1 ? '' : 's'}${noPortal ? `, ${noPortal} without Portal data` : ''}).`;
+}
+
+function reviewOptions() {
+  return { grindStepUm: settings.aiGrindStepUm || 5, drink: settings.aiDrink || 'espresso', standingNotes: settings.aiNotes || '', taste: $('an-taste').value.trim(), question: $('an-question').value.trim() };
+}
+
+function stageTable(d) {
+  if (!d.stages.length) return '<p class="hint">No machine samples for this shot.</p>';
+  const rows = d.stages
+    .map(
+      (st) =>
+        `<tr><td>${esc(st.name)}</td><td class="num">${fmt(st.fromSec, 1)}–${fmt(st.toSec, 1)} s</td><td class="num">${st.waterInMl != null ? `${fmt(st.waterInMl, 0)} ml` : '–'}</td><td class="num">${fmt(st.cupStartG, 1)} → ${fmt(st.cupEndG, 1)} g</td><td class="num">${st.pressureMaxBar != null ? `${fmt(st.pressureMaxBar, 1)} bar` : '–'}${st.pressureEndBar != null ? ` <small>→ ${fmt(st.pressureEndBar, 1)}</small>` : ''}</td><td class="num">${st.flowMeanMlPerS != null ? `${fmt(st.flowMeanMlPerS, 2)} ml/s` : '–'}</td><td class="num">${st.tempStartC != null ? `${fmt(st.tempStartC, 1)} → ${fmt(st.tempEndC, 1)} °C` : '–'}</td><td class="num">${d.hasPortal ? `${st.ecStart != null ? fmt(st.ecStart, 1) : '–'} → ${st.ecEnd != null ? fmt(st.ecEnd, 1) : '–'}` : '<span class="muted">no Portal</span>'}</td></tr>`,
+    )
+    .join('');
+  const t = d.timeline;
+  const drips = t.pumpStopSec != null ? `<tr class="drips"><td>Drips</td><td class="num">${fmt(t.pumpStopSec, 1)}–${fmt(t.lastSampleSec, 1)} s</td><td class="num">–</td><td class="num">${fmt(t.cupAtPumpStopG, 1)} → ${fmt(t.cupAtEndG, 1)} g</td><td class="num">–</td><td class="num">–</td><td class="num">–</td><td class="num">${d.hasPortal && d.ec ? `${fmt(d.ec.finalEc, 1)} at the end` : ''}</td></tr>` : '';
+  const shares = d.ec?.solublesShareByStageEnd?.length ? `<p class="hint">Share of ∫EC dm in the cup by stage end: ${d.ec.solublesShareByStageEnd.map((x) => `${esc(x.stage)} ${x.solublesPctByEnd ?? '–'}%`).join(' · ')}${Object.keys(d.ec.solublesShareAtCupMass || {}).length ? ` — by cup mass: ${Object.entries(d.ec.solublesShareAtCupMass).map(([k, v]) => `${k} ${v}%`).join(', ')}` : ''}.</p>` : d.hasPortal ? '' : '<p class="hint">No Portal data: concentration is unknown for this shot; the review uses pressure, flow, cup weight and temperature.</p>';
+  return `<table class="stages"><thead><tr><th>Stage</th><th class="num">Time</th><th class="num">Water in</th><th class="num">Cup</th><th class="num">Pressure peak → end</th><th class="num">Flow</th><th class="num">Water temp</th><th class="num">EC start → end</th></tr></thead><tbody>${rows}${drips}</tbody></table>${shares}`;
+}
+
+function renderAnalysisDigest() {
+  const panel = $('an-digest-panel');
+  if (!an.ids.length) {
+    panel.hidden = true;
+    return;
+  }
+  const items = prepareReview();
+  panel.hidden = false;
+  $('an-digest').innerHTML = items
+    .map(({ shot, digest }) => {
+      const m = digest.meta;
+      const head = `<h3>${esc(shotLabel(shot))}</h3><p class="hint">${[m.grindUm ? `${fmt(m.grindUm, 0)} µm` : 'no grind recorded', m.doseG ? `${fmt(m.doseG, 1)} g in` : 'no dose', `${fmt(m.beverageG, 1)} g out (${m.beverageSource === 'profile' ? 'profile target' : m.beverageSource === 'weighed' ? 'weighed' : 'scale'})`, m.ratio ? `1 : ${fmt(m.ratio, 2)}` : null, `${fmt(m.durationSec, 1)} s`, m.profileTargetG ? `target ${fmt(m.profileTargetG, 1)} g` : null, m.profileTemperatureC ? `setpoint ${fmt(m.profileTemperatureC, 0)} °C` : null, digest.ec ? `mean EC/g ${fmt(digest.ec.meanEcPerG, 3)}` : null].filter(Boolean).join(' · ')}</p>`;
+      const gaps = digest.gaps.length ? `<ul class="gaps">${digest.gaps.map((g) => `<li>${esc(g)}</li>`).join('')}</ul>` : '';
+      return `<div class="an-shot">${head}${gaps}${stageTable(digest)}</div>`;
+    })
+    .join('');
+  // chart picker
+  const sel = $('an-chart-shot');
+  sel.innerHTML = items.map(({ shot }) => `<option value="${esc(shot.id)}">${esc(shotLabel(shot))}</option>`).join('');
+  if (!items.some((x) => x.shot.id === an.chartShotId)) an.chartShotId = items[items.length - 1].shot.id;
+  sel.value = an.chartShotId;
+  renderAnalysisChart();
+}
+
+function renderAnalysisChart() {
+  const shot = an.shots.find((s) => s.id === an.chartShotId) || an.shots[an.shots.length - 1];
+  if (!shot) return;
+  if (!an.chart) an.chart = new TimeChart($('an-chart'));
+  an.chart.u.setSize({ width: Math.max(320, $('an-chart').clientWidth), height: 300 });
+  an.chart.setShot(shot.machine || [], (shot.portal || []).map((p) => ({ ...p, t: p.t + (Number.isFinite(shot.lagSec) ? shot.lagSec : 0) })));
+}
+$('an-chart-shot').addEventListener('change', () => {
+  an.chartShotId = $('an-chart-shot').value;
+  renderAnalysisChart();
+});
+$('an-taste').addEventListener('input', renderAnalysisSize);
+$('an-question').addEventListener('input', renderAnalysisSize);
+
+let reportRenderTimer = null;
+function renderReport() {
+  const panel = $('an-report-panel');
+  panel.hidden = !an.markdown && !an.running;
+  $('an-report').innerHTML = renderMarkdown(an.markdown) + (an.running ? '<p class="streaming">…</p>' : '');
+  const m = an.meta;
+  $('an-report-title').textContent = m?.title || 'Review';
+  $('an-report-meta').textContent = m ? `${fmtDate(m.createdAt)} · ${PROVIDERS[m.provider]?.label || m.provider} · ${m.model}${m.durationMs ? ` · ${(m.durationMs / 1000).toFixed(0)} s` : ''}${an.savedId ? ' · saved' : ''}` : '';
+  const done = !!an.markdown && !an.running;
+  $('an-save').disabled = !done || !!an.savedId || an.failed;
+  $('an-save').textContent = an.savedId ? 'Saved' : 'Save review';
+  $('an-download').disabled = !done;
+  $('an-copy').disabled = !done;
+}
+
+async function runReview() {
+  if (an.running) return;
+  const { provider, key, model, baseUrl } = aiConfig();
+  if (!key) return toast('Add an API key under Settings → AI review first.', 'error');
+  if (!an.ids.length) return toast('Tick at least one shot.', 'error');
+  const items = prepareReview();
+  const options = reviewOptions();
+  const { system, user } = buildReviewMessages(items.map(({ digest, profile }) => ({ digest, profile })), options);
+  an.running = true;
+  an.failed = false;
+  an.markdown = '';
+  an.savedId = null;
+  an.meta = { createdAt: Date.now(), provider, model, title: reviewTitle(an.digests), shotIds: items.map((x) => x.shot.id), shotLabels: items.map((x) => shotLabel(x.shot)), taste: options.taste, question: options.question, durationMs: 0 };
+  const ctrl = new AbortController();
+  an.abort = ctrl;
+  $('an-stop').hidden = false;
+  $('an-run').disabled = true;
+  const status = $('an-status');
+  const t0 = performance.now();
+  const tick = setInterval(() => (status.textContent = `${PROVIDERS[provider].label} is writing… ${((performance.now() - t0) / 1000).toFixed(0)} s`), 500);
+  status.textContent = `Sending ${approxTokens(system + user).toLocaleString()} tokens to ${PROVIDERS[provider].label}…`;
+  renderReport();
+  log.info('ai', `review started: ${provider}/${model}, ${items.length} shot(s)`);
+  try {
+    await streamCompletion(
+      provider,
+      { key, model, baseUrl, system, user },
+      {
+        signal: ctrl.signal,
+        onDelta: (d) => {
+          an.markdown += d;
+          if (!reportRenderTimer) reportRenderTimer = setTimeout(() => { reportRenderTimer = null; renderReport(); }, 150);
+        },
+      },
+    );
+    an.meta.durationMs = performance.now() - t0;
+    status.textContent = `Done in ${(an.meta.durationMs / 1000).toFixed(0)} s.`;
+    log.info('ai', `review finished: ${an.markdown.length} chars in ${(an.meta.durationMs / 1000).toFixed(1)} s`);
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      status.textContent = 'Stopped.';
+      an.markdown += '\n\n*Stopped before the end.*';
+    } else {
+      status.textContent = '';
+      an.failed = !an.markdown; // a failure before any text arrived leaves nothing worth saving
+      an.markdown += `\n\n**The request failed:** ${err?.message || err}`;
+      toast(err?.message || String(err), 'error');
+      log.warn('ai', `review failed: ${err?.message || err}`);
+    }
+  } finally {
+    clearInterval(tick);
+    an.running = false;
+    an.abort = null;
+    $('an-stop').hidden = true;
+    renderAiSettings();
+    renderReport();
+  }
+}
+$('an-run').addEventListener('click', runReview);
+$('an-stop').addEventListener('click', () => an.abort?.abort());
+
+function reviewMarkdownFile(rev) {
+  const head = [`# ${rev.title}`, '', `${new Date(rev.createdAt).toLocaleString()} · ${PROVIDERS[rev.provider]?.label || rev.provider} · ${rev.model}`, '', `Shots: ${rev.shotLabels.map((l) => `- ${l}`).join('\n')}`, rev.taste ? `\nTaste: ${rev.taste}` : '', rev.question ? `\nQuestion: ${rev.question}` : '', '', '---', ''].join('\n');
+  return head + rev.markdown.trim() + '\n\n*Written by an AI model from the recorded samples; check numbers against the shot before acting on them.*\n';
+}
+
+async function saveReview() {
+  if (!an.markdown || an.running) return;
+  const rev = { id: `rev-${Date.now()}`, ...an.meta, markdown: an.markdown, digests: an.digests.map(({ series, ...rest }) => rest), app: $('about-version').textContent };
+  await store.putReview(rev);
+  an.savedId = rev.id;
+  toast('Review saved.');
+  log.info('ai', `review saved: ${rev.id}`);
+  renderReport();
+  await renderSavedReviews();
+}
+$('an-save').addEventListener('click', saveReview);
+$('an-download').addEventListener('click', () => {
+  const rev = { ...an.meta, markdown: an.markdown };
+  const base = `review-${stamp(rev.createdAt)}-${(an.digests[an.digests.length - 1]?.meta?.coffee?.bean || 'shot').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`;
+  deliver(`${base}.md`, reviewMarkdownFile(rev), 'text/markdown', 'reviews');
+});
+$('an-copy').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(reviewMarkdownFile({ ...an.meta, markdown: an.markdown }));
+    toast('Copied as Markdown.');
+  } catch {
+    toast('Could not copy (clipboard blocked).', 'error');
+  }
+});
+
+async function renderSavedReviews() {
+  const rows = await store.listReviews();
+  setText('analysis-tab-count', rows.length ? `(${rows.length})` : '');
+  setText('an-saved-count', rows.length ? `(${rows.length})` : '');
+  $('an-saved-empty').hidden = rows.length > 0;
+  $('an-saved').hidden = rows.length === 0;
+  $('an-saved-rows').innerHTML = rows
+    .map((r) => `<tr data-id="${esc(r.id)}"><td>${esc(fmtDate(r.createdAt))}</td><td>${esc(r.title)}</td><td>${r.shotIds?.length || 0}</td><td>${esc(PROVIDERS[r.provider]?.label || r.provider || '')} <small>${esc(r.model || '')}</small></td><td class="actions"><button class="btn small" data-act="open">Open</button><button class="btn small" data-act="download">.md</button><button class="btn small danger" data-act="delete">Delete</button></td></tr>`)
+    .join('');
+}
+
+$('an-saved-rows').addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-act]');
+  const tr = e.target.closest('tr[data-id]');
+  if (!btn || !tr) return;
+  const rev = await store.getReview(tr.dataset.id);
+  if (!rev) return;
+  if (btn.dataset.act === 'open') {
+    an.ids = rev.shotIds.filter((id) => state.shots.some((s) => s.id === id));
+    an.markdown = rev.markdown;
+    an.failed = false;
+    an.meta = { createdAt: rev.createdAt, provider: rev.provider, model: rev.model, title: rev.title, shotIds: rev.shotIds, shotLabels: rev.shotLabels, taste: rev.taste, question: rev.question, durationMs: rev.durationMs };
+    an.savedId = rev.id;
+    $('an-taste').value = rev.taste || '';
+    $('an-question').value = rev.question || '';
+    renderAnalysis();
+    renderReport();
+    $('an-report-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } else if (btn.dataset.act === 'download') {
+    deliver(`review-${stamp(rev.createdAt)}.md`, reviewMarkdownFile(rev), 'text/markdown', 'reviews');
+  } else if (btn.dataset.act === 'delete') {
+    const ok = await confirmDialog({ title: 'Delete this review?', body: `“${rev.title}” from ${fmtDate(rev.createdAt)} will be removed. The shots stay.`, action: 'Delete review' });
+    if (!ok) return;
+    await store.deleteReview(rev.id);
+    if (an.savedId === rev.id) an.savedId = null;
+    renderReport();
+    await renderSavedReviews();
+    toast('Review deleted.');
+  }
+});
+
+window.__pb = { state, store, portal, recorder, timeChart, massChart, calChart, compareChart, compare, machinePanel, settings, log, hist, an, openShotDialog, openCompare, openAnalysis, runReview, refreshShotList, recoverUnfinishedShots, backfillMachineRecords, autosaveShotFiles, refreshProfileTargets, get meticulous() { return meticulous; } };
 
 init().catch((err) => {
   console.error(err);

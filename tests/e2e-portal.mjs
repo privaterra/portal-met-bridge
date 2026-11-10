@@ -345,11 +345,110 @@ try {
   check('log file written to the folder (dated .log) and the download copy', folderFiles.some((f) => /logs\/\d{4}-\d{2}-\d{2}\.log$/.test(f)) && folderFiles.some((f) => /logs\/portal-met-bridge-log-.*\.txt$/.test(f)), folderFiles.filter((f) => f.includes('logs')).join(', '));
   const logText = await page.evaluate(() => { const k = Object.keys(window.__fakeFolderFiles).find((f) => /\.log$/.test(f)); return window.__fakeFolderFiles[k]; });
   check('log contains Portal GATT steps and recorder transitions', /\[portal\] state connected/.test(logText) && /\[recorder\] → recording/.test(logText) && /\[recorder\] saved shot/.test(logText), logText.split('\n').slice(0, 3).join(' | '));
+  // ---- AI review: settings against the mock's OpenAI-compatible endpoint
+  await page.selectOption('#set-ai-provider', 'openai');
+  await page.waitForTimeout(200);
+  check('choosing a provider shows only its block', (await page.isHidden('.ai-provider[data-provider="anthropic"]')) && (await page.isVisible('.ai-provider[data-provider="openai"]')));
+  await page.fill('#set-ai-key-openai', 'sk-test-123');
+  await page.fill('#set-ai-model-openai', 'mock-gpt-2');
+  await page.fill('#set-ai-base-openai', `http://127.0.0.1:${MOCK_PORT}`);
+  await page.click('#savebar .btn.primary');
+  await page.waitForTimeout(300);
+  check('AI settings save with the Save button and the key is shown masked', /Saved [34] settings/.test(await page.textContent('#savebar-status')) && /OpenAI · mock-gpt-2 · 127\.0\.0\.1:\d+ · key sk-tes…-123/.test(await page.textContent('#set-ai-note')), `${(await page.textContent('#savebar-status')).trim()} | ${await page.textContent('#set-ai-note')}`);
+  await page.click('#set-ai-models');
+  await page.waitForFunction(() => /models/.test(document.querySelector('#set-ai-test-result').textContent), null, { timeout: 5000 });
+  const modelOpts = await page.evaluate(() => [...document.querySelectorAll('#ai-models-openai option')].map((o) => o.value));
+  check('List models fills the picker from the endpoint (non-chat models dropped)', modelOpts.join(',') === 'mock-gpt-2,mock-gpt-1', modelOpts.join(','));
+  await page.click('#set-ai-test');
+  await page.waitForFunction(() => /answered|HTTP|reach/.test(document.querySelector('#set-ai-test-result').textContent), null, { timeout: 5000 });
+  check('Test key gets a reply through the chat endpoint', /OpenAI answered in .* with “OK”/.test(await page.textContent('#set-ai-test-result')), (await page.textContent('#set-ai-test-result')).trim());
+  await page.click('#set-ai-key-openai'); // the reveal toggle
+  await page.click('button.reveal[data-reveal="set-ai-key-openai"]');
+  check('Show reveals the key field', (await page.getAttribute('#set-ai-key-openai', 'type')) === 'text');
+  await page.click('button.reveal[data-reveal="set-ai-key-openai"]');
+  const logHasKey = await page.evaluate(() => /sk-test-123/.test(window.__pb.log.asText()));
+  check('the key never appears in the debug log', logHasKey === false);
+
   // Settings export round-trip
   await page.click('#settings-export');
   await page.waitForTimeout(500);
   const settingsDoc = await page.evaluate(() => { const k = Object.keys(window.__fakeFolderFiles).find((f) => /backups\/portal-met-bridge-settings-.*\.json$/.test(f)); return k ? JSON.parse(window.__fakeFolderFiles[k]) : null; });
   check('settings export has the machine address and recording options', settingsDoc?.app === 'portal-met-bridge-settings' && settingsDoc.settings.meticulousHost === `localhost:${MOCK_PORT}` && 'settleSec' in settingsDoc.settings && 'logEnabled' in settingsDoc.settings && settingsDoc.settings.beverageDefault === 'profile', JSON.stringify(settingsDoc?.settings || {}).slice(0, 120));
+  check('settings export carries the AI provider and model but never the API keys', settingsDoc?.settings.aiProvider === 'openai' && settingsDoc.settings.aiModelOpenai === 'mock-gpt-2' && !('aiKeyOpenai' in settingsDoc.settings) && !('aiKeyAnthropic' in settingsDoc.settings) && !JSON.stringify(settingsDoc).includes('sk-test-123'), Object.keys(settingsDoc?.settings || {}).filter((k) => k.startsWith('ai')).join(','));
+
+  // ---- Analysis: three shots, one of them without Portal data
+  await page.evaluate(async () => {
+    const { makeDemoShot } = await import('./js/demo.js?v=' + document.querySelector('script[src*="main.js"]').src.split('v=')[1]);
+    const s = { ...makeDemoShot({ seed: 9 }), id: 'machine-only', source: 'live', startedAt: Date.now() - 7200000, profileName: 'Blooming Espresso (demo)', context: { beanName: 'E2E coffee', doseG: 18, grindSize: '430 µm' } };
+    s.portal = [];
+    await window.__pb.store.putShot(s);
+    await window.__pb.store.putShot({ ...makeDemoShot({ seed: 11 }), id: 'second-portal', source: 'live', startedAt: Date.now() - 5400000, profileName: 'Blooming Espresso (demo)', context: { beanName: 'E2E coffee', doseG: 18.2, grindSize: '425 µm' } });
+    await window.__pb.refreshShotList();
+  });
+  await page.click('.view-tab[data-view="history"]');
+  await page.waitForTimeout(300);
+  const e2eShotId = rowsWithDemo.find((r) => r.id !== demoId).id;
+  for (const id of [e2eShotId, 'second-portal', 'machine-only']) await page.check(`#hist-rows tr[data-id="${id}"] input[type="checkbox"]`);
+  check('Analyze selected is enabled with ticked shots', /Analyze selected \(3\)/.test(await page.textContent('#hist-analyze')) && !(await page.isDisabled('#hist-analyze')));
+  await page.click('#hist-analyze');
+  await page.waitForTimeout(400);
+  check('Analyze selected opens the Analysis tab with those shots ticked', (await page.isVisible('#view-analysis')) && (await page.textContent('#an-sel-count')).trim() === '(3)' && (await page.evaluate(() => document.querySelectorAll('#an-list input:checked').length)) === 3);
+  check('the size note counts shots and the one without Portal data', /About [\d,]+ tokens will be sent \(3 shots, 1 without Portal data\)/.test(await page.textContent('#an-size')), (await page.textContent('#an-size')).trim());
+  const digestInfo = await page.evaluate(() => ({ blocks: document.querySelectorAll('#an-digest .an-shot').length, tables: document.querySelectorAll('#an-digest table.stages').length, noPortal: document.querySelectorAll('#an-digest .an-shot .muted').length > 0, gaps: [...document.querySelectorAll('#an-digest .gaps li')].map((li) => li.textContent).filter((t) => /No Belka Portal/.test(t)).length, stageNames: [...document.querySelectorAll('#an-digest .an-shot:last-child table.stages tbody td:first-child')].map((td) => td.textContent), chart: !!document.querySelector('#an-chart canvas') }));
+  check('the local digest shows a stage table per shot, the record\'s stage names, and marks the shot without Portal data', digestInfo.blocks === 3 && digestInfo.tables === 3 && digestInfo.noPortal && digestInfo.gaps === 1 && digestInfo.stageNames.slice(0, 4).join(',') === 'Saturate,Bloom,Gentle Rebuild,Extract' && digestInfo.chart, JSON.stringify(digestInfo));
+  await page.fill('#an-taste', 'sweet, a bit thin');
+  await page.fill('#an-question', 'Which shot was best?');
+  await page.click('#an-run');
+  await page.waitForFunction(() => !window.__pb.an.running && window.__pb.an.markdown.length > 100, null, { timeout: 20000 });
+  const review = await page.evaluate(() => ({ md: window.__pb.an.markdown, h3: [...document.querySelectorAll('#an-report h3')].map((h) => h.textContent), table: !!document.querySelector('#an-report table'), status: document.querySelector('#an-status').textContent, title: document.querySelector('#an-report-title').textContent, saveDisabled: document.querySelector('#an-save').disabled }));
+  check('the review streams in, rendered as sections and a table, with the prompt facts the mock echoes back', /mock review of 3 shots, one without Portal data/.test(review.md) && review.h3.join('|') === 'Verdict|Stages|What stands out|Suggested changes|Open questions|Sources' && review.table && /Done in/.test(review.status) && /^Shot review: 3 shots of E2E coffee.* on Blooming Espresso/.test(review.title) && !review.saveDisabled, JSON.stringify({ ...review, md: review.md.slice(0, 80) }));
+  const sent = await page.evaluate(async (port) => (await (await fetch(`http://127.0.0.1:${port}/mock/dial`)).json()).lastAiRequest, MOCK_PORT);
+  check('the request carried the model, a system prompt and the digest', sent && sent.model === 'mock-gpt-2' && sent.stream === true && sent.systemChars > 2000 && sent.userChars > 3000, JSON.stringify(sent));
+  await page.click('#an-save');
+  await page.waitForTimeout(300);
+  const savedRows = await page.evaluate(() => ({ rows: document.querySelectorAll('#an-saved-rows tr').length, tab: document.querySelector('#analysis-tab-count').textContent, btn: document.querySelector('#an-save').textContent }));
+  check('Save review stores it and the tab counts it', savedRows.rows === 1 && savedRows.tab === '(1)' && savedRows.btn === 'Saved', JSON.stringify(savedRows));
+  await page.click('#an-download');
+  await page.waitForTimeout(500);
+  const reviewFiles = await page.evaluate(() => Object.keys(window.__fakeFolderFiles || {}).filter((f) => /reviews\/review-.*\.md$/.test(f)));
+  const reviewMd = await page.evaluate((f) => window.__fakeFolderFiles[f], reviewFiles[0] || '');
+  check('Download .md writes the review with its header into the folder', reviewFiles.length === 1 && /^# Shot review: 3 shots of E2E coffee/.test(reviewMd) && /Taste: sweet, a bit thin/.test(reviewMd) && /## Verdict/.test(reviewMd), reviewFiles.join(','));
+  // a wrong model name surfaces as a readable error and cannot be saved
+  await page.evaluate(() => { window.__pb.settings.aiModelOpenai = 'bad-model'; });
+  await page.click('#an-run');
+  await page.waitForFunction(() => !window.__pb.an.running, null, { timeout: 10000 });
+  check('a provider error is shown in the report pane and Save stays off', /The request failed:.*HTTP 404.*bad-model.*List models/.test(await page.textContent('#an-report')) && (await page.isDisabled('#an-save')), (await page.textContent('#an-report')).slice(0, 160));
+  await page.evaluate(() => { window.__pb.settings.aiModelOpenai = 'mock-gpt-2'; });
+  // a fresh pick clears the report pane; Open brings a saved one back with its shots and questions
+  await page.fill('#an-taste', '');
+  await page.click('#an-saved-rows button[data-act="open"]');
+  await page.waitForTimeout(300);
+  check('Open restores the report, its shots and the questions asked', /mock review of 3 shots/.test(await page.textContent('#an-report')) && (await page.textContent('#an-sel-count')).trim() === '(3)' && (await page.inputValue('#an-taste')) === 'sweet, a bit thin' && /saved/.test(await page.textContent('#an-report-meta')));
+  const stored = await page.evaluate(async () => { const all = await window.__pb.store.listReviews(); const b = await window.__pb.store.exportAll(); return { n: all.length, shots: all[0]?.shotIds?.length, hasDigests: Array.isArray(all[0]?.digests) && all[0].digests.length === 3 && !('series' in all[0].digests[0]), inBackup: b.reviews?.length }; });
+  check('the review is stored with its digests (without the per-second trace) and travels in backups', stored.n === 1 && stored.shots === 3 && stored.hasDigests && stored.inBackup === 1, JSON.stringify(stored));
+  await page.click('#an-saved-rows button[data-act="delete"]');
+  await page.waitForSelector('#confirm-dialog[open]');
+  await page.click('#confirm-go');
+  await page.waitForTimeout(300);
+  check('Delete removes the saved review after confirmation', (await page.evaluate(() => document.querySelectorAll('#an-saved-rows tr').length)) === 0 && (await page.textContent('#analysis-tab-count')) === '');
+
+  // ---- Brew controls: the dial's actions over the API (the mock plays "heating → click to start")
+  await page.click('.view-tab[data-view="shots"]');
+  await page.waitForFunction(() => !document.getElementById('brew-controls').hidden && document.querySelectorAll('#brew-profile option').length === 3, null, { timeout: 8000 }).catch(() => {});
+  const brewOpts = await page.evaluate(() => [...document.querySelectorAll('#brew-profile option')].map((o) => o.textContent));
+  check('Brew controls appear while the machine is connected, with its profiles', (await page.isVisible('#brew-controls')) && brewOpts.length === 3 && /Blooming Espresso · 43 g · 92 °C/.test(brewOpts[0]), brewOpts.join(' | '));
+  await page.click('#brew-start');
+  await page.waitForFunction(() => /click to start/i.test(document.querySelector('#brew-state').textContent), null, { timeout: 5000 });
+  check('Start brew sends the dial click; the rail shows the machine waiting at "click to start"', /Ready — click to start · 93\.4 °C/.test(await page.textContent('#brew-state')) && (await page.textContent('#brew-start')) === 'Start brew now' && !(await page.isDisabled('#brew-stop')), (await page.textContent('#brew-state')).trim());
+  await page.click('#brew-stop');
+  await page.waitForFunction(() => /idle/i.test(document.querySelector('#brew-state').textContent), null, { timeout: 5000 });
+  check('Stop aborts and the machine returns to idle', /idle/.test(await page.textContent('#brew-state')));
+  await page.selectOption('#brew-profile', '80c5ea87');
+  await page.click('#brew-load');
+  await page.waitForTimeout(500);
+  const dialState = await page.evaluate(async (port) => (await (await fetch(`http://127.0.0.1:${port}/mock/dial`)).json()), MOCK_PORT);
+  check('Load sends the profile to the machine; the actions reached the API in order', dialState.loadedProfile === 'Blooming Espresso' && dialState.actions.join(',') === 'start,abort' && /Loaded "Blooming Espresso"/.test(await page.textContent('#toast')), JSON.stringify({ loaded: dialState.loadedProfile, actions: dialState.actions }));
+  await page.click('.view-tab[data-view="settings"]');
   // Back to browser downloads for the rest
   await page.uncheck('#log-save-exports');
   await page.dispatchEvent('#log-save-exports', 'change');
@@ -391,7 +490,7 @@ try {
   await page.click('#reset-all');
   await page.waitForSelector('#reset-dialog[open]');
   const listText = await page.textContent('#reset-list');
-  check('erase dialog lists shots, beans, settings, log and pairing', /1 shot/.test(listText) && /bean/.test(listText) && /settings/.test(listText) && /debug log/.test(listText), listText.replace(/\s+/g, ' ').slice(0, 160));
+  check('erase dialog lists shots, beans, reviews, settings (with the API key), log and pairing', /\d+ shots?/.test(listText) && /bean/.test(listText) && /0 saved AI reviews/.test(listText) && /including 1 API key/.test(listText) && /debug log/.test(listText), listText.replace(/\s+/g, ' ').slice(0, 160));
   check('erase button disabled until ERASE is typed', await page.isDisabled('#reset-go'));
   await page.fill('#reset-confirm', 'erase');
   check('typing ERASE (any case) enables it', !(await page.isDisabled('#reset-go')));
@@ -426,6 +525,7 @@ try {
     await window.__pb.store.putShot({ ...legacy, id: 'legacy-weighed', finalWeightG: 41, refractometer: { tdsPct: 9, beverageG: 39.2, eyPct: 19.6, at: t0 } });
     await window.__pb.store.putShot({ ...legacy, id: 'legacy-scale', startedAt: t0 - 86000000, finalWeightG: 41, refractometer: { tdsPct: 9, beverageG: 41, eyPct: 20.5, at: t0 } });
     await window.__pb.store.setSetting('beveragePromoted', false); // as a browser upgrading from v0.9 would have it
+    await window.__pb.store.putReview({ id: 'rev-restart', createdAt: t0, title: 'Shot review: restart test', shotIds: ['legacy-weighed'], shotLabels: ['x'], provider: 'openai', model: 'mock-gpt-2', markdown: '## Verdict\n\nkept', digests: [] });
   });
   await page.reload({ waitUntil: 'networkidle' });
   await page.waitForTimeout(1200);
@@ -433,7 +533,11 @@ try {
   const promoted = await page.evaluate(async () => { const rows = await window.__pb.store.listShots(); const w = rows.find((x) => x.id === 'legacy-weighed'); const sc = rows.find((x) => x.id === 'legacy-scale'); return { weighed: w?.beverageG, scale: sc?.beverageG, flag: await window.__pb.store.getSetting('beveragePromoted', false) }; });
   check('upgrade: a cup weighed with a reading on an older version becomes the shot\'s own weighed value; a scale-equal one does not', promoted.weighed === 39.2 && promoted.scale === undefined && promoted.flag === true, JSON.stringify(promoted));
   check('unfinished checkpoint recovered as a shot after restart', recovered && !recovered.inProgress && recovered.recovered && recovered.duration === 19.5 && recovered.weight === 43 && recovered.cache, JSON.stringify(recovered));
-  check('no page errors', errors.length === 0, errors.join(' | ').slice(0, 300));
+  await page.click('.view-tab[data-view="analysis"]');
+  await page.waitForTimeout(300);
+  check('a saved review survives a restart and is listed with its title', (await page.evaluate(() => [...document.querySelectorAll('#an-saved-rows tr')].map((tr) => tr.textContent))).some((t) => /Shot review: restart test/.test(t)) && (await page.textContent('#analysis-tab-count')) === '(1)');
+  const unexpected = errors.filter((e) => !/bad-model|404 \(Not Found\)/.test(e)); // the deliberate wrong-model request above logs a 404
+  check('no page errors', unexpected.length === 0, unexpected.join(' | ').slice(0, 300));
 
   if (headed) await page.waitForTimeout(5000);
   await browser.close();

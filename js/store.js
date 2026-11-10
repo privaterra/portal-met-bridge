@@ -4,7 +4,7 @@
 // store is the pick-list of coffees you have entered before.
 
 const DB_NAME = 'portal-met-bridge';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 function openDb() {
   return new Promise((resolve, reject) => {
@@ -25,6 +25,11 @@ function openDb() {
       if (!db.objectStoreNames.contains('lists')) {
         const l = db.createObjectStore('lists', { keyPath: 'key' });
         l.createIndex('kind', 'kind');
+      }
+      // v4: saved AI reviews (the report text plus the digest it was made from)
+      if (!db.objectStoreNames.contains('reviews')) {
+        const r = db.createObjectStore('reviews', { keyPath: 'id' });
+        r.createIndex('createdAt', 'createdAt');
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -223,6 +228,41 @@ export class Store {
     return n;
   }
 
+  // --------------------------------------------------------------- reviews --
+
+  async putReview(review) {
+    const db = await this.dbp;
+    await tx(db, 'reviews', 'readwrite', (s) => s.put(review));
+    return review;
+  }
+
+  async getReview(id) {
+    const db = await this.dbp;
+    return tx(db, 'reviews', 'readonly', (s) => s.get(id));
+  }
+
+  async deleteReview(id) {
+    const db = await this.dbp;
+    await tx(db, 'reviews', 'readwrite', (s) => s.delete(id));
+  }
+
+  /** Newest first. */
+  async listReviews({ limit = 500 } = {}) {
+    const db = await this.dbp;
+    return new Promise((resolve, reject) => {
+      const out = [];
+      const t = db.transaction('reviews', 'readonly');
+      const req = t.objectStore('reviews').index('createdAt').openCursor(null, 'prev');
+      req.onsuccess = () => {
+        const c = req.result;
+        if (!c || out.length >= limit) return resolve(out);
+        out.push(c.value);
+        c.continue();
+      };
+      req.onerror = () => reject(req.error);
+    });
+  }
+
   // -------------------------------------------------------------- settings --
 
   async getSetting(key, fallback = null) {
@@ -239,8 +279,8 @@ export class Store {
   // ------------------------------------------------------- backup/restore --
 
   async exportAll() {
-    const [shots, beans, ...lists] = await Promise.all([this.listShots({ limit: 100000 }), this.listBeans({ limit: 100000 }), ...LIST_KINDS.map((k) => this.listValues(k))]);
-    return { app: 'portal-met-bridge', version: 3, exportedAt: new Date().toISOString(), shots, beans, lists: lists.flat() };
+    const [shots, beans, reviews, ...lists] = await Promise.all([this.listShots({ limit: 100000 }), this.listBeans({ limit: 100000 }), this.listReviews({ limit: 100000 }), ...LIST_KINDS.map((k) => this.listValues(k))]);
+    return { app: 'portal-met-bridge', version: 4, exportedAt: new Date().toISOString(), shots, beans, reviews, lists: lists.flat() };
   }
 
   async importAll(json) {
@@ -258,6 +298,9 @@ export class Store {
     }
     if (Array.isArray(json.lists)) {
       for (const l of json.lists) if (l && l.key && LIST_KINDS.includes(l.kind)) await tx(db, 'lists', 'readwrite', (s) => s.put(l));
+    }
+    if (Array.isArray(json.reviews)) {
+      for (const r of json.reviews) if (r && r.id && typeof r.markdown === 'string') await tx(db, 'reviews', 'readwrite', (s) => s.put(r));
     }
     return n;
   }

@@ -322,6 +322,137 @@ await test('recorder: checkpoint recovery finalises an interrupted shot, drops a
   return new Promise((resolve) => setTimeout(() => { assert.equal(shots.length, 1); assert.equal(shots[0].portal.length, 1); assert.equal(shots[0].machine.length, 3); assert.equal(shots[0].finalWeightG, 10); resolve(); }, 30));
 });
 
+import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, splitStages, cumulativeWater } from '../js/review.js';
+import { PROVIDERS, buildRequest, deltaFromEvent, makeSseParser, normalizeModelList, textFromResponse, maskKey, baseUrlFor } from '../js/ai.js';
+
+await test('review digest: stages, water, cup, EC shares; works without Portal data', () => {
+  const demo = makeDemoShot({ seed: 3 });
+  const shot = { ...demo, id: 'd1', startedAt: Date.UTC(2026, 10, 10, 13, 36), profileName: 'Blooming Espresso', profileTargetG: 38, lagSec: 0, machineShotId: 'rec', context: { beanName: 'Geishify', roaster: 'Cafe Unido', doseG: 18.3, grindSize: '80 µm', grinderName: 'Zerno Z1' } };
+  // stage names like the machine's record
+  shot.machine = shot.machine.map((m) => ({ ...m, status: m.t < 2 ? 'Saturate' : m.t < 6 ? 'Bloom' : m.t < 9 ? 'Gentle Rebuild' : m.t < 29 ? 'Extract' : 'retracting' }));
+  const a = analyzeShot(shot.portal, shot.machine.map((m) => ({ t: m.t, w: m.w })), { doseG: 18.3, stopTimeSec: shot.durationSec });
+  const d = buildShotDigest(shot, a);
+  assert.deepEqual(d.stages.map((x) => x.name), ['Saturate', 'Bloom', 'Gentle Rebuild', 'Extract']);
+  assert.equal(d.meta.doseG, 18.3);
+  assert.equal(d.meta.grindUm, 80);
+  assert.equal(d.meta.profileTargetG, 38);
+  assert.equal(d.meta.beverageG, 38, 'beverage follows the profile-target default');
+  assert.ok(d.meta.ratio > 2 && d.meta.ratio < 2.2, `ratio ${d.meta.ratio}`);
+  assert.ok(d.hasPortal && d.ec && d.ec.meanEcPerG > 0);
+  const last = d.ec.solublesShareByStageEnd[d.ec.solublesShareByStageEnd.length - 1];
+  assert.ok(last.solublesPctByEnd >= 95 && last.solublesPctByEnd <= 100, `share by end of Extract ${last.solublesPctByEnd}`);
+  assert.ok(d.timeline.pumpStopSec >= 28 && d.timeline.pumpStopSec <= 30, `pump stop ${d.timeline.pumpStopSec}`);
+  const water = cumulativeWater(shot.machine);
+  assert.ok(Math.abs(water[water.length - 1].ml - d.timeline.totalWaterMl) < 0.1);
+  assert.equal(d.series[0].length, 6);
+  assert.ok(d.series.length >= Math.floor(shot.durationSec) && d.series.length <= Math.ceil(shot.durationSec) + 2, `one row per second: ${d.series.length}`);
+  assert.ok(d.stages.every((st) => st.waterInMl >= 0 && st.cupEndG >= st.cupStartG - 0.05));
+  assert.ok(!d.gaps.some((g) => /Portal/.test(g)), 'no Portal gap when the Portal was there');
+  // without Portal data: the same digest, EC marked unknown, review still possible
+  const dry = buildShotDigest({ ...shot, portal: [] }, analyzeShot([], shot.machine.map((m) => ({ t: m.t, w: m.w })), { doseG: 18.3 }));
+  assert.equal(dry.hasPortal, false);
+  assert.equal(dry.ec, null);
+  assert.ok(dry.gaps.some((g) => /No Belka Portal data/.test(g)));
+  assert.equal(dry.stages.length, 4);
+  assert.ok(dry.stages.every((st) => st.ecStart === null), 'no EC per stage without Portal');
+  assert.ok(dry.series.every((row) => row[5] === null));
+  // nothing at all
+  const empty = buildShotDigest({ id: 'e', machine: [], portal: [], context: {} }, null);
+  assert.equal(empty.stages.length, 0);
+  assert.ok(empty.gaps.some((g) => /No machine samples/.test(g)) && empty.gaps.some((g) => /No dose/.test(g)));
+  // stage splitting ignores idle/retracting names and marks the pump stop
+  const st = splitStages([{ t: 0, status: 'click to start' }, { t: 1, status: 'Saturate' }, { t: 2, status: 'Saturate' }, { t: 3, status: 'Extract' }, { t: 4, status: 'retracting' }]);
+  assert.deepEqual(st.map((x) => [x.name, x.samples.length]), [['Saturate', 2], ['Extract', 1]]);
+  assert.equal(st[1].pumpStopT, 4);
+});
+
+await test('review prompt: method and template, user context, one block per shot, profile compaction', () => {
+  const demo = makeDemoShot({ seed: 4 });
+  const shot = { ...demo, id: 's1', startedAt: Date.UTC(2026, 10, 9, 9, 0), profileName: 'Blooming Espresso', context: { beanName: 'Supernova', doseG: 18, grindSize: '420 µm' } };
+  const d = buildShotDigest(shot, analyzeShot(shot.portal, shot.machine.map((m) => ({ t: m.t, w: m.w })), { doseG: 18 }));
+  const profile = compactProfile({ id: 'abc', name: 'Blooming Espresso', temperature: 92, final_weight: 43, display: { description: 'Floral bloom', image: 'data:image/png;base64,AAAA' }, variables: [{ name: 'Bloom Time', key: 'bloom_time', type: 'time', value: 20 }], stages: [{ name: 'Bloom', key: 'bloom', type: 'flow', dynamics: { over: 'time', interpolation: 'linear', points: [[0, 0]] }, exit_triggers: [{ type: 'time', value: '$bloom_time' }], limits: [{ type: 'pressure', value: 7 }] }] });
+  assert.equal(profile.finalWeightG, 43);
+  assert.equal(profile.stages[0].exitTriggers[0].value, '$bloom_time');
+  assert.ok(!JSON.stringify(profile).includes('base64'), 'image stripped');
+  const { system, user } = buildReviewMessages([{ digest: d, profile }], { grindStepUm: 5, drink: 'cortado', standingNotes: 'SSP HU burrs', taste: 'sour', question: 'bloom or grind first?' });
+  for (const h of ['## Verdict', '## Stages', '## What stands out', '## Suggested changes', '## Open questions', '## Sources']) assert.ok(system.includes(h), `template has ${h}`);
+  assert.ok(/stage by stage/.test(system) && /one change per shot/i.test(system), 'method steps present');
+  assert.ok(user.includes('Shots to review: 1') && user.includes('steps of 5 µm') && user.includes('a cortado'));
+  assert.ok(user.includes('SSP HU burrs') && user.includes('sour') && user.includes('bloom or grind first?'));
+  assert.ok(user.includes('"finalWeightG":43') && user.includes('# Shot 1 of 1'));
+  assert.ok(user.includes('t_s, pressure_bar, flow_ml_s, cup_g, water_temp_c, portal_ec_ms_cm'));
+  const two = buildReviewMessages([{ digest: d, profile: null }, { digest: { ...d, hasPortal: false, ec: null, gaps: ['No Belka Portal data for this shot: x'] }, profile: null }], {});
+  assert.ok(two.user.includes('Shots to review: 2') && two.user.includes('# Shot 2 of 2') && two.user.includes('No Belka Portal data') && two.user.includes("record is not attached"));
+  assert.equal(reviewTitle([d]), 'Shot review: Supernova on Blooming Espresso');
+  assert.equal(reviewTitle([d, d]), 'Shot review: 2 shots of Supernova on Blooming Espresso');
+});
+
+await test('markdown renderer: headings, lists, tables, emphasis, code, links — and escaping', () => {
+  const html = renderMarkdown('## Verdict\n\nClean **shot** with *bloom* and `bloom_time`.\n\n- one\n- two <b>x</b>\n  - nested\n\n1. first\n2. second\n\n| Stage | Time |\n|---|---|\n| Bloom | 0–2 s |\n\n> note\n\n[Cafe](https://example.com/x) <script>alert(1)</script>');
+  assert.ok(html.includes('<h3>Verdict</h3>'), 'h2 → h3 (the app owns h1/h2)');
+  assert.ok(html.includes('<b>shot</b>') && html.includes('<i>bloom</i>') && html.includes('<code>bloom_time</code>'));
+  assert.ok(html.includes('<ul><li>one</li><li>two &lt;b&gt;x&lt;/b&gt;<ul><li>nested</li></ul></li></ul>'), html);
+  assert.ok(html.includes('<ol><li>first</li><li>second</li></ol>'));
+  assert.ok(html.includes('<table><thead><tr><th>Stage</th><th>Time</th></tr></thead><tbody><tr><td>Bloom</td><td>0–2 s</td></tr></tbody></table>'));
+  assert.ok(html.includes('<blockquote><p>note</p></blockquote>'));
+  assert.ok(html.includes('<a href="https://example.com/x" target="_blank" rel="noopener noreferrer">Cafe</a>'));
+  assert.ok(!html.includes('<script') && html.includes('&lt;script&gt;'), 'raw HTML is escaped');
+  assert.equal(renderMarkdown(''), '');
+  assert.ok(renderMarkdown('```\nx < y\n```').includes('<pre><code>x &lt; y</code></pre>'));
+  assert.ok(!renderMarkdown('[x](javascript:alert(1))').includes('href'), 'only http(s) links become anchors');
+});
+
+await test('AI providers: request shapes, stream deltas, SSE framing, model lists, key masking', () => {
+  const opts = { model: 'm', key: 'k', system: 'S', user: 'U', maxTokens: 10 };
+  const a = buildRequest('anthropic', opts);
+  assert.equal(a.url, 'https://api.anthropic.com/v1/messages');
+  assert.equal(a.headers['anthropic-dangerous-direct-browser-access'], 'true');
+  assert.equal(a.body.system, 'S');
+  assert.equal(a.body.messages[0].content, 'U');
+  assert.equal(a.body.stream, true);
+  const o = buildRequest('openai', { ...opts, baseUrl: 'http://127.0.0.1:1234/' });
+  assert.equal(o.url, 'http://127.0.0.1:1234/v1/chat/completions', 'custom endpoint, trailing slash dropped');
+  assert.equal(o.headers.authorization, 'Bearer k');
+  assert.deepEqual(o.body.messages.map((m) => m.role), ['system', 'user']);
+  const g = buildRequest('google', opts);
+  assert.equal(g.url, 'https://generativelanguage.googleapis.com/v1beta/models/m:streamGenerateContent?alt=sse');
+  assert.equal(g.headers['x-goog-api-key'], 'k');
+  assert.equal(g.body.system_instruction.parts[0].text, 'S');
+  assert.equal(buildRequest('google', { ...opts, stream: false }).url.endsWith(':generateContent'), true);
+  assert.throws(() => buildRequest('nope', opts), /Unknown provider/);
+  assert.throws(() => buildRequest('openai', { ...opts, key: '' }), /No API key/);
+  assert.equal(baseUrlFor('anthropic', ''), 'https://api.anthropic.com');
+  // deltas
+  assert.equal(deltaFromEvent('anthropic', JSON.stringify({ type: 'content_block_delta', delta: { type: 'text_delta', text: 'Hi' } })), 'Hi');
+  assert.equal(deltaFromEvent('anthropic', JSON.stringify({ type: 'message_start' })), '');
+  assert.equal(deltaFromEvent('anthropic', JSON.stringify({ type: 'message_stop' })), null);
+  assert.throws(() => deltaFromEvent('anthropic', JSON.stringify({ type: 'error', error: { message: 'overloaded' } })), /overloaded/);
+  assert.equal(deltaFromEvent('openai', JSON.stringify({ choices: [{ delta: { content: 'Yo' } }] })), 'Yo');
+  assert.equal(deltaFromEvent('openai', '[DONE]'), null);
+  assert.equal(deltaFromEvent('openai', JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })), '');
+  assert.equal(deltaFromEvent('google', JSON.stringify({ candidates: [{ content: { parts: [{ text: 'A' }, { text: 'B' }] } }] })), 'AB');
+  assert.equal(deltaFromEvent('google', 'not json'), '');
+  assert.equal(textFromResponse('anthropic', { content: [{ type: 'text', text: 'x' }, { type: 'tool_use' }] }), 'x');
+  assert.equal(textFromResponse('openai', { choices: [{ message: { content: 'y' } }] }), 'y');
+  assert.equal(textFromResponse('google', { candidates: [{ content: { parts: [{ text: 'z' }] } }] }), 'z');
+  // SSE framing across chunk boundaries, CRLF, multi-line data
+  const p = makeSseParser();
+  assert.deepEqual(p.push('event: ping\ndata: {"a":1}\n\ndata: {"b"'), ['{"a":1}']);
+  assert.deepEqual(p.push(':2}\r\n\r\ndata: x\ndata: y\n\n'), ['{"b":2}', 'x\ny']);
+  assert.deepEqual(p.push('data: tail'), []);
+  assert.deepEqual(p.flush(), ['tail']);
+  // model lists
+  const oa = normalizeModelList('openai', { data: [{ id: 'gpt-6.1-sol', created: 3 }, { id: 'tts-1', created: 9 }, { id: 'gpt-5.5', created: 2 }, { id: 'mock-gpt', created: 1 }] });
+  assert.deepEqual(oa.map((m) => m.id), ['gpt-6.1-sol', 'gpt-5.5', 'mock-gpt'], 'non-chat models dropped, newest first, compatible servers kept');
+  const gg = normalizeModelList('google', { models: [{ name: 'models/gemini-3.8-flash', displayName: 'Gemini 3.8 Flash', supportedGenerationMethods: ['generateContent'] }, { name: 'models/text-embedding-1', supportedGenerationMethods: ['embedContent'] }] });
+  assert.deepEqual(gg.map((m) => m.id), ['gemini-3.8-flash']);
+  const an = normalizeModelList('anthropic', { data: [{ id: 'claude-sonnet-5-5', display_name: 'Claude Sonnet 5.5', created_at: '2026-05-01' }, { id: 'claude-haiku-5-5', display_name: 'Claude Haiku 5.5', created_at: '2026-06-01' }] });
+  assert.deepEqual(an.map((m) => m.id), ['claude-haiku-5-5', 'claude-sonnet-5-5']);
+  assert.equal(maskKey('sk-ant-api03-abcdefghijklmnop'), 'sk-ant…mnop');
+  assert.equal(maskKey('short'), '•••••');
+  assert.ok(Object.keys(PROVIDERS).every((k) => PROVIDERS[k].defaultModel && PROVIDERS[k].keyUrl.startsWith('https://')));
+});
+
 await test('release: every version stamp agrees with package.json (tools/bump-version.mjs keeps them in step)', () => {
   const version = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
   const files = ['index.html', ...readdirSync(new URL('../js', import.meta.url)).filter((f) => f.endsWith('.js')).map((f) => `js/${f}`)];

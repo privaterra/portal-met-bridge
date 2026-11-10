@@ -158,6 +158,41 @@ export class MeticulousClient extends EventTarget {
     return list[0] || null;
   }
 
+  /**
+   * Machine actions (backend: api/action.py → Machine.ALLOWED_ESP_ACTIONS + ["reset","abort"]).
+   * 'start' is the dial click: from idle it loads the last profile and heats; at
+   * "click to start" it begins the shot. 'abort' ends a running profile the safe
+   * way (home during a shot, stop otherwise). The backend answers 409 when the
+   * ESP refuses and 400 with the allowed list for an unknown action.
+   */
+  async action(name) {
+    const r = await fetch(`${this.baseUrl}/api/v1/action/${encodeURIComponent(name)}`, { method: 'POST', signal: AbortSignal.timeout(8000) });
+    const text = await r.text();
+    let json = null;
+    try {
+      json = text ? parseLooseJson(text) : null;
+    } catch {
+      json = null;
+    }
+    if (!r.ok) {
+      const why = json?.error || (r.status === 409 ? 'the machine refused it (busy, or a motor-strain alarm is up)' : `HTTP ${r.status}`);
+      const err = new Error(`${name}: ${why}`);
+      err.status = r.status;
+      err.allowed = json?.allowed_actions;
+      throw err;
+    }
+    return json || { action: name, status: 'ok' };
+  }
+
+  /** Load a profile by id so the next start brews it (409 while the machine is busy). */
+  async loadProfile(id) {
+    const r = await fetch(`${this.baseUrl}/api/v1/profile/load/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(10000) });
+    const text = await r.text();
+    const json = text ? parseLooseJson(text) : null;
+    if (!r.ok) throw new Error(json?.error || `HTTP ${r.status}`);
+    return json; // { name, id }
+  }
+
   _emit(type, detail) {
     this.dispatchEvent(new CustomEvent(type, { detail }));
   }

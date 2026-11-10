@@ -324,7 +324,7 @@ await test('recorder: checkpoint recovery finalises an interrupted shot, drops a
 
 import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, splitStages, cumulativeWater } from '../js/review.js';
 import { profileFinalWeight, BEVERAGE_PREFERENCES } from '../js/analysis.js';
-import { parseMarkdown, parseInline, markdownToText, beverageNoteFor } from '../js/review.js';
+import { parseMarkdown, parseInline, markdownToText, beverageNoteFor, reviewProfileOf } from '../js/review.js';
 import { reviewToDocx, reviewMarkdownFile, reviewFileName, reviewFile, REVIEW_FORMATS, pdfSafe } from '../js/review-export.js';
 import { unzipSync, strFromU8 } from '../vendor/fflate.esm.js';
 import { PROVIDERS, buildRequest, deltaFromEvent, makeSseParser, normalizeModelList, textFromResponse, maskKey, baseUrlFor, isParamRejection, stripOptionalParams, streamCompletion } from '../js/ai.js';
@@ -545,6 +545,53 @@ await test('final weight (v0.12): profile target from the record, variables and 
   assert.equal(d2.meta.beverageSource, 'weighed');
   const { system, user } = buildReviewMessages([{ digest: d2, profile: null }], {});
   assert.ok(/never present either as the measured yield/.test(system) && user.includes('"weighedG":43') && user.includes('authoritative'));
+});
+
+await test('before the review (v0.13): a per-shot weight pin beats the Settings default; a chosen profile is what the digest reads', () => {
+  // per-shot pin: Settings says "profile" but this shot was confirmed with the scale, and vice versa
+  setPref('profile');
+  const pinned = { finalWeightG: 42.6, profileTargetG: 43, beveragePrefer: 'scale' };
+  assert.equal(beverageSource(pinned), 'scale');
+  assert.equal(beverageOf(pinned), 42.6);
+  assert.equal(beverageSource({ ...pinned, beveragePrefer: 'profile' }), 'profile');
+  assert.equal(beverageSource({ ...pinned, beveragePrefer: 'manual' }), null, 'manual pin with nothing typed → unknown');
+  assert.equal(beverageSource({ ...pinned, beveragePrefer: 'manual', beverageG: 41 }), 'weighed', 'a typed value is the cup');
+  assert.equal(beverageSource({ ...pinned, beveragePrefer: 'nonsense' }), 'profile', 'an unknown pin falls back to Settings');
+  assert.equal(beverageSource(pinned, { prefer: 'profile' }), 'profile', 'an explicit prefer wins over the pin');
+  setPref('scale');
+  assert.equal(beverageSource({ finalWeightG: 42.6, profileTargetG: 43, beveragePrefer: 'profile' }), 'profile');
+  setPref('profile');
+  // which profile the review reads: the user's choice, else the machine's record, else nothing
+  const recorded = { id: 'demo0001', name: 'Blooming Espresso', temperature: 93, final_weight: 38, variables: [{ key: 'bloom_time', name: 'Bloom Time', type: 'time', value: 15 }] };
+  const chosen = { id: '80c5ea87', name: 'Blooming Espresso', temperature: 92, final_weight: 43, variables: [{ key: 'bloom_time', name: 'Bloom Time', type: 'time', value: 20 }, { key: 'extraction_flow', name: 'Extraction flow', type: 'flow', value: 2 }], stages: [{ name: 'Preinfusion' }, { name: 'Bloom' }, { name: 'Extraction' }] };
+  assert.equal(reviewProfileOf({ machineSource: { profile: recorded } }), recorded);
+  assert.equal(reviewProfileOf({ machineSource: { profile: recorded }, reviewProfile: chosen }), chosen);
+  assert.equal(reviewProfileOf({ profileName: 'Blooming Espresso' }), null);
+  const demo = makeDemoShot({ seed: 7 });
+  const base = { ...demo, finalWeightG: 42.6, beverageG: 43, profileTargetG: 38, context: { doseG: 18 }, machineSource: { ...(demo.machineSource || {}), profile: recorded } };
+  const asRecorded = buildShotDigest(base, null);
+  assert.equal(asRecorded.meta.profile, 'Blooming Espresso');
+  assert.equal(asRecorded.meta.profileChoice, 'as recorded by the machine for this shot');
+  assert.equal(asRecorded.meta.profileTargetG, 38);
+  assert.equal(asRecorded.meta.profileTemperatureC, 93);
+  assert.deepEqual(asRecorded.meta.profileVariables.map((v) => [v.key, v.value]), [['bloom_time', 15]]);
+  assert.equal(asRecorded.meta.recordedProfile, undefined);
+  const withChoice = buildShotDigest({ ...base, reviewProfile: chosen, profileTargetG: 43, profileTemperatureC: 92 }, null);
+  assert.equal(withChoice.meta.profileChoice, 'chosen by the user for this review');
+  assert.equal(withChoice.meta.profileTargetG, 43, 'the chosen profile sets the target');
+  assert.equal(withChoice.meta.profileTemperatureC, 92);
+  assert.deepEqual(withChoice.meta.profileVariables.map((v) => `${v.name} ${v.value}`), ['Bloom Time 20', 'Extraction flow 2']);
+  assert.deepEqual(withChoice.meta.profileStages, ['Preinfusion', 'Bloom', 'Extraction']);
+  assert.deepEqual(withChoice.meta.recordedProfile, { name: 'Blooming Espresso', finalWeightG: 38, temperatureC: 93 }, 'the record is kept for contrast');
+  assert.equal(withChoice.meta.beverageG, 43, 'the weighed cup is still the cup');
+  const explicit = buildShotDigest(base, null, { profile: chosen });
+  assert.equal(explicit.meta.profileTargetG, 43, 'a profile passed in beats the shot');
+  const nameOnly = buildShotDigest({ ...demo, machineSource: undefined, profileName: 'Mystery', profileTargetG: 0, context: { doseG: 18 } }, null);
+  assert.equal(nameOnly.meta.profileChoice, 'name only (no record attached)');
+  assert.equal(nameOnly.meta.profile, 'Mystery');
+  // the prompt carries the chosen profile and its variables
+  const { user } = buildReviewMessages([{ digest: withChoice, profile: compactProfile(chosen) }], {});
+  assert.ok(user.includes('"profileChoice":"chosen by the user for this review"') && user.includes('"extraction_flow"') && user.includes('"profileTargetG":43'), 'prompt names the choice, its variables and target');
 });
 
 await test('review export: parser blocks, Markdown file, Word document (zip parts, headings, table), file names', () => {

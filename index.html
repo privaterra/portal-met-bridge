@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>portal-met-bridge</title>
   <link rel="stylesheet" href="vendor/uPlot.min.css" />
-  <link rel="stylesheet" href="css/app.css?v=0.12.0" />
+  <link rel="stylesheet" href="css/app.css?v=0.13.0" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M4 26 L10 8 L16 20 L22 6 L28 26' fill='none' stroke='%232447B8' stroke-width='3' stroke-linejoin='round'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -387,9 +387,21 @@
               <button id="an-stop" class="btn" hidden>Stop</button>
               <span class="inline-note" id="an-status"></span>
             </div>
+            <p class="hint" id="an-run-hint"></p>
             <p class="hint" id="an-size"></p>
           </div>
         </div>
+      </section>
+
+      <section class="panel" id="an-preflight" hidden>
+        <div class="panel-head">
+          <h2>Before the review: confirm the profile and the final weight</h2>
+          <div class="panel-tools">
+            <button id="an-confirm-all" class="btn small">Confirm all as shown</button>
+          </div>
+        </div>
+        <p class="hint">The reviewer reads the brew profile's target weight, temperature, variables and stage names, and judges the shot by its final weight — so check both for every shot. Pick the profile the machine recorded, or another one on the machine if the record is missing or wrong; then say which final weight is the true one: the hand-weighed cup, the profile's target, the machine's scale, or a number you type now. Confirming writes the choice to the shot, so History, exports and later reviews use the same values.</p>
+        <div id="an-preflight-rows"></div>
       </section>
 
       <section class="panel" id="an-digest-panel" hidden>
@@ -776,6 +788,6 @@
   </dialog>
 
   <div class="toast" id="toast" hidden></div>
-  <script type="module" src="js/main.js?v=0.12.0"></script>
+  <script type="module" src="js/main.js?v=0.13.0"></script>
 </body>
 </html>

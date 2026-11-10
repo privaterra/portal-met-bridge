@@ -6,7 +6,7 @@
 //   buildReviewMessages(...)         → { system, user } for any provider
 //   renderMarkdown(md)               → safe HTML for the report pane
 
-import { beverageOf, beverageSource, profileTargetOf, measuredEy, grindMicrons } from './analysis.js?v=0.12.0';
+import { beverageOf, beverageSource, profileTargetOf, profileFinalWeight, measuredEy, grindMicrons } from './analysis.js?v=0.13.0';
 
 const r1 = (v) => (Number.isFinite(v) ? Math.round(v * 10) / 10 : null);
 const r2 = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
@@ -86,7 +86,12 @@ function integralAtMass(curve, mass) {
  * The per-stage story of one shot, with the Portal's EC folded in when present.
  * `analysis` is the result of analyzeShot() (may be null or a machine-only result).
  */
-export function buildShotDigest(shot, analysis, { profileTargetG } = {}) {
+/** The profile a review should read: the one the user chose for this shot, else the machine's record of what was brewed. */
+export function reviewProfileOf(shot) {
+  return shot?.reviewProfile || shot?.machineSource?.profile || null;
+}
+
+export function buildShotDigest(shot, analysis, { profileTargetG, profile = reviewProfileOf(shot) } = {}) {
   const machine = (shot.machine || []).filter((s) => Number.isFinite(s.t)).slice().sort((a, b) => a.t - b.t);
   const portal = (shot.portal || []).filter((s) => Number.isFinite(s.t) && Number.isFinite(s.ec)).slice().sort((a, b) => a.t - b.t);
   const lag = Number.isFinite(shot.lagSec) ? shot.lagSec : 0;
@@ -100,13 +105,18 @@ export function buildShotDigest(shot, analysis, { profileTargetG } = {}) {
   // ---- metadata
   const dose = Number(c.doseG) > 0 ? Number(c.doseG) : null;
   const beverage = beverageOf(shot);
-  const target = Number(profileTargetG) > 0 ? Number(profileTargetG) : profileTargetOf(shot);
+  const target = Number(profileTargetG) > 0 ? Number(profileTargetG) : profile ? profileFinalWeight(profile) ?? profileTargetOf(shot) : profileTargetOf(shot);
+  const recorded = shot.machineSource?.profile || null;
   const meta = {
     id: shot.id,
     startedAt: shot.startedAt ? new Date(shot.startedAt).toISOString() : null,
-    profile: shot.profileName || null,
+    profile: profile?.name || shot.profileName || null,
+    profileChoice: shot.reviewProfile ? 'chosen by the user for this review' : recorded ? "as recorded by the machine for this shot" : 'name only (no record attached)',
+    recordedProfile: shot.reviewProfile && recorded ? { name: recorded.name || null, finalWeightG: profileFinalWeight(recorded), temperatureC: Number(recorded.temperature) || null } : undefined,
     profileTargetG: target ?? null,
-    profileTemperatureC: Number.isFinite(shot.profileTemperatureC) ? shot.profileTemperatureC : null,
+    profileTemperatureC: Number(profile?.temperature) > 0 ? Number(profile.temperature) : Number.isFinite(shot.profileTemperatureC) ? shot.profileTemperatureC : null,
+    profileVariables: Array.isArray(profile?.variables) ? profile.variables.filter((v) => v && v.key).map((v) => ({ name: v.name ?? v.key, key: v.key, type: v.type ?? null, value: v.value })) : [],
+    profileStages: Array.isArray(profile?.stages) ? profile.stages.map((s) => s?.name).filter(Boolean) : [],
     coffee: { bean: c.beanName || null, roaster: c.roaster || null, origin: c.origin || null, process: c.process || null, roastLevel: c.roastLevel || null },
     grinder: c.grinderName || null,
     grindUm: grindMicrons(c),

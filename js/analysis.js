@@ -473,8 +473,9 @@ export function profileTargetOf(shot) {
  * (Before v0.10 a cup weighed with a reading lived in refractometer.beverageG;
  * store.promoteLegacyBeverage() moves those to shot.beverageG once.)
  */
-export function beverageSource(shot, { prefer = beveragePreference } = {}) {
+export function beverageSource(shot, { prefer } = {}) {
   if (!shot) return null;
+  if (!prefer) prefer = BEVERAGE_PREFERENCES.includes(shot.beveragePrefer) ? shot.beveragePrefer : beveragePreference; // a shot can pin its own source (confirmed before a review)
   if (Number.isFinite(shot.beverageG) && shot.beverageG > 0) return 'weighed';
   if (prefer === 'manual') return null; // the user weighs every cup; nothing stands in for a missing value
   if (prefer === 'profile' && profileTargetOf(shot) > 0) return 'profile';

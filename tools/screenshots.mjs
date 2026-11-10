@@ -192,10 +192,20 @@ try {
   await page.waitForTimeout(500);
   await page.fill('#an-taste', 'Sweet and round as a cortado; a little drying at the end when drunk straight.');
   await page.fill('#an-question', 'Is 420 µm right for this bean, and should I touch the bloom or the grind next?');
+  // before the review: the machine's 43 g "Blooming Espresso" is chosen over the demo record, the cup weight typed
+  const pfRow = `#an-preflight .pf-row[data-id="${liveId}"]`;
+  await page.selectOption(`${pfRow} select.pf-profile`, '80c5ea87');
+  await page.waitForFunction((sel) => /final weight 43\.0 g/.test(document.querySelector(`${sel} .pf-vars`)?.textContent || ''), pfRow, { timeout: 5000 });
+  await page.fill(`${pfRow} .pf-manual`, '43.2');
+  await page.waitForTimeout(200);
+  const pfBox = await page.evaluate(() => { const r = document.querySelector('#an-preflight').getBoundingClientRect(); return { x: Math.max(0, r.x - 8), y: Math.max(0, r.y + window.scrollY - 8), width: r.width + 16, height: r.height + 16 }; });
+  await shot(page, 'analysis-confirm', { clip: pfBox, fullPage: true });
+  await page.click(`${pfRow} .pf-confirm`);
+  await page.waitForFunction(() => !document.querySelector('#an-run').disabled, null, { timeout: 5000 });
   await page.click('#an-run');
   await page.waitForFunction(() => !window.__pb.an.running && window.__pb.an.markdown.length > 500, null, { timeout: 30000 });
+  await page.evaluate(() => { document.querySelector('#toast').hidden = true; window.scrollTo(0, 0); });
   await page.waitForTimeout(400);
-  await page.evaluate(() => window.scrollTo(0, 0));
   await shot(page, 'analysis');
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.evaluate(() => document.querySelector('#an-report-panel').scrollIntoView({ block: 'start' }));

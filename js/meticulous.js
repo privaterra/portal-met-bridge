@@ -125,8 +125,13 @@ export class MeticulousClient extends EventTarget {
   notifications() {
     return this._get('/api/v1/notifications').catch(() => []);
   }
-  profiles() {
-    return this._get('/api/v1/profile/list');
+  /** The machine's profiles; `full` adds the stages (the list is otherwise name/target/temperature/variables). */
+  profiles({ full = false } = {}) {
+    return this._get(full ? '/api/v1/profile/list?full=true' : '/api/v1/profile/list');
+  }
+  /** One profile with everything in it (stages, variables, description); 404 when the id is unknown. */
+  profile(id) {
+    return this._get(`/api/v1/profile/get/${encodeURIComponent(id)}`);
   }
   lastProfile() {
     return this._get('/api/v1/profile/last').catch(() => null);

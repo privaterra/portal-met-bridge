@@ -1,19 +1,19 @@
 // main.js — wires the devices, the recorder, storage, charts and export together.
 
-import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.12.0';
-import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.12.0';
-import { MachinePanel } from './machine-panel.js?v=0.12.0';
-import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.12.0';
-import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.12.0';
-import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.12.0';
-import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, profileFinalWeight, setBeveragePreference, grindMicrons, measuredEy, DEFAULTS } from './analysis.js?v=0.12.0';
-import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, approxTokens } from './review.js?v=0.12.0';
-import { PROVIDERS, streamCompletion, listModels, testKey, maskKey } from './ai.js?v=0.12.0';
-import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.12.0';
-import { makeDemoShot } from './demo.js?v=0.12.0';
-import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug, loadJsPdf } from './export.js?v=0.12.0';
-import { REVIEW_FORMATS, reviewFile, reviewMarkdownFile } from './review-export.js?v=0.12.0';
-import { log, Logger, formatLine } from './log.js?v=0.12.0';
+import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.13.0';
+import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.13.0';
+import { MachinePanel } from './machine-panel.js?v=0.13.0';
+import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.13.0';
+import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.13.0';
+import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.13.0';
+import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, profileFinalWeight, setBeveragePreference, grindMicrons, measuredEy, DEFAULTS } from './analysis.js?v=0.13.0';
+import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, approxTokens, reviewProfileOf } from './review.js?v=0.13.0';
+import { PROVIDERS, streamCompletion, listModels, testKey, maskKey } from './ai.js?v=0.13.0';
+import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.13.0';
+import { makeDemoShot } from './demo.js?v=0.13.0';
+import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug, loadJsPdf } from './export.js?v=0.13.0';
+import { REVIEW_FORMATS, reviewFile, reviewMarkdownFile } from './review-export.js?v=0.13.0';
+import { log, Logger, formatLine } from './log.js?v=0.13.0';
 import qrcode from '../vendor/qrcode.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -356,8 +356,8 @@ async function init() {
   log.configure({ enabled: settings.logEnabled, level: settings.logLevel, packets: settings.logPackets });
   await restoreLogFolder();
   renderLogStatus();
-  $('about-version').textContent = 'v0.12.0';
-  log.info('app', `portal-met-bridge v0.12.0 started · ${navigator.userAgent}`);
+  $('about-version').textContent = 'v0.13.0';
+  log.info('app', `portal-met-bridge v0.13.0 started · ${navigator.userAgent}`);
 
   const env = await environmentCheck();
   renderPortalSteps({ secure: env.secure, api: env.api, adapter: env.adapter });
@@ -2540,7 +2540,7 @@ $('brew-load').addEventListener('click', async () => {
 // -------------------------------------------------------------- AI review --
 
 const REVIEW_MAX = 8;
-const an = { ids: [], search: '', running: false, failed: false, abort: null, markdown: '', digests: [], shots: [], meta: null, savedId: null, chartShotId: null, chart: null };
+const an = { ids: [], search: '', running: false, failed: false, abort: null, markdown: '', digests: [], shots: [], meta: null, savedId: null, chartShotId: null, chart: null, confirmed: new Set(), pending: new Map() };
 
 /** Provider, key and model currently chosen in Settings. */
 function aiConfig() {
@@ -2560,7 +2560,7 @@ function renderAiSettings() {
   const run = $('an-run');
   if (run) {
     run.textContent = `Review with ${label.replace(/ \(.*\)$/, '')}`;
-    run.disabled = an.running || !an.ids.length || !key;
+    run.disabled = an.running || !an.ids.length || !key || !allConfirmed();
   }
 }
 
@@ -2620,8 +2620,11 @@ function openAnalysis(ids) {
   const valid = (ids || []).filter((id) => state.shots.some((s) => s.id === id && !s.inProgress)).slice(0, REVIEW_MAX);
   an.ids = valid;
   an.savedId = null;
+  an.confirmed = new Set();
+  an.pending = new Map();
   showView('analysis');
 }
+const allConfirmed = () => an.ids.length > 0 && an.ids.every((id) => an.confirmed.has(id));
 
 function shotLabel(s) {
   const c = s.context || {};
@@ -2630,6 +2633,7 @@ function shotLabel(s) {
 
 function renderAnalysis() {
   renderAnalysisList();
+  renderPreflight();
   renderAiSettings();
   renderAnalysisDigest();
   renderAnalysisSize();
@@ -2650,7 +2654,7 @@ function renderAnalysisList() {
     .join('');
   if (!shown.length) ul.innerHTML = `<li class="empty">${state.shots.length ? 'No shot matches.' : 'No shots recorded yet.'}</li>`;
   setText('an-sel-count', an.ids.length ? `(${an.ids.length})` : '');
-  $('an-run').disabled = an.running || !an.ids.length || !aiConfig().key;
+  $('an-run').disabled = an.running || !an.ids.length || !aiConfig().key || !allConfirmed();
 }
 
 $('an-search').addEventListener('input', () => {
@@ -2667,10 +2671,220 @@ $('an-list').addEventListener('change', (e) => {
       return toast(`Up to ${REVIEW_MAX} shots per review.`, 'error');
     }
     an.ids.push(id);
-  } else an.ids = an.ids.filter((x) => x !== id);
+  } else {
+    an.ids = an.ids.filter((x) => x !== id);
+    an.confirmed.delete(id);
+    an.pending.delete(id);
+  }
   an.ids.sort((a, b) => (state.shots.find((s) => s.id === a)?.startedAt || 0) - (state.shots.find((s) => s.id === b)?.startedAt || 0));
   an.savedId = null;
   renderAnalysis();
+});
+
+// ------------------------------------------------- before the review --
+// Each ticked shot is confirmed before the model sees it: which profile the
+// review should read (the one the machine recorded, or another profile on the
+// machine) and what the final weight is (the hand-weighed value, the profile's
+// target, the scale, or a number typed now). Confirming writes the choice to
+// the shot, so History, exports and later reviews agree with it.
+
+const WEIGHT_CHOICES = { weighed: 'weighed by hand', profile: "the profile's target", scale: "the machine's scale", manual: 'typed now' };
+
+function pendingFor(shot) {
+  if (!an.pending.has(shot.id)) {
+    const src = beverageSource(shot);
+    an.pending.set(shot.id, { profileSel: 'recorded', weight: src || 'manual', manual: '' });
+  }
+  return an.pending.get(shot.id);
+}
+
+/** The profile the pending choice points at: the record (or the shot's earlier choice) or a machine profile fetched in full. */
+function pendingProfile(shot, pend) {
+  if (pend.profileSel === 'recorded') return reviewProfileOf(shot);
+  return state.profileFull?.get(pend.profileSel) || null;
+}
+
+function profileLine(profile, { shotTarget } = {}) {
+  if (!profile) return 'no profile details — the shot carries a name only';
+  const target = profileFinalWeight(profile) ?? shotTarget;
+  const vars = (profile.variables || []).filter((v) => v && v.key).map((v) => `${v.name || v.key} ${v.value}${v.type === 'time' ? ' s' : v.type === 'flow' ? ' ml/s' : v.type === 'pressure' ? ' bar' : v.type === 'weight' ? ' g' : v.type === 'temperature' ? ' °C' : ''}`);
+  return [
+    `final weight ${target > 0 ? `${fmt(target, 1)} g` : 'not set'}`,
+    Number(profile.temperature) > 0 ? `${fmt(Number(profile.temperature), 0)} °C` : null,
+    ...vars,
+    Array.isArray(profile.stages) && profile.stages.length ? `${profile.stages.length} stages: ${profile.stages.map((s) => s?.name).filter(Boolean).join(' → ')}` : 'stages not included',
+  ].filter(Boolean).join(' · ');
+}
+
+function renderPreflight() {
+  const panel = $('an-preflight');
+  if (!an.ids.length) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  const shots = an.ids.map((id) => state.shots.find((s) => s.id === id)).filter(Boolean).sort((a, b) => a.startedAt - b.startedAt);
+  const machineProfiles = state.profileList || [];
+  $('an-preflight-rows').innerHTML = shots
+    .map((shot) => {
+      const pend = pendingFor(shot);
+      const recorded = reviewProfileOf(shot);
+      const profile = pendingProfile(shot, pend);
+      const target = profile ? profileFinalWeight(profile) ?? profileTargetOf(shot) : profileTargetOf(shot);
+      const done = an.confirmed.has(shot.id);
+      const recLabel = shot.reviewProfile ? `Chosen earlier — ${esc(shot.reviewProfile.name || '?')}` : recorded ? `As recorded — ${esc(recorded.name || shot.profileName || '?')}` : `Name only — ${esc(shot.profileName || 'unknown profile')}`;
+      const options = [`<option value="recorded" ${pend.profileSel === 'recorded' ? 'selected' : ''}>${recLabel}${target > 0 ? ` · ${fmt(target, 0)} g` : ''}</option>`]
+        .concat(machineProfiles.map((p) => `<option value="${esc(p.id)}" ${pend.profileSel === p.id ? 'selected' : ''}>On the machine — ${esc(p.name)}${p.finalWeightG ? ` · ${fmt(p.finalWeightG, 0)} g` : ''}${p.temperatureC ? ` · ${fmt(p.temperatureC, 0)} °C` : ''}</option>`))
+        .join('');
+      const w = (value, label, enabled = true) => `<label class="${enabled ? '' : 'off'}"><input type="radio" name="pfw-${esc(shot.id)}" value="${value}" ${pend.weight === value ? 'checked' : ''} ${enabled ? '' : 'disabled'} /> ${label}</label>`;
+      return `<div class="pf-row ${done ? 'done' : ''}" data-id="${esc(shot.id)}">
+        <h3>${esc(shotLabel(shot))} ${done ? '<span class="pf-state">✓ confirmed</span>' : '<span class="pf-state todo">to confirm</span>'}</h3>
+        <div class="pf-grid">
+          <label class="field"><span>Brew profile the review should read</span>
+            <select class="pf-profile">${options}</select>
+          </label>
+          <p class="pf-vars">${esc(profileLine(profile, { shotTarget: profileTargetOf(shot) }))}${!machineProfiles.length ? ' · <em>connect the machine to choose another profile</em>' : ''}</p>
+          <fieldset class="pf-weight"><legend>Final weight of this brew</legend>
+            ${w('weighed', `weighed by hand: <b>${Number(shot.beverageG) > 0 ? `${fmt(shot.beverageG, 1)} g` : 'none'}</b>`, Number(shot.beverageG) > 0)}
+            ${w('profile', `the profile's target: <b>${target > 0 ? `${fmt(target, 1)} g` : 'unknown'}</b>`, target > 0)}
+            ${w('scale', `the machine's scale: <b>${Number(shot.finalWeightG) > 0 ? `${fmt(shot.finalWeightG, 1)} g` : 'none'}</b>`, Number(shot.finalWeightG) > 0)}
+            ${w('manual', `other: <input type="number" class="pf-manual" step="0.1" min="0" inputmode="decimal" value="${esc(pend.manual)}" placeholder="g" /> g`)}
+          </fieldset>
+          <div class="row"><button class="btn small primary pf-confirm">${done ? 'Confirm again' : 'Confirm'}</button></div>
+        </div>
+      </div>`;
+    })
+    .join('');
+  $('an-confirm-all').disabled = false;
+  $('an-run-hint').textContent = runHint();
+}
+
+const runHint = () => (allConfirmed() ? '' : `Confirm the profile and final weight of ${an.ids.length === 1 ? 'the shot' : `all ${an.ids.length} shots`} above before the review can start.`);
+
+/** A choice changed after confirming: take the tick away without redrawing the row (the typed field keeps focus). */
+function markUnconfirmed(id) {
+  an.confirmed.delete(id);
+  const row = $('an-preflight-rows').querySelector(`.pf-row[data-id="${CSS.escape(id)}"]`);
+  if (row) {
+    row.classList.remove('done');
+    const st = row.querySelector('.pf-state');
+    if (st) {
+      st.textContent = 'to confirm';
+      st.classList.add('todo');
+    }
+    const b = row.querySelector('.pf-confirm');
+    if (b) b.textContent = 'Confirm';
+  }
+  $('an-run').disabled = true;
+  $('an-run-hint').textContent = runHint();
+}
+
+$('an-preflight-rows').addEventListener('change', async (e) => {
+  const row = e.target.closest('.pf-row');
+  if (!row) return;
+  const shot = state.shots.find((s) => s.id === row.dataset.id);
+  if (!shot) return;
+  const pend = pendingFor(shot);
+  if (e.target.classList.contains('pf-profile')) {
+    pend.profileSel = e.target.value;
+    if (pend.profileSel !== 'recorded' && !state.profileFull?.get(pend.profileSel)) {
+      try {
+        const full = await meticulous.profile(pend.profileSel);
+        if (!state.profileFull) state.profileFull = new Map();
+        state.profileFull.set(pend.profileSel, full);
+        log.info('ai', `profile ${full?.name || pend.profileSel} fetched for the review`);
+      } catch (err) {
+        toast(`Could not fetch that profile from the machine: ${err?.message || err}`, 'error');
+        pend.profileSel = 'recorded';
+      }
+    }
+    an.confirmed.delete(shot.id);
+    renderPreflight();
+    renderAnalysisSize();
+  } else if (e.target.type === 'radio') {
+    pend.weight = e.target.value;
+    markUnconfirmed(shot.id);
+  }
+  // the typed field is handled on input, below
+});
+$('an-preflight-rows').addEventListener('input', (e) => {
+  if (e.target.classList.contains('pf-manual')) {
+    const row = e.target.closest('.pf-row');
+    const pend = an.pending.get(row?.dataset.id);
+    if (pend) {
+      pend.manual = e.target.value;
+      pend.weight = 'manual';
+      row.querySelector('input[type=radio][value="manual"]').checked = true;
+      markUnconfirmed(row.dataset.id);
+    }
+  }
+});
+
+/** Write the pending choices for one shot to the store and mark it confirmed. */
+async function confirmShot(id) {
+  const shot = await store.getShot(id);
+  if (!shot) return false;
+  const pend = pendingFor(shot);
+  // profile
+  if (pend.profileSel !== 'recorded') {
+    const full = state.profileFull?.get(pend.profileSel);
+    if (!full) return toast('That profile has not been fetched from the machine yet.', 'error') && false;
+    shot.reviewProfile = compactProfile(full);
+    shot.reviewProfile.id = full.id || pend.profileSel;
+    shot.profileName = full.name || shot.profileName;
+    shot.profileId = full.id || pend.profileSel;
+    const t = profileFinalWeight(full);
+    if (t > 0) shot.profileTargetG = t;
+    if (Number(full.temperature) > 0) shot.profileTemperatureC = Number(full.temperature);
+  } else if (shot.reviewProfile && pend.profileSel === 'recorded' && shot.machineSource?.profile) {
+    // back to what the machine recorded
+    delete shot.reviewProfile;
+    shot.profileName = shot.machineSource.profile.name || shot.profileName;
+    shot.profileId = shot.machineSource.profile.id || shot.profileId;
+    const t = profileFinalWeight(shot.machineSource.profile);
+    if (t > 0) shot.profileTargetG = t;
+  }
+  // final weight
+  if (pend.weight === 'manual') {
+    const v = Number(pend.manual);
+    if (!(v > 0 && v < 5000)) return toast('Type the final weight in grams, or pick one of the other sources.', 'error') && false;
+    shot.beverageG = Math.round(v * 10) / 10;
+    delete shot.beveragePrefer;
+  } else if (pend.weight === 'weighed') {
+    if (!(Number(shot.beverageG) > 0)) return toast('There is no hand-weighed value for this shot.', 'error') && false;
+    delete shot.beveragePrefer;
+  } else {
+    delete shot.beverageG;
+    shot.beveragePrefer = pend.weight; // 'profile' | 'scale', pinned for this shot whatever Settings says
+  }
+  if (shot.refractometer?.tdsPct > 0) shot.refractometer = { ...shot.refractometer, eyPct: extractionYield(shot.refractometer.tdsPct, beverageOf(shot), Number(shot.context?.doseG) || 0) };
+  delete shot.analysisCache;
+  recomputeCache(shot);
+  await store.putShot(shot);
+  if (shot.files && settings.autoSaveFiles) autosaveShotFiles(shot).catch(() => {});
+  an.confirmed.add(id);
+  log.info('ai', `confirmed for review: ${id} → profile ${shot.profileName}${shot.reviewProfile ? ' (chosen)' : ''}, final weight ${fmt(beverageOf(shot), 1)} g (${beverageSource(shot) || 'unknown'})`);
+  return true;
+}
+
+$('an-preflight-rows').addEventListener('click', async (e) => {
+  const btn = e.target.closest('.pf-confirm');
+  if (!btn) return;
+  const id = e.target.closest('.pf-row')?.dataset.id;
+  if (!id) return;
+  btn.disabled = true;
+  const ok = await confirmShot(id);
+  await refreshShotList();
+  if (state.selected?.id === id) await selectShot(id);
+  renderAnalysis();
+  if (ok) toast('Confirmed.');
+});
+$('an-confirm-all').addEventListener('click', async () => {
+  let n = 0;
+  for (const id of an.ids) if (await confirmShot(id)) n++;
+  await refreshShotList();
+  renderAnalysis();
+  toast(n === an.ids.length ? `Confirmed ${n} shot${n === 1 ? '' : 's'}.` : `Confirmed ${n} of ${an.ids.length}; the rest need a final weight.`);
 });
 
 /** Full analysis (not the cached summary) for the digest. */
@@ -2684,7 +2898,7 @@ function prepareReview() {
   const shots = an.ids.map((id) => state.shots.find((s) => s.id === id)).filter(Boolean).sort((a, b) => a.startedAt - b.startedAt);
   const items = shots.map((shot) => {
     const digest = buildShotDigest(shot, fullAnalysis(shot));
-    const profile = compactProfile(shot.machineSource?.profile);
+    const profile = compactProfile(reviewProfileOf(shot));
     return { shot, digest, profile };
   });
   an.shots = items.map((x) => x.shot);
@@ -2731,7 +2945,7 @@ function renderAnalysisDigest() {
   $('an-digest').innerHTML = items
     .map(({ shot, digest }) => {
       const m = digest.meta;
-      const head = `<h3>${esc(shotLabel(shot))}</h3><p class="hint">${[m.grindUm ? `${fmt(m.grindUm, 0)} µm` : 'no grind recorded', m.doseG ? `${fmt(m.doseG, 1)} g in` : 'no dose', `${fmt(m.beverageG, 1)} g out (${m.beverageSource === 'profile' ? 'profile target' : m.beverageSource === 'weighed' ? 'weighed' : 'scale'})`, m.ratio ? `1 : ${fmt(m.ratio, 2)}` : null, `${fmt(m.durationSec, 1)} s`, m.profileTargetG ? `target ${fmt(m.profileTargetG, 1)} g` : null, m.profileTemperatureC ? `setpoint ${fmt(m.profileTemperatureC, 0)} °C` : null, digest.ec ? `mean EC/g ${fmt(digest.ec.meanEcPerG, 3)}` : null].filter(Boolean).join(' · ')}</p>`;
+      const head = `<h3>${esc(shotLabel(shot))}</h3><p class="hint">${[m.profile ? `${m.profile}${shot.reviewProfile ? ' (profile chosen for this review)' : m.recordedProfile === undefined && !shot.machineSource?.profile ? ' (name only)' : ''}` : 'profile unknown', m.grindUm ? `${fmt(m.grindUm, 0)} µm` : 'no grind recorded', m.doseG ? `${fmt(m.doseG, 1)} g in` : 'no dose', `${fmt(m.beverageG, 1)} g out (${m.beverageSource === 'profile' ? 'profile target' : m.beverageSource === 'weighed' ? 'weighed' : 'scale'})`, m.ratio ? `1 : ${fmt(m.ratio, 2)}` : null, `${fmt(m.durationSec, 1)} s`, m.profileTargetG ? `target ${fmt(m.profileTargetG, 1)} g` : null, m.profileTemperatureC ? `setpoint ${fmt(m.profileTemperatureC, 0)} °C` : null, digest.ec ? `mean EC/g ${fmt(digest.ec.meanEcPerG, 3)}` : null].filter(Boolean).join(' · ')}</p>`;
       const gaps = digest.gaps.length ? `<ul class="gaps">${digest.gaps.map((g) => `<li>${esc(g)}</li>`).join('')}</ul>` : '';
       return `<div class="an-shot">${head}${gaps}${stageTable(digest)}</div>`;
     })
@@ -2778,6 +2992,7 @@ async function runReview() {
   const { provider, key, model, baseUrl } = aiConfig();
   if (!key) return toast('Add an API key under Settings → AI review first.', 'error');
   if (!an.ids.length) return toast('Tick at least one shot.', 'error');
+  if (!allConfirmed()) return toast('Confirm the brew profile and final weight of every ticked shot first.', 'error');
   const items = prepareReview();
   const options = reviewOptions();
   const { system, user } = buildReviewMessages(items.map(({ digest, profile }) => ({ digest, profile })), options);
@@ -2891,6 +3106,8 @@ $('an-saved-rows').addEventListener('click', async (e) => {
   if (!rev) return;
   if (btn.dataset.act === 'open') {
     an.ids = rev.shotIds.filter((id) => state.shots.some((s) => s.id === id));
+    an.confirmed = new Set(an.ids); // they were confirmed when this review was made
+    an.pending = new Map();
     an.markdown = rev.markdown;
     an.failed = false;
     an.meta = { createdAt: rev.createdAt, provider: rev.provider, model: rev.model, title: rev.title, shotIds: rev.shotIds, shotLabels: rev.shotLabels, taste: rev.taste, question: rev.question, durationMs: rev.durationMs };

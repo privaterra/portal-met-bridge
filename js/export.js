@@ -3,7 +3,7 @@
 // loaded lazily from vendor/ only when a PDF is asked for.
 
 import { zipSync, strToU8 } from '../vendor/fflate.esm.js';
-import { beverageOf, beverageSource, profileTargetOf, measuredEy } from './analysis.js?v=0.11.0';
+import { beverageOf, beverageSource, profileTargetOf, measuredEy } from './analysis.js?v=0.11.1';
 
 const APP = 'portal-met-bridge';
 

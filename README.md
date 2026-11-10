@@ -6,10 +6,13 @@ It runs entirely on your machine: no account, no cloud, nothing leaves the LAN. 
 
 > **Status: early, vibe-coded, tested on one machine and a simulated Portal.** The Meticulous side has run against a real machine. The Portal side has been exercised end-to-end in Chrome against a simulated Portal that speaks the documented protocol (`tests/e2e-portal.mjs`), but **not yet against a physical Portal** — the in-app *Connection check* exists so that the first person who does can see exactly which step succeeds or fails. See [How this was built](#how-this-was-built) and [Contributing](CONTRIBUTING.md) before relying on it. Issues and pull requests are welcome.
 
-![Shots view](docs/screenshot-shots.png)
-![History view](docs/screenshot-history.png)
+![Shots view — machine and Portal connected, a recorded shot with its machine record attached, the Brew controls in the rail](docs/screenshot-shots.png)
+![History view — grind, dose → beverage with the profile-target mark, ratio, EC/g, TDS and data tags](docs/screenshot-history.png)
+![Analysis view — the shot picker, the locally computed stage table with the shot's graph, and the start of an AI review](docs/screenshot-analysis.png)
 ![Machine view](docs/screenshot-machine.png)
 ![Settings view](docs/screenshot-settings.png)
+
+*The pictures are made by `npm run screenshots` (`tools/screenshots.mjs`) from the app running against the simulated Portal and the mock machine, with a week of seeded shots; the review text in the Analysis pictures comes from the test suite's mock endpoint, through the same request path a real provider uses.*
 
 ## What the Portal actually measures
 
@@ -53,9 +56,11 @@ Then, in the app:
 
 ![Comparing shots](docs/screenshot-compare.png) The **This coffee** panel on the Shots tab describes the *next* shot and is written into the one you just pulled while it is the most recent; anything older is edited from History, so preparing the next brew never rewrites an old shot.
 
-10. **Brew from the app.** While the machine is connected, the Machine section of the Shots rail grows a **Brew** block: pick a profile and *Load* it, then **Start brew** sends the dial's own click over the machine's API (`/api/v1/action/start`). From idle the machine loads the profile and heats; the line under the picker follows its status ("Heating · 92.1 °C", then **Ready — click to start**), and at that point *Start brew now* begins the shot without touching the knob. *Preheat* heats without starting, *Stop* ends a running profile the safe way (the piston retracts), *Tare* zeroes the scale. If you would rather skip the second press altogether, the machine has an *auto-start after preheat* setting of its own. These buttons only ever do what the dial does; nothing is sent unless you press them.
+10. **Brew from the app.** ![Brew controls](docs/screenshot-brew.png) While the machine is connected, the Machine section of the Shots rail grows a **Brew** block: pick a profile and *Load* it, then **Start brew** sends the dial's own click over the machine's API (`/api/v1/action/start`). From idle the machine loads the profile and heats; the line under the picker follows its status ("Heating · 92.1 °C", then **Ready — click to start**), and at that point *Start brew now* begins the shot without touching the knob. *Preheat* heats without starting, *Stop* ends a running profile the safe way (the piston retracts), *Tare* zeroes the scale. If you would rather skip the second press altogether, the machine has an *auto-start after preheat* setting of its own. These buttons only ever do what the dial does; nothing is sent unless you press them.
 
 11. **Analysis** (top bar): a stage-by-stage review of one or more shots by an AI model, written to the same outline as a careful human review — *Verdict*, *Stages* (time, water in, cup, what happened), *What stands out*, *Suggested changes* ("change one thing per shot, in this order", naming the profile variable and the value), *Open questions*, *Sources*. Tick shots in History and press **Analyze selected**, or tick them on the Analysis tab itself; several shots of the same coffee are compared as a series (a *Shots compared* table, what changed between them and what it did). The app first computes everything it can **locally and deterministically** — the per-stage table from the machine's own stage names, water in, cup weight, pressure peak/end/slope, mean flow, temperature drift, EC at the stage boundaries, where the solubles came from (share of ∫EC dm by stage end and by cup mass), first drop, pump stop and drips — shows it under *Stages, from the recording* with the shot's graph, and sends that digest, the brewed profile (stages, exit triggers, limits, variables, description) and a one-row-per-second trace to the model. The model is asked to interpret those numbers, never to recompute or invent them, and to flag unconfirmed hypotheses as such. **Shots without Portal data are reviewed too**: the EC parts are marked "no Portal data" and the review works from pressure, flow, cup weight and temperature. Add how it tasted and what you want to know, press *Review with …*, and the report streams in. **Save review** keeps it in the browser (with the digest it was based on; backups include it); saved reviews are listed below with *Open*, *.md* download and *Delete*; *Download .md* and *Copy* give you the Markdown with a header. Setup is under *Settings → AI review*, see below.
+
+    ![A review: Verdict, Stages table, What stands out, Suggested changes](docs/screenshot-analysis-report.png)
 
 ### Settings
 
@@ -65,6 +70,8 @@ The **Settings** tab (top bar) holds everything that is not about one shot. A **
 
 - **Machine** — address, *Test connection* (tests the address as typed, saved or not), connect on open, and whether to fetch the machine's own saved record after each shot (and how long to wait for it). Once the address is saved, the **Address** shown on the Shots tab (with its *change* link) follows it, and the app reconnects to the new address.
 - **AI review** — which provider writes the reviews (Claude / Anthropic, OpenAI, or Gemini / Google), that provider's API key and model, an optional OpenAI-compatible endpoint (OpenRouter, a local model server — anything that speaks the OpenAI chat API), *List models* (fills the model picker from the provider) and *Test key*, plus what the reviewer should know about you: the grinder's step size in µm (so grind advice comes in whole steps), how you usually drink the coffee (ratio targets differ for a cortado and a straight shot) and standing notes (burrs, water, basket). The key is stored in this browser's IndexedDB on this computer, shown masked, kept out of settings exports and backups, never written to the debug log, and sent only to the provider you chose. See [Getting an API key](#getting-an-api-key) below.
+
+  ![Settings → AI review](docs/screenshot-settings-ai.png)
 - **Recording** — automatic start on `extracting` (or manual only), the settle window after the pump stops, the Portal-vs-cup lag, the minimum length an automatic recording must have to be kept, whether to switch the Portal's screen to its graph during a shot, **Beverage weight** (when the cup was not weighed by hand: the brewed profile's target output weight — the default — or what the machine's scale read), and **Saving**: whether each shot's JSON and CSV are also written to the save folder automatically (on by default; needs a folder chosen under *Logging and debug → Where to save*). The database checkpoint during recording and the machine-record backfill are always on.
 - **Estimates** — how many reference shots an estimate needs before it stops being *preliminary*.
 - **Pick-lists** — the beans, roasters, origins and grinders the coffee fields offer, with use counts; remove an entry here (shots keep their values).
@@ -117,6 +124,7 @@ The Analysis tab talks to the provider directly from the page (the page runs on 
 npm test                 # unit tests: analysis maths, calibration pools, packet parser, CSV, hand-off round-trip, review digest + prompt, markdown, AI providers
 npm i -D playwright socket.io
 npm run test:e2e         # real Chrome + simulated Portal + mock machine: connect, record, analyse, export
+npm run screenshots      # regenerates docs/screenshot-*.png from the running app (same fixtures)
 npm run mock             # a stand-in machine on :8080 for manual poking
 ```
 
@@ -150,6 +158,8 @@ docs/NOTES.md                protocol findings, with sources
 ```
 
 ## How this was built
+
+![About line in Settings, with the running version](docs/screenshot-about.png)
 
 This project was **vibe-coded**: the author described what he wanted in conversation and an AI assistant wrote the code, ran it against a mock and against the real machine's REST API, and iterated on screenshots. Nothing here was typed by hand. That is worth knowing when you read the code — it is coherent, but it has had one pair of eyes on it and no field use yet.
 

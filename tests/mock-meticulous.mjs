@@ -28,39 +28,54 @@ const dial = { phase: 'idle', since: 0, loadedProfile: 'Blooming Espresso (demo)
 const AI_KEY = process.env.MOCK_AI_KEY || 'sk-test-123';
 const AI_REPORT = (n, noPortal) => `## Verdict
 
-The trace is clean and the shot ran as the profile describes (mock review of ${n} shot${n === 1 ? '' : 's'}${noPortal ? ', one without Portal data' : ''}).
+The trace is clean — EC rises smoothly through the rebuild, peaks once at 2.67 mS/cm with 2.6 g in the cup and falls away without a spike or a dip, so there is no sign of channeling. But it is not quite the shot the profile describes: the pump stopped at the scale's 40.0 g while the profile targets 38 g, and Extract ran at 9.2 bar from its first second instead of the 6–7 bar the profile notes aim for.
 
-- Yield **40.0 g from 18.0 g (1 : 2.22)**
-- Extraction pressure peaked at **9.2 bar**
+- Yield **40.0 g on the scale from 18.0 g** (profile target 38 g → 1 : 2.11 used for yield and EY)
+- Extraction pressure reached **9.2 bar** at the start of Extract and was still 6.4 bar when the pump stopped
+- **The bloom put nothing in the cup**; 4 % of the solubles had arrived by the end of the rebuild, 85 % by 30 g; the last 5 g carried 7 % of ∫EC dm at a third of the peak EC
 
-Setup: Meticulous, Blooming Espresso (demo), 420 µm.
+Setup: Meticulous, Blooming Espresso (demo) at 93 °C, Zerno Z1 at 420 µm, Supernova (Hatch).
 
 ## Stages
 
 | Stage | Time | Water in | Cup | What happened |
 |---|---|---|---|---|
-| Saturate | 0–2 s | 3 ml | 0 g | Filling. |
-| Bloom | 2–6 s | 6 ml | 0 → 0 g | Resting. |
-| Extract | 9–30 s | 40 ml | 2 → 40 g | Steady. |
+| Saturate | 0–1.9 s | 3 ml | 0 g | 1.6 ml/s took the puck to 2.8 bar; nothing in the cup. Water 92.5 → 92.7 °C. |
+| Bloom | 2.0–5.9 s | 6 ml | 0 g | Flow stayed at 1.6 ml/s, so this was a slow pre-infusion rather than a rest: pressure only eased 2.8 → 2.4 bar. |
+| Gentle Rebuild | 6.0–8.9 s | 2 ml | 0 → 1.1 g | Pressure jumped to 8.9 bar within 3 s at 0.7 ml/s; first drop at 8.4 s; EC 2.6 mS/cm by the end. |
+| Extract | 9.0–29.9 s | 48 ml | 1.2 → 40.0 g | 2.3 ml/s; pressure 9.2 → 6.4 bar; EC 2.6 → 0.7. |
+| Drips | 30.0–30.0 s | — | 40.0 g | The recording ended with the pump; no drips were captured. |
+
+Where the solubles came from, as a share of ∫EC dm: 0 % by the end of the bloom, 4 % by the end of the rebuild, 52 % by 15 g, 76 % by 25 g, 93 % by 35 g.
 
 ## What stands out
 
-1. **Nothing alarming.** The mock shot is synthetic.
-   - Unconfirmed: the grinder may have drifted.
+1. **It ran 2 g past the target.** The scale read 40.0 g at pump stop against a 38 g profile target. On a flow profile the machine stops on predicted weight; 2 g over is more than drips explain.
+   - Check which version of the profile is loaded and what its final weight says.
+   - Unconfirmed: the tare may have drifted before the shot (the scale showed 0.0 g through the bloom, which argues against it).
+2. **High extraction pressure.** 9.2 bar at 2.3 ml/s on an 18 g dose says the puck is on the fine side for this coffee; the profile's own notes want 6–7 bar after the bloom.
+3. **The bloom did not rest.** Flow never dropped to zero and pressure never fell below 2.4 bar, so the rebuild started from a pressurised puck and hit 8.9 bar in three seconds.
+4. **Temperature held.** 92.2–92.8 °C throughout against a 93 °C setpoint — nothing to change here.
+5. **Data detail.** The shot carries no refractometer reading, so EC/g (1.63 mS/cm per g) cannot yet be turned into TDS for this coffee.
 
 ## Suggested changes
 
 Change one thing per shot, in this order.
 
-1. **Leave it alone.** Pull it again and taste.
+1. **Grind 10 µm coarser (two steps, to 430 µm).** Expect Extract to start nearer 7 bar and the decline to begin lower; shot time should stay close to 30 s because flow is commanded.
+2. **If the yield is still over,** lower the profile's final weight by the overshoot you see (2 g), or set it to what you want in the cup and let the drips land on top.
+3. **Give the bloom a rest:** set the Bloom stage's flow to 0 (keep its 4 s), or add a pressure exit at 1.5 bar, so the second half of the shot does more of the work.
 
 ## Open questions
 
-- How did it taste?
+- How did it taste? Harsh or drying points to the pressure; sour or thin would argue against going coarser.
+- A refractometer reading on this coffee would let the app calibrate EC/g → TDS.
+- Is 38 g or 40 g the intended yield for how you drink it?
 
 ## Sources
 
-- Shot digest supplied by the app
+- Shot digest and one-second trace supplied by the app (mock review of ${n} shot${n === 1 ? '' : 's'}${noPortal ? ', one without Portal data' : ''})
+- Profile "Blooming Espresso (demo)" as recorded by the machine
 `;
 
 function readBody(req) {

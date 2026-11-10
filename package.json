@@ -1,6 +1,6 @@
 {
   "name": "portal-met-bridge",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "private": true,
   "description": "Belka Portal conductivity logged against Meticulous espresso shots, with refractometer-calibrated TDS estimates and a Beanconqueror hand-off.",
   "type": "module",
@@ -8,7 +8,8 @@
     "start": "node serve.mjs",
     "test": "node tests/run.mjs",
     "test:e2e": "node tests/e2e-portal.mjs",
-    "mock": "node tests/mock-meticulous.mjs"
+    "mock": "node tests/mock-meticulous.mjs",
+    "screenshots": "node tools/screenshots.mjs"
   },
   "license": "MIT",
   "devDependencies": {

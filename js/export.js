@@ -3,7 +3,7 @@
 // loaded lazily from vendor/ only when a PDF is asked for.
 
 import { zipSync, strToU8 } from '../vendor/fflate.esm.js';
-import { beverageOf, beverageSource, profileTargetOf, measuredEy } from './analysis.js?v=0.11.2';
+import { beverageOf, beverageSource, profileTargetOf, measuredEy } from './analysis.js?v=0.12.0';
 
 const APP = 'portal-met-bridge';
 
@@ -92,7 +92,7 @@ export function legendOf(u) {
 // ------------------------------------------------------------------- PDF --
 
 let jspdfLoading = null;
-function loadJsPdf() {
+export function loadJsPdf() {
   if (window.jspdf?.jsPDF) return Promise.resolve(window.jspdf.jsPDF);
   if (!jspdfLoading) {
     jspdfLoading = new Promise((resolve, reject) => {

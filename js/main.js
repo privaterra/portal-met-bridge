@@ -1,18 +1,19 @@
 // main.js — wires the devices, the recorder, storage, charts and export together.
 
-import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.11.2';
-import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.11.2';
-import { MachinePanel } from './machine-panel.js?v=0.11.2';
-import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.11.2';
-import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.11.2';
-import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.11.2';
-import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, setBeveragePreference, grindMicrons, measuredEy, DEFAULTS } from './analysis.js?v=0.11.2';
-import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, approxTokens } from './review.js?v=0.11.2';
-import { PROVIDERS, streamCompletion, listModels, testKey, maskKey } from './ai.js?v=0.11.2';
-import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.11.2';
-import { makeDemoShot } from './demo.js?v=0.11.2';
-import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug } from './export.js?v=0.11.2';
-import { log, Logger, formatLine } from './log.js?v=0.11.2';
+import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.12.0';
+import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.12.0';
+import { MachinePanel } from './machine-panel.js?v=0.12.0';
+import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.12.0';
+import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.12.0';
+import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.12.0';
+import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, profileFinalWeight, setBeveragePreference, grindMicrons, measuredEy, DEFAULTS } from './analysis.js?v=0.12.0';
+import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, approxTokens } from './review.js?v=0.12.0';
+import { PROVIDERS, streamCompletion, listModels, testKey, maskKey } from './ai.js?v=0.12.0';
+import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.12.0';
+import { makeDemoShot } from './demo.js?v=0.12.0';
+import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug, loadJsPdf } from './export.js?v=0.12.0';
+import { REVIEW_FORMATS, reviewFile, reviewMarkdownFile } from './review-export.js?v=0.12.0';
+import { log, Logger, formatLine } from './log.js?v=0.12.0';
 import qrcode from '../vendor/qrcode.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -91,6 +92,7 @@ const SETTINGS = {
   aiGrindStepUm: { def: 5, el: 'set-ai-grind-step', num: true, min: 1, max: 100 },
   aiDrink: { def: 'espresso', el: 'set-ai-drink' },
   aiNotes: { def: '', el: 'set-ai-notes' },
+  reviewFormat: { def: 'md', el: 'set-review-format' },
   logEnabled: { def: false, el: 'log-enabled', bool: true },
   logLevel: { def: 'info', el: 'log-level' },
   logPackets: { def: false, el: 'log-packets', bool: true },
@@ -195,6 +197,10 @@ function applySetting(key, v) {
     case 'aiBaseOpenai':
       renderAiSettings();
       break;
+    case 'reviewFormat':
+      if ($('an-format')) $('an-format').value = v;
+      renderSavedReviews();
+      break;
     default:
       break;
   }
@@ -246,11 +252,11 @@ async function resetSettings() {
 // Human-readable names for the save bar.
 const SETTING_LABELS = {
   meticulousHost: 'machine address', autoConnectMeticulous: 'connect on open', autoAttach: 'attach machine record', attachDelaySec: 'attach delay',
-  autoRecord: 'auto-record', settleSec: 'settle window', lagSec: 'Portal lag', minShotSec: 'minimum shot length', autoGraph: 'Portal screen', autoSaveFiles: 'write shot files', beverageDefault: 'beverage weight',
+  autoRecord: 'auto-record', settleSec: 'settle window', lagSec: 'Portal lag', minShotSec: 'minimum shot length', autoGraph: 'Portal screen', autoSaveFiles: 'write shot files', beverageDefault: 'final weight',
   minCalibrationShots: 'reference shots', estimatePool: 'estimate pool', logEnabled: 'logging', logLevel: 'log detail', logPackets: 'packet logging',
   logSaveExports: 'save exports to folder', logShowTail: 'live tail',
   aiProvider: 'AI provider', aiKeyAnthropic: 'Anthropic key', aiModelAnthropic: 'Claude model', aiKeyOpenai: 'OpenAI key', aiModelOpenai: 'OpenAI model', aiBaseOpenai: 'OpenAI endpoint',
-  aiKeyGoogle: 'Gemini key', aiModelGoogle: 'Gemini model', aiGrindStepUm: 'grinder step', aiDrink: 'usual drink', aiNotes: 'standing notes',
+  aiKeyGoogle: 'Gemini key', aiModelGoogle: 'Gemini model', aiGrindStepUm: 'grinder step', aiDrink: 'usual drink', aiNotes: 'standing notes', reviewFormat: 'review file format',
 };
 
 /** Read an input's current value in the setting's type, without persisting. */
@@ -350,8 +356,8 @@ async function init() {
   log.configure({ enabled: settings.logEnabled, level: settings.logLevel, packets: settings.logPackets });
   await restoreLogFolder();
   renderLogStatus();
-  $('about-version').textContent = 'v0.11.2';
-  log.info('app', `portal-met-bridge v0.11.2 started · ${navigator.userAgent}`);
+  $('about-version').textContent = 'v0.12.0';
+  log.info('app', `portal-met-bridge v0.12.0 started · ${navigator.userAgent}`);
 
   const env = await environmentCheck();
   renderPortalSteps({ secure: env.secure, api: env.api, adapter: env.adapter });
@@ -612,15 +618,19 @@ async function refreshProfileTargets() {
   profileTargetsPromise = (async () => {
     try {
       const list = await meticulous.profiles();
-      const next = new Map();
+      const byName = new Map(); // name → target, or NaN when two profiles share the name with different targets
+      const byId = new Map();
       for (const p of Array.isArray(list) ? list : []) {
-        const target = Number(p?.final_weight);
-        if (p?.name && target > 0) next.set(p.name, target);
+        const target = profileFinalWeight(p);
+        if (p?.id && target > 0) byId.set(p.id, target);
+        if (p?.name && target > 0) byName.set(p.name, byName.has(p.name) && byName.get(p.name) !== target ? NaN : target);
       }
-      state.profileTargets = next;
-      state.profileList = (Array.isArray(list) ? list : []).filter((p) => p?.id && p?.name).map((p) => ({ id: p.id, name: p.name, finalWeightG: Number(p.final_weight) || null, temperatureC: Number(p.temperature) || null }));
+      state.profileTargets = byName;
+      state.profileTargetsById = byId;
+      state.profileList = (Array.isArray(list) ? list : []).filter((p) => p?.id && p?.name).map((p) => ({ id: p.id, name: p.name, finalWeightG: profileFinalWeight(p), temperatureC: Number(p.temperature) || null }));
       renderBrewProfiles();
-      log.info('machine', `profile list: ${next.size} profiles with a target weight`);
+      const dup = [...byName.entries()].filter(([, t]) => Number.isNaN(t)).map(([n]) => n);
+      log.info('machine', `profile list: ${byId.size} profiles with a target weight${dup.length ? `; same name, different targets: ${dup.join(', ')} (resolved by id or from the shot's record)` : ''}`);
       if (recorder.shot && !recorder.shot.profileTargetG) applyProfileTarget(recorder.shot);
     } catch (err) {
       log.warn('machine', `profile list failed: ${err?.message || err}`);
@@ -634,10 +644,23 @@ async function refreshProfileTargets() {
 
 const liveShotSub = (shot) => (shot?.profileName ? `Profile: ${shot.profileName}${shot.profileTargetG > 0 ? ` · target ${fmt(shot.profileTargetG, 1)} g` : ''}` : '');
 
-/** Stamp the profile's target output weight on a shot from the cached list; refresh the list when the name is unknown. */
+/**
+ * Stamp the profile's target output weight on a shot from the cached list: by
+ * the loaded profile's id when the status stream gave one, else by name when
+ * that name is unique. Two profiles with the same name and different targets
+ * are left to the machine's record (attachMachineRecord), which knows which
+ * one was brewed. Refreshes the list when the profile is unknown.
+ */
 function applyProfileTarget(shot) {
-  if (!shot?.profileName) return false;
-  const target = state.profileTargets.get(shot.profileName);
+  if (!shot?.profileName && !shot?.profileId) return false;
+  const byId = shot.profileId ? state.profileTargetsById?.get(shot.profileId) : null;
+  const byName = shot.profileName ? state.profileTargets.get(shot.profileName) : null;
+  if (Number.isNaN(byName) && !(byId > 0)) {
+    if (!shot._targetAmbiguous) log.warn('recorder', `two profiles are named "${shot.profileName}" with different targets; the target will come from the machine's record`);
+    shot._targetAmbiguous = true;
+    return false;
+  }
+  const target = byId > 0 ? byId : byName;
   if (target > 0) {
     if (shot.profileTargetG !== target) {
       shot.profileTargetG = target;
@@ -726,6 +749,7 @@ recorder.addEventListener('shot', async (e) => {
   selectShot(shot.id);
   log.info('recorder', `saved shot ${shot.id}: ${fmt(shot.finalWeightG, 1)} g in ${fmt(shot.durationSec, 1)} s, ${shot.machine.length} machine + ${shot.portal.length} Portal samples`);
   toast(`Saved shot — ${fmt(shot.finalWeightG, 1)} g in ${fmt(shot.durationSec, 1)} s`);
+  if (settings.beverageDefault === 'manual') setTimeout(() => openWeightDialog(shot.id), 400); // the final weight is yours to type
   if (settings.autoSaveFiles) autosaveShotFiles(shot).catch(() => {});
   if (settings.autoAttach && meticulous?.connected && !shot.manual) setTimeout(() => refreshFromMachine(shot.id, true), settings.attachDelaySec * 1000);
 });
@@ -877,6 +901,59 @@ function ratioOf(shot) {
 }
 const fmtRatio = (r) => (Number.isFinite(r) ? `1 : ${r.toFixed(r >= 10 ? 1 : 2)}` : '–');
 
+/** One line naming every weight known for a shot and what a blank field falls back to. */
+function weightHint(shot) {
+  const target = profileTargetOf(shot);
+  const fallbackSrc = beverageSource({ ...shot, beverageG: undefined });
+  const fallback = { profile: 'the profile target', scale: "the machine's scale" }[fallbackSrc];
+  return [
+    target > 0 ? `Profile target ${fmt(target, 1)} g${shot._targetAmbiguous ? ' (two profiles share this name)' : ''}` : 'No profile target known for this shot',
+    Number.isFinite(shot.finalWeightG) && shot.finalWeightG > 0 ? `machine's scale ${fmt(shot.finalWeightG, 1)} g` : null,
+    settings.beverageDefault === 'manual' ? 'blank = not entered (Settings → Recording → Final weight: typed after each brew)' : `blank uses ${fallback || 'nothing'} (Settings → Recording → Final weight)`,
+  ].filter(Boolean).join(' · ');
+}
+
+/** The small "weigh the cup" dialog: the final weight of one shot, typed after the brew. */
+async function openWeightDialog(id) {
+  const shot = await store.getShot(id);
+  if (!shot) return;
+  const dlg = $('weight-dialog');
+  dlg.dataset.id = id;
+  $('w-title').textContent = `Final weight — ${fmtDate(shot.startedAt)}${shot.context?.beanName ? ` · ${shot.context.beanName}` : ''}`;
+  $('w-bev').value = Number.isFinite(shot.beverageG) && shot.beverageG > 0 ? shot.beverageG : '';
+  $('w-bev').placeholder = Number.isFinite(shot.finalWeightG) && shot.finalWeightG > 0 ? `scale saw ${fmt(shot.finalWeightG, 1)}` : '';
+  $('w-hint').textContent = weightHint(shot);
+  if (!dlg.open) dlg.showModal();
+  $('w-bev').focus();
+  $('w-bev').select();
+}
+async function saveWeightDialog() {
+  const dlg = $('weight-dialog');
+  const shot = await store.getShot(dlg.dataset.id);
+  if (!shot) return dlg.close();
+  const weighed = Number($('w-bev').value);
+  if (weighed > 0 && weighed < 5000) shot.beverageG = Math.round(weighed * 10) / 10;
+  else delete shot.beverageG;
+  if (shot.refractometer?.tdsPct > 0) shot.refractometer = { ...shot.refractometer, eyPct: extractionYield(shot.refractometer.tdsPct, beverageOf(shot), Number(shot.context?.doseG) || 0) };
+  await store.putShot(shot);
+  if (shot.files && settings.autoSaveFiles) autosaveShotFiles(shot).catch(() => {});
+  dlg.close();
+  await refreshShotList();
+  if (state.selected?.id === shot.id) await selectShot(shot.id);
+  renderHistory();
+  toast(shot.beverageG ? `Final weight ${fmt(shot.beverageG, 1)} g saved.` : 'Final weight cleared.');
+  log.info('shots', `final weight for ${shot.id}: ${shot.beverageG ?? 'cleared'}`);
+}
+$('w-save').addEventListener('click', saveWeightDialog);
+$('w-later').addEventListener('click', () => $('weight-dialog').close());
+$('weight-dialog').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.target.id === 'w-bev') {
+    e.preventDefault();
+    saveWeightDialog();
+  }
+});
+$('shot-weigh').addEventListener('click', () => state.selected && openWeightDialog(state.selected.id));
+
 /** Short words for where a shot's beverage weight comes from. */
 const BEVERAGE_SOURCE_LABEL = { weighed: 'weighed by hand', reading: 'weighed with the reading', profile: 'profile target', scale: "machine's scale" };
 function beverageLabel(shot) {
@@ -955,7 +1032,7 @@ function renderHistory() {
     const when = new Date(s.startedAt);
     const coffee = s.inProgress ? '<i>recording now…</i>' : `${esc(c.beanName || 'no bean')}${c.roaster || c.origin ? `<small>${esc([c.roaster, c.origin].filter(Boolean).join(' · '))}</small>` : ''}`;
     const bev = beverageOf(s);
-    const inOut = `${c.doseG ? fmt(Number(c.doseG), 1) : '–'} → ${fmt(bev, 1)} g${beverageMarker(s)}`;
+    const inOut = `${c.doseG ? fmt(Number(c.doseG), 1) : '–'} → ${Number.isFinite(bev) ? `${fmt(bev, 1)} g${beverageMarker(s)}` : `<button class="linkish weigh" data-act="weigh" title="Final weight not entered yet — type it">? g</button>`}`;
     const grind = grindMicrons(c);
     const data = [
       `<span class="tag ${s.portal?.length ? 'on' : 'off'}" title="Portal samples">P ${s.portal?.length || 0}</span>`,
@@ -1012,6 +1089,7 @@ async function onHistoryClick(ev) {
   }
   const act = ev.target.closest('button[data-act]')?.dataset.act;
   if (act === 'open') return selectShot(id, { show: true });
+  if (act === 'weigh') return openWeightDialog(id);
   if (act === 'edit') return openShotDialog(await store.getShot(id));
   if (act === 'delete') return deleteShots([id]);
   selectShot(id);
@@ -1200,13 +1278,8 @@ function openShotDialog(shot) {
   $('e-bev').value = Number.isFinite(shot.beverageG) && shot.beverageG > 0 ? shot.beverageG : '';
   const fallback = beverageDefaultOf(shot);
   const fallbackSrc = beverageSource({ ...shot, beverageG: undefined, refractometer: undefined });
-  $('e-bev').placeholder = Number.isFinite(fallback) ? `${fmt(fallback, 1)} (${fallbackSrc === 'profile' ? 'profile target' : 'machine'})` : '';
-  const target = profileTargetOf(shot);
-  $('e-bev-hint').textContent = [
-    target > 0 ? `Profile target ${fmt(target, 1)} g` : 'No profile target known for this shot',
-    Number.isFinite(shot.finalWeightG) && shot.finalWeightG > 0 ? `machine's scale ${fmt(shot.finalWeightG, 1)} g` : null,
-    `blank uses the ${fallbackSrc === 'profile' ? 'profile target' : "machine's scale"} (Settings → Recording → Beverage weight)`,
-  ].filter(Boolean).join(' · ');
+  $('e-bev').placeholder = Number.isFinite(fallback) ? `${fmt(fallback, 1)} (${fallbackSrc === 'profile' ? 'profile target' : 'machine'})` : settings.beverageDefault === 'manual' ? 'not entered' : '';
+  $('e-bev-hint').textContent = weightHint(shot);
   $('shot-dialog').showModal();
   $('e-bean').focus();
 }
@@ -1256,12 +1329,13 @@ function renderShot() {
   $('shot-sub').textContent = [
     ctx.beanName,
     ctx.doseG ? `${ctx.doseG} g in` : null,
-    `${fmt(beverageOf(shot), 1)} g out${beverageNote(shot)}`,
+    Number.isFinite(beverageOf(shot)) ? `${fmt(beverageOf(shot), 1)} g out${beverageNote(shot)}` : 'final weight not entered',
     ratioOf(shot) ? fmtRatio(ratioOf(shot)) : null,
     `${fmt(shot.durationSec, 1)} s`,
     `${shot.machine.length} machine · ${shot.portal.length} Portal samples`,
     shot.machineSource ? 'machine record attached' : null,
     shot.recovered ? 'recovered from a checkpoint' : null,
+    (() => { $('shot-weigh').hidden = !(settings.beverageDefault === 'manual' && !(shot.beverageG > 0)); return null; })(),
   ].filter(Boolean).join(' · ');
   $('shot-files-note').textContent = shot.files?.json ? `This shot's JSON and CSV were written to ${shot.files.json.replace(/[^/]+$/, '')} at ${new Date(shot.files.at).toLocaleTimeString()}.` : '';
   $('shot-delete').disabled = false;
@@ -1271,7 +1345,7 @@ function renderShot() {
   $('ref-clear').disabled = !shot.refractometer;
   $('ref-tds').value = shot.refractometer?.tdsPct ?? '';
   $('ref-bev').value = Number.isFinite(shot.beverageG) && shot.beverageG > 0 ? shot.beverageG : '';
-  $('ref-bev').placeholder = Number.isFinite(beverageDefaultOf(shot)) ? `${fmt(beverageDefaultOf(shot), 1)} (${beverageSource({ ...shot, beverageG: undefined }) === 'profile' ? 'profile target' : 'machine'})` : 'auto';
+  $('ref-bev').placeholder = Number.isFinite(beverageDefaultOf(shot)) ? `${fmt(beverageDefaultOf(shot), 1)} (${beverageSource({ ...shot, beverageG: undefined }) === 'profile' ? 'profile target' : 'machine'})` : settings.beverageDefault === 'manual' ? 'type the weight' : 'auto';
 
   timeChart.setShot(shot.machine, shot.portal);
   const lag = Number.isFinite(shot.lagSec) ? shot.lagSec : settings.lagSec || 0;
@@ -1517,7 +1591,10 @@ async function attachMachineRecord(shot, saved, samples) {
   shot.machineShotId = saved.id;
   shot.profileName = saved.profile_name || saved.profile?.name || shot.profileName;
   shot.profileTemperatureC = saved.profile?.temperature ?? shot.profileTemperatureC;
-  if (Number(saved.profile?.final_weight) > 0) shot.profileTargetG = Number(saved.profile.final_weight); // the record says what was actually brewed
+  const recordTarget = profileFinalWeight(saved.profile); // the record says what was actually brewed, whichever same-named profile it was
+  if (recordTarget > 0) shot.profileTargetG = recordTarget;
+  if (saved.profile?.id) shot.profileId = saved.profile.id;
+  delete shot._targetAmbiguous;
   shot.machineSource = { id: saved.id, time: saved.time, profile: saved.profile ?? null, profile_name: saved.profile_name ?? null };
   recomputeCache(shot);
   await store.putShot(shot);
@@ -2758,10 +2835,20 @@ async function runReview() {
 $('an-run').addEventListener('click', runReview);
 $('an-stop').addEventListener('click', () => an.abort?.abort());
 
-function reviewMarkdownFile(rev) {
-  const head = [`# ${rev.title}`, '', `${new Date(rev.createdAt).toLocaleString()} · ${PROVIDERS[rev.provider]?.label || rev.provider} · ${rev.model}`, '', `Shots: ${rev.shotLabels.map((l) => `- ${l}`).join('\n')}`, rev.taste ? `\nTaste: ${rev.taste}` : '', rev.question ? `\nQuestion: ${rev.question}` : '', '', '---', ''].join('\n');
-  return head + rev.markdown.trim() + '\n\n*Written by an AI model from the recorded samples; check numbers against the shot before acting on them.*\n';
+/** Write a review in the chosen format (md / docx / pdf) to the save folder or the downloads. */
+async function downloadReview(rev, fmt = settings.reviewFormat || 'md') {
+  try {
+    const jsPDF = fmt === 'pdf' ? await loadJsPdf() : undefined;
+    const { name, data, mime } = reviewFile(rev, fmt, { jsPDF });
+    log.info('ai', `review ${rev.id || '(current)'} → ${name}`);
+    return deliver(name, data, mime, 'reviews');
+  } catch (err) {
+    toast(`Could not write the ${REVIEW_FORMATS[fmt]?.label || fmt}: ${err?.message || err}`, 'error');
+    log.warn('ai', `review export failed: ${err?.message || err}`);
+    return null;
+  }
 }
+const formatOptions = (sel) => Object.entries(REVIEW_FORMATS).map(([k, f]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${f.ext === 'md' ? '.md' : `.${f.ext}`}</option>`).join('');
 
 async function saveReview() {
   if (!an.markdown || an.running) return;
@@ -2774,11 +2861,8 @@ async function saveReview() {
   await renderSavedReviews();
 }
 $('an-save').addEventListener('click', saveReview);
-$('an-download').addEventListener('click', () => {
-  const rev = { ...an.meta, markdown: an.markdown };
-  const base = `review-${stamp(rev.createdAt)}-${(an.digests[an.digests.length - 1]?.meta?.coffee?.bean || 'shot').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`;
-  deliver(`${base}.md`, reviewMarkdownFile(rev), 'text/markdown', 'reviews');
-});
+$('an-download').addEventListener('click', () => downloadReview({ ...an.meta, markdown: an.markdown, digests: an.digests }, $('an-format').value));
+$('an-format').innerHTML = formatOptions(settings.reviewFormat || 'md');
 $('an-copy').addEventListener('click', async () => {
   try {
     await navigator.clipboard.writeText(reviewMarkdownFile({ ...an.meta, markdown: an.markdown }));
@@ -2795,7 +2879,7 @@ async function renderSavedReviews() {
   $('an-saved-empty').hidden = rows.length > 0;
   $('an-saved').hidden = rows.length === 0;
   $('an-saved-rows').innerHTML = rows
-    .map((r) => `<tr data-id="${esc(r.id)}"><td>${esc(fmtDate(r.createdAt))}</td><td>${esc(r.title)}</td><td>${r.shotIds?.length || 0}</td><td>${esc(PROVIDERS[r.provider]?.label || r.provider || '')} <small>${esc(r.model || '')}</small></td><td class="actions"><button class="btn small" data-act="open">Open</button><button class="btn small" data-act="download">.md</button><button class="btn small danger" data-act="delete">Delete</button></td></tr>`)
+    .map((r) => `<tr data-id="${esc(r.id)}"><td>${esc(fmtDate(r.createdAt))}</td><td>${esc(r.title)}</td><td>${r.shotIds?.length || 0}</td><td>${esc(PROVIDERS[r.provider]?.label || r.provider || '')} <small>${esc(r.model || '')}</small></td><td class="actions"><button class="btn small" data-act="open">Open</button><select class="fmt" aria-label="File format">${formatOptions(settings.reviewFormat || 'md')}</select><button class="btn small" data-act="download">Download</button><button class="btn small danger" data-act="delete">Delete</button></td></tr>`)
     .join('');
 }
 
@@ -2817,7 +2901,7 @@ $('an-saved-rows').addEventListener('click', async (e) => {
     renderReport();
     $('an-report-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
   } else if (btn.dataset.act === 'download') {
-    deliver(`review-${stamp(rev.createdAt)}.md`, reviewMarkdownFile(rev), 'text/markdown', 'reviews');
+    downloadReview(rev, tr.querySelector('select.fmt')?.value || settings.reviewFormat || 'md');
   } else if (btn.dataset.act === 'delete') {
     const ok = await confirmDialog({ title: 'Delete this review?', body: `“${rev.title}” from ${fmtDate(rev.createdAt)} will be removed. The shots stay.`, action: 'Delete review' });
     if (!ok) return;
@@ -2829,7 +2913,7 @@ $('an-saved-rows').addEventListener('click', async (e) => {
   }
 });
 
-window.__pb = { state, store, portal, recorder, timeChart, massChart, calChart, compareChart, compare, machinePanel, settings, log, hist, an, openShotDialog, openCompare, openAnalysis, runReview, refreshShotList, recoverUnfinishedShots, backfillMachineRecords, autosaveShotFiles, refreshProfileTargets, get meticulous() { return meticulous; } };
+window.__pb = { state, store, portal, recorder, timeChart, massChart, calChart, compareChart, compare, machinePanel, settings, log, hist, an, openShotDialog, openWeightDialog, openCompare, openAnalysis, runReview, refreshShotList, recoverUnfinishedShots, backfillMachineRecords, autosaveShotFiles, refreshProfileTargets, get meticulous() { return meticulous; } };
 
 init().catch((err) => {
   console.error(err);

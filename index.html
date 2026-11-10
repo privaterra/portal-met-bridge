@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>portal-met-bridge</title>
   <link rel="stylesheet" href="vendor/uPlot.min.css" />
-  <link rel="stylesheet" href="css/app.css?v=0.11.2" />
+  <link rel="stylesheet" href="css/app.css?v=0.12.0" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M4 26 L10 8 L16 20 L22 6 L28 26' fill='none' stroke='%232447B8' stroke-width='3' stroke-linejoin='round'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -186,14 +186,15 @@
           <label class="field narrow"><span>Portal lag vs cup (s) — positive if liquid reaches the Portal before the cup</span><input id="lag-sec" type="number" min="-2" max="3" step="0.1" value="0" /></label>
           <label class="field narrow"><span>Discard automatic recordings shorter than (s)</span><input id="set-min-shot" type="number" min="0" max="60" step="1" value="5" /></label>
           <label class="check"><input type="checkbox" id="portal-auto-graph" checked /> Switch the Portal's screen to its graph during a shot and back afterwards</label>
-          <h3>Beverage weight</h3>
-          <label class="field"><span>When the cup was not weighed by hand, the beverage weight is</span>
+          <h3>Final weight</h3>
+          <label class="field"><span>The final weight of a brew (the beverage, used for yield, ratio and EY) comes from</span>
             <select id="set-beverage-default">
-              <option value="profile">the output weight the brewed profile was set to (its target)</option>
-              <option value="scale">what the machine's scale read during the shot</option>
+              <option value="profile">the profile used for the brew — its final_weight (what the machine stops at)</option>
+              <option value="scale">the machine's scale once the brew has completed (drips in the settle window included)</option>
+              <option value="manual">a value I type after each brew (the app asks when the shot is saved)</option>
             </select>
           </label>
-          <p class="hint">The machine stops the pump at the profile's target, so the cup usually ends up at the target plus a few drips; the scale's reading during the shot misses those drips and can be unsettled. Each shot picks up its profile's target when recording starts and again from the machine's record. A weight you type under History → Edit always wins. This choice applies to every shot, including earlier ones.</p>
+          <p class="hint">The profile's <code>final_weight</code> is read from the machine's own record of the shot (so two profiles sharing a name cannot be mixed up); until the record is attached it comes from the loaded profile's id. The scale option misses nothing that happened after the pump stopped as long as the settle window covers the drips. With the typed option nothing stands in: a shot shows <em>? g</em> until you enter the weight (Enter final weight on the Shots tab, <em>? g</em> in History, or History → Edit). A weight you type always wins, whichever option is chosen; the choice applies to every shot, including earlier ones.</p>
           <h3>Saving</h3>
           <p class="hint">Every shot is written to this browser's database while it is being recorded (a checkpoint every two seconds) and finalised when the pump stops, so a closed tab or a crash loses at most the last two seconds. The machine's own record is attached afterwards, and any shot still missing it is completed the next time the machine connects.</p>
           <label class="check"><input type="checkbox" id="set-autosave-files" checked /> Also write each shot's JSON and CSV to the save folder as soon as it is saved (and again when the machine's record arrives)</label>
@@ -256,6 +257,15 @@
           </label>
           <label class="field"><span>Standing notes for every review (optional) — burrs, water, basket, anything the recording cannot know</span>
             <textarea id="set-ai-notes" rows="3" placeholder="e.g. Zerno Z1 with SSP HU blind burrs; BWT magnesium-filtered Toronto tap water; 18 g VST basket"></textarea></label>
+          <h3>Saved reviews</h3>
+          <label class="field narrow"><span>Download reviews as</span>
+            <select id="set-review-format">
+              <option value="md">Markdown (.md)</option>
+              <option value="docx">Word (.docx)</option>
+              <option value="pdf">PDF (.pdf)</option>
+            </select>
+          </label>
+          <p class="hint">The default for the Download buttons on the Analysis tab; each button also has its own format picker. All three carry the same header (title, date, provider and model, the shots, your taste note and question) and the same sections.</p>
           <p class="hint">The key is kept in this browser's database on this computer and sent only to the provider you chose, with the shot digest, the brewed profile and your notes. It is left out of settings exports and backups. Each review costs a few cents of API usage; the README explains how to create a key with a spending limit.</p>
         </div>
       </section>
@@ -401,7 +411,8 @@
           <h2 id="an-report-title">Review</h2>
           <div class="panel-tools">
             <button id="an-save" class="btn small primary" disabled>Save review</button>
-            <button id="an-download" class="btn small" disabled>Download .md</button>
+            <select id="an-format" aria-label="File format" title="File format for Download (the default is set under Settings → AI review)"></select>
+            <button id="an-download" class="btn small" disabled>Download</button>
             <button id="an-copy" class="btn small" disabled>Copy</button>
           </div>
         </div>
@@ -594,6 +605,7 @@
         <div class="panel-head">
           <h2 id="shot-title">No shot selected</h2>
           <div class="panel-tools">
+            <button id="shot-weigh" class="btn small primary" title="Type the final weight of this brew" hidden>Enter final weight</button>
             <button id="shot-refresh" class="btn small" title="Replace the live machine samples with the machine's own saved record of this shot" disabled>Refresh from machine</button>
             <button id="shot-edit" class="btn small" title="Edit this shot's coffee, dose, grind, note and refractometer reading" disabled>Edit details</button>
             <button id="shot-delete" class="btn small danger" disabled>Delete</button>
@@ -740,6 +752,18 @@
     </form>
   </dialog>
 
+  <dialog id="weight-dialog" class="modal narrow">
+    <form method="dialog">
+      <h2 id="w-title">Final weight</h2>
+      <label class="field"><span>Final weight of the brew, weighed after it finished (g)</span><input id="w-bev" type="number" step="0.1" min="0" inputmode="decimal" /></label>
+      <p class="hint" id="w-hint"></p>
+      <div class="row end">
+        <button type="button" id="w-later" class="btn">Later</button>
+        <button type="button" id="w-save" class="btn primary">Save weight</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="confirm-dialog" class="modal">
     <form method="dialog">
       <h2 id="confirm-title">Are you sure?</h2>
@@ -752,6 +776,6 @@
   </dialog>
 
   <div class="toast" id="toast" hidden></div>
-  <script type="module" src="js/main.js?v=0.11.2"></script>
+  <script type="module" src="js/main.js?v=0.12.0"></script>
 </body>
 </html>

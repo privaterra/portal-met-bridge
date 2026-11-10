@@ -443,3 +443,8 @@ table.reviews small { color: var(--ink-3); }
 .ai-provider[hidden] { display: none; }
 .ai-provider .row.tight input { flex: 1; }
 .btn.reveal { flex: 0 0 auto; }
+
+/* v0.12: final weight typed after the brew */
+.modal.narrow { width: min(92vw, 420px); }
+table.hist button.weigh { color: var(--warn); font-weight: 600; padding: 0; }
+table.reviews td.actions select.fmt, #an-format { font-size: 12px; padding: 3px 4px; margin-left: 6px; border: 1px solid var(--rule); border-radius: 3px; background: #fff; vertical-align: middle; }

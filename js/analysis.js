@@ -414,26 +414,54 @@ export function predictTds(fit, meanEcPerG) {
 
 /** Extraction yield from TDS%, beverage mass and dose. */
 /**
- * Which weight stands in for the beverage when nobody weighed the cup:
+ * Where the final weight of a brew comes from when nobody typed it for the shot:
  *   'profile' — the output weight the brewed profile was set to (the machine
  *               stops the pump there; what ends up in the cup is that plus drips),
- *   'scale'   — the cup weight the machine's scale reported during the shot.
+ *   'scale'   — the cup weight the machine's scale reported by the end of the
+ *               recording (drips in the settle window included),
+ *   'manual'  — nothing: the user weighs the cup and types it after each brew;
+ *               until then the beverage is unknown.
  * The app sets this from Settings; tests may set it explicitly.
  */
 let beveragePreference = 'profile';
+export const BEVERAGE_PREFERENCES = ['profile', 'scale', 'manual'];
 export function setBeveragePreference(pref) {
-  beveragePreference = pref === 'scale' ? 'scale' : 'profile';
+  beveragePreference = BEVERAGE_PREFERENCES.includes(pref) ? pref : 'profile';
 }
 export function getBeveragePreference() {
   return beveragePreference;
+}
+
+/**
+ * The target output weight a Meticulous profile stops at, or null. Handles the
+ * plain `final_weight` field, a `$variable` reference in it, profiles that keep
+ * the weight only in a variable (key or name says final weight / yield / output),
+ * and the machine's "no weight stop" convention (final_weight ≥ 2000).
+ */
+export function profileFinalWeight(profile) {
+  if (!profile || typeof profile !== 'object') return null;
+  const vars = Array.isArray(profile.variables) ? profile.variables : [];
+  const byKey = (key) => vars.find((v) => v && String(v.key) === key);
+  const asWeight = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 && n < 2000 ? n : null;
+  };
+  const fw = profile.final_weight;
+  if (typeof fw === 'string' && fw.startsWith('$')) {
+    const v = byKey(fw.slice(1));
+    if (v) return asWeight(v.value);
+  }
+  const direct = asWeight(fw);
+  if (direct !== null) return direct;
+  const v = byKey('final_weight') || vars.find((x) => x && (x.type === 'weight' || /weight|yield|output/i.test(String(x.name || ''))) && /final|yield|output|target/i.test(`${x.name || ''} ${x.key || ''}`));
+  return v ? asWeight(v.value) : null;
 }
 
 /** The profile's target output weight for this shot, when known. */
 export function profileTargetOf(shot) {
   const direct = Number(shot?.profileTargetG);
   if (direct > 0) return direct;
-  const fromRecord = Number(shot?.machineSource?.profile?.final_weight);
-  return fromRecord > 0 ? fromRecord : null;
+  return profileFinalWeight(shot?.machineSource?.profile);
 }
 
 /**
@@ -448,6 +476,7 @@ export function profileTargetOf(shot) {
 export function beverageSource(shot, { prefer = beveragePreference } = {}) {
   if (!shot) return null;
   if (Number.isFinite(shot.beverageG) && shot.beverageG > 0) return 'weighed';
+  if (prefer === 'manual') return null; // the user weighs every cup; nothing stands in for a missing value
   if (prefer === 'profile' && profileTargetOf(shot) > 0) return 'profile';
   if (Number.isFinite(shot.finalWeightG) && shot.finalWeightG > 0) return 'scale';
   return profileTargetOf(shot) > 0 ? 'profile' : null;

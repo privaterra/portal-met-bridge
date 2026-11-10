@@ -6,7 +6,7 @@
 //   buildReviewMessages(...)         → { system, user } for any provider
 //   renderMarkdown(md)               → safe HTML for the report pane
 
-import { beverageOf, beverageSource, profileTargetOf, measuredEy, grindMicrons } from './analysis.js?v=0.11.2';
+import { beverageOf, beverageSource, profileTargetOf, measuredEy, grindMicrons } from './analysis.js?v=0.12.0';
 
 const r1 = (v) => (Number.isFinite(v) ? Math.round(v * 10) / 10 : null);
 const r2 = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
@@ -113,7 +113,9 @@ export function buildShotDigest(shot, analysis, { profileTargetG } = {}) {
     doseG: dose,
     beverageG: r1(beverage),
     beverageSource: beverageSource(shot),
+    weighedG: Number(shot.beverageG) > 0 ? r1(shot.beverageG) : null,
     scaleFinalG: r1(shot.finalWeightG),
+    beverageNote: beverageNoteFor(shot, beverage, target),
     ratio: dose && beverage > 0 ? r2(beverage / dose) : null,
     durationSec: r1(shot.durationSec),
     note: c.note || null,
@@ -123,6 +125,8 @@ export function buildShotDigest(shot, analysis, { profileTargetG } = {}) {
     source: shot.source || null,
   };
   if (!dose) gaps.push('No dose recorded, so ratio and EY cannot be computed.');
+  if (!(beverage > 0)) gaps.push('The final weight of this brew is not known (not typed yet, and no stand-in is configured), so yield, ratio and EY cannot be computed.');
+  if (shot._targetAmbiguous && !(target > 0)) gaps.push('Two profiles on the machine share this name with different target weights and the machine\'s record is not attached, so the profile target is unknown.');
   if (!meta.grindUm) gaps.push('No grind size recorded.');
   if (!machine.length) gaps.push('No machine samples (pressure, flow, cup weight) — the Meticulous was not connected for this shot.');
   if (!hasPortal) gaps.push('No Belka Portal data for this shot: nothing is known about conductivity, so the review is based on the machine\'s pressure, flow, weight and temperature only.');
@@ -249,6 +253,17 @@ export function buildShotDigest(shot, analysis, { profileTargetG } = {}) {
   return { meta, gaps, stages, timeline, temperature, ec, hasPortal, series, seriesColumns: ['t_s', 'pressure_bar', 'flow_ml_s', 'cup_g', 'water_temp_c', 'portal_ec_ms_cm'] };
 }
 
+/** One sentence that says which weight is the cup and which is only the profile's aim — the model must not confuse them. */
+export function beverageNoteFor(shot, beverage, target) {
+  const src = beverageSource(shot);
+  const scale = Number.isFinite(shot?.finalWeightG) && shot.finalWeightG > 0 ? `${r1(shot.finalWeightG)} g` : 'nothing';
+  const tgt = target > 0 ? `${r1(target)} g` : 'unknown';
+  if (src === 'weighed') return `The cup was weighed by hand after the brew: ${r1(beverage)} g. This is the measured yield and the authoritative beverage weight. The profile's target was ${tgt}; the machine's scale read ${scale} during the recording.`;
+  if (src === 'profile') return `No hand weighing: the beverage is taken as the profile's target output weight, ${r1(beverage)} g (the machine stops the pump there; the cup ends up at about that plus drips). The machine's scale read ${scale} during the recording.`;
+  if (src === 'scale') return `No hand weighing: the beverage is the machine's scale reading at the end of the recording, ${r1(beverage)} g. The profile's target was ${tgt}.`;
+  return `The final weight of this brew is not known. The profile's target was ${tgt}; the machine's scale read ${scale} during the recording. Do not present either as the measured yield.`;
+}
+
 /** A compact, model-friendly copy of a Meticulous profile (no image, no ids). */
 export function compactProfile(profile) {
   if (!profile || typeof profile !== 'object') return null;
@@ -304,7 +319,8 @@ Bullets: what you need to know to go further (taste, a second-scale weight, a re
 ## Sources
 Bullets listing only the data you were given: the shot ids/dates, the profile name and version, the coffee as recorded. Do not invent URLs or literature.
 
-Rules: use the numbers from the digest and do not recompute or round them differently; never invent values that are not there — say "not recorded" instead; keep the tone plain and specific; write for the person who pulled the shot; do not describe the chart (the app shows it); do not add a title, preamble or closing remarks.`;
+Rules: use the numbers from the digest and do not recompute or round them differently; never invent values that are not there — say "not recorded" instead; keep the tone plain and specific; write for the person who pulled the shot; do not describe the chart (the app shows it); do not add a title, preamble or closing remarks.
+Weights: meta.beverageG is the cup — the yield to use for ratio and EY — and meta.beverageNote says where it came from (weighed by hand, the profile's target, or the scale). meta.profileTargetG is only what the profile aimed to stop at and meta.scaleFinalG only what the machine's scale read; quote them as such and never present either as the measured yield when a hand-weighed value exists. When the three disagree, say so and by how much.`;
 
 /**
  * Build the two messages for the model. `shots` is [{ digest, profile }] in
@@ -350,89 +366,118 @@ export function reviewTitle(digests) {
 }
 
 // ------------------------------------------------------------- markdown --
+// A small Markdown reader for the model's report. parseMarkdown() turns the
+// text into blocks (headings, paragraphs, lists, tables, code, quotes, rules)
+// made of inline runs ({ text, bold, italic, code, href }); renderMarkdown()
+// writes those as escaped HTML, and review-export.js writes the same blocks as
+// DOCX and PDF, so the three outputs never disagree about the structure.
 
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-function inline(text) {
-  let s = esc(text);
-  // code spans first so their contents are left alone
-  const codes = [];
-  s = s.replace(/`([^`]+)`/g, (m, c) => {
-    codes.push(`<code>${c}</code>`);
-    return `\u0000${codes.length - 1}\u0000`;
-  });
-  s = s.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
-  s = s.replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, '$1<i>$2</i>');
-  s = s.replace(/(^|[^\w])_([^_\n]+)_(?!\w)/g, '$1<i>$2</i>');
-  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-  s = s.replace(/\u0000(\d+)\u0000/g, (m, i) => codes[Number(i)]);
-  return s;
+/** Inline Markdown → runs. Code spans are taken out first so their contents are left alone. */
+export function parseInline(text) {
+  const runs = [];
+  const src = String(text);
+  let i = 0;
+  let buf = '';
+  const flush = (attrs = {}) => {
+    if (buf) runs.push({ text: buf, ...attrs });
+    buf = '';
+  };
+  while (i < src.length) {
+    const rest = src.slice(i);
+    let m;
+    if ((m = rest.match(/^`([^`]+)`/))) {
+      flush();
+      runs.push({ text: m[1], code: true });
+      i += m[0].length;
+      continue;
+    }
+    if ((m = rest.match(/^\*\*([^*]+)\*\*/))) {
+      flush();
+      runs.push(...parseInline(m[1]).map((r) => ({ ...r, bold: true })));
+      i += m[0].length;
+      continue;
+    }
+    const prevOk = i === 0 || /[^*\w]/.test(src[i - 1]);
+    if (prevOk && (m = rest.match(/^\*([^*\n]+)\*(?!\w)/))) {
+      flush();
+      runs.push(...parseInline(m[1]).map((r) => ({ ...r, italic: true })));
+      i += m[0].length;
+      continue;
+    }
+    if ((i === 0 || /[^\w]/.test(src[i - 1])) && (m = rest.match(/^_([^_\n]+)_(?!\w)/))) {
+      flush();
+      runs.push(...parseInline(m[1]).map((r) => ({ ...r, italic: true })));
+      i += m[0].length;
+      continue;
+    }
+    if ((m = rest.match(/^\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/))) {
+      flush();
+      runs.push({ text: m[1], href: m[2] });
+      i += m[0].length;
+      continue;
+    }
+    buf += src[i];
+    i += 1;
+  }
+  flush();
+  return runs;
 }
 
-/**
- * A small Markdown renderer for the model's report: headings, paragraphs,
- * ordered/unordered lists (one level of nesting), tables, code fences,
- * blockquotes, bold/italic/code/links. Everything is HTML-escaped first.
- */
-export function renderMarkdown(md) {
+/** Markdown text → blocks. Headings keep their source level; renderers decide how to show them. */
+export function parseMarkdown(md) {
   const lines = String(md || '').replace(/\r\n?/g, '\n').split('\n');
-  const out = [];
+  const blocks = [];
   let i = 0;
-  const flushPara = (buf) => {
-    if (buf.length) out.push(`<p>${inline(buf.join(' '))}</p>`);
-    buf.length = 0;
-  };
   const para = [];
+  const flushPara = () => {
+    if (para.length) blocks.push({ type: 'paragraph', inlines: parseInline(para.join(' ')) });
+    para.length = 0;
+  };
   while (i < lines.length) {
     const line = lines[i];
     if (/^\s*$/.test(line)) {
-      flushPara(para);
+      flushPara();
       i++;
       continue;
     }
-    // code fence
-    const fence = line.match(/^\s*```/);
-    if (fence) {
-      flushPara(para);
+    if (/^\s*```/.test(line)) {
+      flushPara();
       const buf = [];
       i++;
       while (i < lines.length && !/^\s*```/.test(lines[i])) buf.push(lines[i++]);
       i++;
-      out.push(`<pre><code>${esc(buf.join('\n'))}</code></pre>`);
+      blocks.push({ type: 'code', text: buf.join('\n') });
       continue;
     }
-    // heading
     const h = line.match(/^(#{1,6})\s+(.*)$/);
     if (h) {
-      flushPara(para);
-      const level = Math.min(6, h[1].length + 1); // the app owns h1/h2; the report starts at h3
-      out.push(`<h${level}>${inline(h[2].replace(/\s#+\s*$/, ''))}</h${level}>`);
+      flushPara();
+      blocks.push({ type: 'heading', level: h[1].length, inlines: parseInline(h[2].replace(/\s#+\s*$/, '')) });
       i++;
       continue;
     }
-    // table: header row + separator
     if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1])) {
-      flushPara(para);
-      const cells = (l) => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+      flushPara();
+      const cells = (l) => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => parseInline(c.trim()));
       const head = cells(line);
       i += 2;
       const rows = [];
       while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) rows.push(cells(lines[i++]));
-      out.push(`<table><thead><tr>${head.map((c) => `<th>${inline(c)}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>`);
+      blocks.push({ type: 'table', head, rows });
       continue;
     }
-    // blockquote
     if (/^\s*>\s?/.test(line)) {
-      flushPara(para);
+      flushPara();
       const buf = [];
       while (i < lines.length && /^\s*>\s?/.test(lines[i])) buf.push(lines[i++].replace(/^\s*>\s?/, ''));
-      out.push(`<blockquote>${renderMarkdown(buf.join('\n'))}</blockquote>`);
+      blocks.push({ type: 'quote', blocks: parseMarkdown(buf.join('\n')) });
       continue;
     }
-    // lists (with one level of nesting by indentation)
     const li = line.match(/^(\s*)([-*+]|\d+[.)])\s+(.*)$/);
     if (li) {
-      flushPara(para);
+      flushPara();
       const items = [];
       const baseIndent = li[1].length;
       const ordered = /\d/.test(li[2]);
@@ -449,7 +494,6 @@ export function renderMarkdown(md) {
           i++;
           continue;
         }
-        // continuation line of the current item (indented text, not blank)
         if (!m && /^\s{2,}\S/.test(lines[i]) && items.length) {
           const cur = items[items.length - 1];
           if (cur.children.length) cur.children.push(lines[i]);
@@ -459,22 +503,80 @@ export function renderMarkdown(md) {
         }
         break;
       }
-      const tag = ordered ? 'ol' : 'ul';
-      out.push(`<${tag}>${items.map((it) => `<li>${inline(it.text)}${it.children.length ? renderMarkdown(it.children.join('\n')) : ''}</li>`).join('')}</${tag}>`);
+      blocks.push({ type: 'list', ordered, items: items.map((it) => ({ inlines: parseInline(it.text), blocks: it.children.length ? parseMarkdown(it.children.join('\n')) : [] })) });
       continue;
     }
-    // horizontal rule
     if (/^\s*(-{3,}|\*{3,})\s*$/.test(line)) {
-      flushPara(para);
-      out.push('<hr />');
+      flushPara();
+      blocks.push({ type: 'hr' });
       i++;
       continue;
     }
     para.push(line.trim());
     i++;
   }
-  flushPara(para);
-  return out.join('\n');
+  flushPara();
+  return blocks;
+}
+
+function inlineHtml(runs) {
+  return runs
+    .map((r) => {
+      let t = esc(r.text);
+      if (r.code) t = `<code>${t}</code>`;
+      if (r.bold) t = `<b>${t}</b>`;
+      if (r.italic) t = `<i>${t}</i>`;
+      if (r.href) t = `<a href="${esc(r.href)}" target="_blank" rel="noopener noreferrer">${t}</a>`;
+      return t;
+    })
+    .join('');
+}
+
+function blocksHtml(blocks) {
+  return blocks
+    .map((b) => {
+      switch (b.type) {
+        case 'heading': return `<h${Math.min(6, b.level + 1)}>${inlineHtml(b.inlines)}</h${Math.min(6, b.level + 1)}>`; // the app owns h1/h2; the report starts at h3
+        case 'paragraph': return `<p>${inlineHtml(b.inlines)}</p>`;
+        case 'code': return `<pre><code>${esc(b.text)}</code></pre>`;
+        case 'table': return `<table><thead><tr>${b.head.map((c) => `<th>${inlineHtml(c)}</th>`).join('')}</tr></thead><tbody>${b.rows.map((r) => `<tr>${r.map((c) => `<td>${inlineHtml(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+        case 'quote': return `<blockquote>${blocksHtml(b.blocks)}</blockquote>`;
+        case 'list': {
+          const tag = b.ordered ? 'ol' : 'ul';
+          return `<${tag}>${b.items.map((it) => `<li>${inlineHtml(it.inlines)}${it.blocks.length ? blocksHtml(it.blocks) : ''}</li>`).join('')}</${tag}>`;
+        }
+        case 'hr': return '<hr />';
+        default: return '';
+      }
+    })
+    .join('\n');
+}
+
+/** Markdown → safe HTML (everything escaped; only http(s) links become anchors). */
+export function renderMarkdown(md) {
+  return blocksHtml(parseMarkdown(md));
+}
+
+/** Markdown → plain text, for places that cannot show formatting. */
+export function markdownToText(md) {
+  const inl = (runs) => runs.map((r) => r.text).join('');
+  const walk = (blocks, depth = 0) =>
+    blocks
+      .map((b) => {
+        const pad = '  '.repeat(depth);
+        switch (b.type) {
+          case 'heading': return `${pad}${inl(b.inlines).toUpperCase()}`;
+          case 'paragraph': return `${pad}${inl(b.inlines)}`;
+          case 'code': return b.text;
+          case 'table': return [b.head, ...b.rows].map((r) => pad + r.map(inl).join(' | ')).join('\n');
+          case 'quote': return walk(b.blocks, depth + 1);
+          case 'list': return b.items.map((it, n) => `${pad}${b.ordered ? `${n + 1}.` : '•'} ${inl(it.inlines)}${it.blocks.length ? '\n' + walk(it.blocks, depth + 1) : ''}`).join('\n');
+          case 'hr': return `${pad}———`;
+          default: return '';
+        }
+      })
+      .join('\n\n');
+  return walk(parseMarkdown(md));
 }
 
 /** Plain-text size estimate (≈ tokens) so the UI can warn before a huge request. */

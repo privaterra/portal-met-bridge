@@ -323,6 +323,10 @@ await test('recorder: checkpoint recovery finalises an interrupted shot, drops a
 });
 
 import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, splitStages, cumulativeWater } from '../js/review.js';
+import { profileFinalWeight, BEVERAGE_PREFERENCES } from '../js/analysis.js';
+import { parseMarkdown, parseInline, markdownToText, beverageNoteFor } from '../js/review.js';
+import { reviewToDocx, reviewMarkdownFile, reviewFileName, reviewFile, REVIEW_FORMATS, pdfSafe } from '../js/review-export.js';
+import { unzipSync, strFromU8 } from '../vendor/fflate.esm.js';
 import { PROVIDERS, buildRequest, deltaFromEvent, makeSseParser, normalizeModelList, textFromResponse, maskKey, baseUrlFor, isParamRejection, stripOptionalParams, streamCompletion } from '../js/ai.js';
 
 await test('review digest: stages, water, cup, EC shares; works without Portal data', () => {
@@ -491,6 +495,93 @@ await test('AI providers: a 400 for a sampling parameter is retried once without
   await assert.rejects(() => streamCompletion('anthropic', { key: 'k', model: 'm', system: 'S', user: 'U' }, { fetchImpl: badFetch }), /HTTP 400 · max_tokens: 8000 > 4096/);
   const stillBad = async () => new Response(JSON.stringify({ error: { message: 'temperature is not supported' } }), { status: 400, headers: { 'content-type': 'application/json' } });
   await assert.rejects(() => streamCompletion('openai', { key: 'k', model: 'm', system: 'S', user: 'U', temperature: 1 }, { fetchImpl: stillBad }), /HTTP 400/, 'a second refusal is reported, not retried again');
+});
+
+// review.js imports analysis.js with the version stamp, which is a second module instance in node (the
+// browser loads one copy, since every import carries the same stamp): the preference has to be set on both.
+const stampedAnalysis = await import(`../js/analysis.js?v=${JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version}`);
+const setPref = (p) => { setBeveragePreference(p); stampedAnalysis.setBeveragePreference(p); };
+
+await test('final weight (v0.12): profile target from the record, variables and ids; the manual mode; the digest says which weight is the cup', () => {
+  // profileFinalWeight: plain field, $variable reference, variable-only, the 2000 "no stop" sentinel
+  assert.equal(profileFinalWeight({ final_weight: 43 }), 43);
+  assert.equal(profileFinalWeight({ final_weight: '43' }), 43);
+  assert.equal(profileFinalWeight({ final_weight: '$final_weight', variables: [{ key: 'final_weight', name: 'Final weight', type: 'weight', value: 43 }] }), 43, '$variable reference resolved');
+  assert.equal(profileFinalWeight({ final_weight: 2000, variables: [{ key: 'yield', name: 'Target yield', type: 'weight', value: 40 }] }), 40, 'sentinel ignored, weight variable used');
+  assert.equal(profileFinalWeight({ final_weight: 2000 }), null, 'no weight stop → no target');
+  assert.equal(profileFinalWeight({ variables: [{ key: 'bloom_time', type: 'time', value: 20 }] }), null);
+  assert.equal(profileFinalWeight(null), null);
+  assert.equal(profileTargetOf({ machineSource: { profile: { name: 'Blooming Espresso', final_weight: '$final_weight', variables: [{ key: 'final_weight', value: 43 }] } } }), 43, 'older shots read the record');
+  // the digest's note: a hand-weighed cup is the yield; the target is only the aim
+  setPref('profile');
+  const weighed = { beverageG: 43, finalWeightG: 42.6, profileTargetG: 38, context: { doseG: 18 } };
+  assert.equal(beverageOf(weighed), 43);
+  assert.match(beverageNoteFor(weighed, 43, 38), /weighed by hand after the brew: 43 g.*authoritative.*target was 38 g.*scale read 42\.6 g/);
+  assert.match(beverageNoteFor({ finalWeightG: 42.6, profileTargetG: 43 }, 43, 43), /profile's target output weight, 43 g/);
+  assert.match(beverageNoteFor({ profileTargetG: 0 }, null, null), /not known.*Do not present either as the measured yield/);
+  setPref('manual');
+  assert.match(beverageNoteFor({ finalWeightG: 42.6, profileTargetG: 43 }, null, 43), /not known.*target was 43 g.*scale read 42\.6 g.*Do not present either/);
+  setPref('profile');
+  // manual: nothing stands in for a missing value
+  assert.deepEqual(BEVERAGE_PREFERENCES, ['profile', 'scale', 'manual']);
+  setPref('manual');
+  assert.equal(getBeveragePreference(), 'manual');
+  assert.equal(beverageSource({ finalWeightG: 42.6, profileTargetG: 43 }), null);
+  assert.equal(beverageOf({ finalWeightG: 42.6, profileTargetG: 43 }), null);
+  assert.equal(beverageOf({ finalWeightG: 42.6, profileTargetG: 43, beverageG: 43.4 }), 43.4, 'typed value is used');
+  assert.equal(beverageSource({ finalWeightG: 42.6, beverageG: 43.4 }), 'weighed');
+  const demo = makeDemoShot({ seed: 5 });
+  const d = buildShotDigest({ ...demo, finalWeightG: 40, profileTargetG: 38, context: { doseG: 18 } }, null);
+  assert.equal(d.meta.beverageG, null);
+  assert.equal(d.meta.ratio, null);
+  assert.ok(d.gaps.some((g) => /final weight of this brew is not known/.test(g)));
+  assert.equal(d.meta.weighedG, null);
+  setPref('profile');
+  const d2 = buildShotDigest({ ...demo, finalWeightG: 40, profileTargetG: 38, beverageG: 43, context: { doseG: 18 } }, null);
+  assert.equal(d2.meta.beverageG, 43);
+  assert.equal(d2.meta.weighedG, 43);
+  assert.equal(d2.meta.profileTargetG, 38);
+  assert.equal(d2.meta.scaleFinalG, 40);
+  assert.equal(d2.meta.beverageSource, 'weighed');
+  const { system, user } = buildReviewMessages([{ digest: d2, profile: null }], {});
+  assert.ok(/never present either as the measured yield/.test(system) && user.includes('"weighedG":43') && user.includes('authoritative'));
+});
+
+await test('review export: parser blocks, Markdown file, Word document (zip parts, headings, table), file names', () => {
+  const md = '## Verdict\n\nClean **shot**.\n\n- one\n  - nested\n\n| Stage | Time |\n|---|---|\n| Bloom | 0–2 s |\n\n1. first\n';
+  const blocks = parseMarkdown(md);
+  assert.deepEqual(blocks.map((b) => b.type), ['heading', 'paragraph', 'list', 'table', 'list']);
+  assert.equal(blocks[0].level, 2);
+  assert.deepEqual(parseInline('a **b** `c` [d](https://x.y/z) *e*'), [{ text: 'a ' }, { text: 'b', bold: true }, { text: ' ' }, { text: 'c', code: true }, { text: ' ' }, { text: 'd', href: 'https://x.y/z' }, { text: ' ' }, { text: 'e', italic: true }]);
+  assert.equal(blocks[2].items[0].blocks[0].type, 'list', 'nested list parsed');
+  assert.equal(blocks[3].rows[0][1][0].text, '0–2 s');
+  assert.ok(markdownToText(md).includes('VERDICT') && markdownToText(md).includes('• one') && markdownToText(md).includes('Bloom | 0–2 s'));
+  const rev = { id: 'rev-1', createdAt: Date.UTC(2026, 10, 10, 16, 55, 2), title: 'Shot review: Supernova on Blooming Espresso', shotIds: ['a'], shotLabels: ['Nov 10 · Supernova · Blooming Espresso · 18.0 → 43.0 g'], provider: 'anthropic', model: 'claude-opus-5-5', taste: 'sweet', question: 'grind?', markdown: md, durationMs: 48000, digests: [{ meta: { coffee: { bean: 'Supernova' } } }] };
+  assert.equal(reviewFileName(rev, 'docx'), 'review-2026-11-10T16-55-02-supernova.docx');
+  assert.equal(reviewFileName(rev), 'review-2026-11-10T16-55-02-supernova.md');
+  const mdFile = reviewMarkdownFile(rev);
+  assert.ok(mdFile.startsWith('# Shot review: Supernova on Blooming Espresso\n') && /Claude \(Anthropic\) · claude-opus-5-5 · 48 s/.test(mdFile) && mdFile.includes('Taste: sweet') && mdFile.includes('## Verdict'));
+  const docx = reviewToDocx(rev);
+  assert.ok(docx instanceof Uint8Array && docx.length > 1500);
+  assert.equal(docx[0], 0x50, 'zip magic P');
+  assert.equal(docx[1], 0x4b, 'zip magic K');
+  const parts = unzipSync(docx);
+  assert.deepEqual(Object.keys(parts).sort(), ['[Content_Types].xml', '_rels/.rels', 'docProps/core.xml', 'word/_rels/document.xml.rels', 'word/document.xml', 'word/styles.xml']);
+  const docXml = strFromU8(parts['word/document.xml']);
+  assert.ok(docXml.includes('<w:pStyle w:val="Title"/>') && docXml.includes('Shot review: Supernova on Blooming Espresso'));
+  assert.ok(docXml.includes('<w:pStyle w:val="Heading1"/>') && docXml.includes('>Verdict<'), 'h2 → Heading1');
+  assert.ok(docXml.includes('<w:b/>') && docXml.includes('>shot<'), 'bold run');
+  assert.ok(docXml.includes('<w:tbl>') && docXml.includes('<w:tblHeader/>') && docXml.includes('0–2 s'), 'table with a header row');
+  assert.ok(docXml.includes('>•\t<') && docXml.includes('>one<') && docXml.includes('>1.\t<') && docXml.includes('>first<'), 'list markers');
+  assert.ok(docXml.includes('<w:sectPr>'), 'section properties close the body');
+  assert.ok(/<w:t xml:space="preserve">[^<]*&amp;[^<]*<\/w:t>/.test(reviewToDocxText({ ...rev, markdown: 'a & b < c' })), 'XML escaped');
+  const f = reviewFile(rev, 'docx');
+  assert.equal(f.mime, REVIEW_FORMATS.docx.mime);
+  assert.equal(reviewFile(rev, 'md').name.endsWith('.md'), true);
+  assert.throws(() => reviewFile(rev, 'pdf'), /jsPDF is not loaded/);
+  assert.equal(pdfSafe('18.0 → 43.0 g · ∫EC dm · 420 μm · 92 °C · 1 : 2.11 — ≥ 7 bar'), '18.0 -> 43.0 g · integral EC dm · 420 um · 92 °C · 1 : 2.11 — >= 7 bar', 'symbols jsPDF cannot draw are spelled out');
+  assert.equal(pdfSafe('naïve café — “quotes” … €'), 'naïve café — “quotes” … €', 'WinAnsi text untouched');
+  function reviewToDocxText(r) { return strFromU8(unzipSync(reviewToDocx(r))['word/document.xml']); }
 });
 
 await test('release: every version stamp agrees with package.json (tools/bump-version.mjs keeps them in step)', () => {

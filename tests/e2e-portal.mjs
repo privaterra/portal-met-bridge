@@ -217,6 +217,8 @@ try {
   });
   check('shot has Portal samples at ~8 Hz', sel.portal > 150, `${sel.portal} samples`);
   check('machine record attached', sel.machineRecord);
+  const targets = await page.evaluate(() => ({ byName: window.__pb.state.profileTargets.get('Blooming Espresso'), byId43: window.__pb.state.profileTargetsById.get('80c5ea87'), byId38: window.__pb.state.profileTargetsById.get('dup00002'), shotProfileId: window.__pb.state.selected?.profileId }));
+  check('two profiles with one name and different targets are told apart by id (the variable-defined one too); the shot keeps the loaded profile\'s id', Number.isNaN(targets.byName) && targets.byId43 === 43 && targets.byId38 === 38 && targets.shotProfileId === 'demo0001', JSON.stringify(targets));
   check('profile target kept from the attached record; beverage defaults to it, not the scale', sel.target === 38 && sel.recordTarget === 38 && Math.abs(sel.scale - 40) < 0.3 && /38\.0 g out \(profile target; machine 40\.0 g\)/.test(sel.sub), JSON.stringify({ target: sel.target, recordTarget: sel.recordTarget, scale: sel.scale, sub: sel.sub }));
   check('analysis status ok with ≥ 85 % coverage', sel.status === 'ok' && sel.coverage >= 0.85, `${sel.status}, coverage ${(sel.coverage * 100).toFixed(0)} %`);
   check('mean EC and peak are plausible', sel.meanEc > 0.5 && sel.peak > sel.meanEc, `mean ${sel.meanEc.toFixed(3)} peak ${sel.peak.toFixed(3)}`);
@@ -345,6 +347,31 @@ try {
   check('log file written to the folder (dated .log) and the download copy', folderFiles.some((f) => /logs\/\d{4}-\d{2}-\d{2}\.log$/.test(f)) && folderFiles.some((f) => /logs\/portal-met-bridge-log-.*\.txt$/.test(f)), folderFiles.filter((f) => f.includes('logs')).join(', '));
   const logText = await page.evaluate(() => { const k = Object.keys(window.__fakeFolderFiles).find((f) => /\.log$/.test(f)); return window.__fakeFolderFiles[k]; });
   check('log contains Portal GATT steps and recorder transitions', /\[portal\] state connected/.test(logText) && /\[recorder\] → recording/.test(logText) && /\[recorder\] saved shot/.test(logText), logText.split('\n').slice(0, 3).join(' | '));
+  // ---- Final weight typed after each brew (Settings → Recording → Final weight: manual)
+  await page.selectOption('#set-beverage-default', 'manual');
+  await page.waitForTimeout(300);
+  await page.click('.view-tab[data-view="history"]');
+  const manualRow = await page.evaluate(() => document.querySelector('#hist-rows tr')?.textContent.replace(/\s+/g, ' '));
+  check('with the typed option and nothing typed, History shows "? g" instead of a stand-in', /18\.5 → \? g/.test(manualRow) && !/◎/.test(manualRow), manualRow.slice(0, 120));
+  await page.click('#hist-rows tr button[data-act="weigh"]');
+  await page.waitForSelector('#weight-dialog[open]');
+  check('the "? g" button opens the final-weight dialog with the scale value as a hint', /scale saw 40\.0/.test(await page.getAttribute('#w-bev', 'placeholder')) && /machine's scale 40\.0 g/.test(await page.textContent('#w-hint')), `${await page.getAttribute('#w-bev', 'placeholder')} | ${(await page.textContent('#w-hint')).trim()}`);
+  await page.fill('#w-bev', '43');
+  await page.press('#w-bev', 'Enter');
+  await page.waitForTimeout(400);
+  const typedRow = await page.evaluate(() => ({ row: document.querySelector('#hist-rows tr')?.textContent.replace(/\s+/g, ' '), bev: window.__pb.state.selected?.beverageG, sub: document.querySelector('#shot-sub').textContent, weighHidden: document.querySelector('#shot-weigh').hidden }));
+  check('Enter saves the typed final weight: History shows it with ⚖, the shot header uses it, the Enter-final-weight button goes away', /→ 43\.0 g⚖\s*1 : 2\.32/.test(typedRow.row) && typedRow.bev === 43 && /43\.0 g out \(weighed; machine 40\.0 g\)/.test(typedRow.sub) && typedRow.weighHidden === true, JSON.stringify(typedRow).slice(0, 220));
+  await page.click('.view-tab[data-view="shots"]');
+  await page.evaluate(() => window.__pb.openWeightDialog(window.__pb.state.selected.id));
+  await page.waitForSelector('#weight-dialog[open]');
+  await page.fill('#w-bev', '');
+  await page.click('#w-save');
+  await page.waitForTimeout(400);
+  check('a blank weight clears it again and the Shots tab offers Enter final weight', (await page.evaluate(() => window.__pb.state.selected?.beverageG)) === undefined && (await page.isVisible('#shot-weigh')) && /final weight not entered/.test(await page.textContent('#shot-sub')));
+  await page.click('.view-tab[data-view="settings"]');
+  await page.selectOption('#set-beverage-default', 'profile');
+  await page.waitForTimeout(300);
+
   // ---- AI review: settings against the mock's OpenAI-compatible endpoint
   await page.selectOption('#set-ai-provider', 'openai');
   await page.waitForTimeout(200);
@@ -354,7 +381,7 @@ try {
   await page.fill('#set-ai-base-openai', `http://127.0.0.1:${MOCK_PORT}`);
   await page.click('#savebar .btn.primary');
   await page.waitForTimeout(300);
-  check('AI settings save with the Save button and the key is shown masked', /Saved [34] settings/.test(await page.textContent('#savebar-status')) && /OpenAI · mock-gpt-2 · 127\.0\.0\.1:\d+ · key sk-tes…-123/.test(await page.textContent('#set-ai-note')), `${(await page.textContent('#savebar-status')).trim()} | ${await page.textContent('#set-ai-note')}`);
+  check('AI settings save with the Save button and the key is shown masked', /Saved [345] settings/.test(await page.textContent('#savebar-status')) && /OpenAI · mock-gpt-2 · 127\.0\.0\.1:\d+ · key sk-tes…-123/.test(await page.textContent('#set-ai-note')), `${(await page.textContent('#savebar-status')).trim()} | ${await page.textContent('#set-ai-note')}`);
   await page.click('#set-ai-models');
   await page.waitForFunction(() => /models/.test(document.querySelector('#set-ai-test-result').textContent), null, { timeout: 5000 });
   const modelOpts = await page.evaluate(() => [...document.querySelectorAll('#ai-models-openai option')].map((o) => o.value));
@@ -408,11 +435,22 @@ try {
   await page.waitForTimeout(300);
   const savedRows = await page.evaluate(() => ({ rows: document.querySelectorAll('#an-saved-rows tr').length, tab: document.querySelector('#analysis-tab-count').textContent, btn: document.querySelector('#an-save').textContent }));
   check('Save review stores it and the tab counts it', savedRows.rows === 1 && savedRows.tab === '(1)' && savedRows.btn === 'Saved', JSON.stringify(savedRows));
+  check('each saved review has its own format picker, preset to the default', (await page.evaluate(() => document.querySelector('#an-saved-rows select.fmt')?.value)) === 'md');
   await page.click('#an-download');
   await page.waitForTimeout(500);
   const reviewFiles = await page.evaluate(() => Object.keys(window.__fakeFolderFiles || {}).filter((f) => /reviews\/review-.*\.md$/.test(f)));
   const reviewMd = await page.evaluate((f) => window.__fakeFolderFiles[f], reviewFiles[0] || '');
   check('Download .md writes the review with its header into the folder', reviewFiles.length === 1 && /^# Shot review: 3 shots of E2E coffee/.test(reviewMd) && /Taste: sweet, a bit thin/.test(reviewMd) && /## Verdict/.test(reviewMd), reviewFiles.join(','));
+  check('the format picker defaults to Markdown (Settings → AI review → Download reviews as)', (await page.inputValue('#an-format')) === 'md' && (await page.evaluate(() => [...document.querySelectorAll('#an-format option')].map((o) => o.value).join(','))) === 'md,docx,pdf');
+  await page.selectOption('#an-format', 'docx');
+  await page.click('#an-download');
+  await page.waitForFunction(() => Object.keys(window.__fakeFolderFiles || {}).some((f) => /reviews\/review-.*\.docx$/.test(f)), null, { timeout: 10000 });
+  await page.selectOption('#an-format', 'pdf');
+  await page.click('#an-download');
+  await page.waitForFunction(() => Object.keys(window.__fakeFolderFiles || {}).some((f) => /reviews\/review-.*\.pdf$/.test(f)), null, { timeout: 15000 });
+  const formats = await page.evaluate(() => { const f = window.__fakeFolderFiles; const docx = Object.keys(f).find((k) => /\.docx$/.test(k)); const pdf = Object.keys(f).find((k) => /\.pdf$/.test(k)); return { docx: f[docx].slice(0, 2), docxLen: f[docx].length, pdf: f[pdf].slice(0, 5), pdfLen: f[pdf].length }; });
+  check('the same review downloads as Word and PDF (zip and PDF signatures, sensible sizes)', formats.docx === 'PK' && formats.docxLen > 3000 && formats.pdf === '%PDF-' && formats.pdfLen > 8000, JSON.stringify(formats));
+  await page.selectOption('#an-format', 'md');
   // a wrong model name surfaces as a readable error and cannot be saved
   await page.evaluate(() => { window.__pb.settings.aiModelOpenai = 'bad-model'; });
   await page.click('#an-run');
@@ -434,9 +472,9 @@ try {
 
   // ---- Brew controls: the dial's actions over the API (the mock plays "heating → click to start")
   await page.click('.view-tab[data-view="shots"]');
-  await page.waitForFunction(() => !document.getElementById('brew-controls').hidden && document.querySelectorAll('#brew-profile option').length === 3, null, { timeout: 8000 }).catch(() => {});
+  await page.waitForFunction(() => !document.getElementById('brew-controls').hidden && document.querySelectorAll('#brew-profile option').length === 4, null, { timeout: 8000 }).catch(() => {});
   const brewOpts = await page.evaluate(() => [...document.querySelectorAll('#brew-profile option')].map((o) => o.textContent));
-  check('Brew controls appear while the machine is connected, with its profiles', (await page.isVisible('#brew-controls')) && brewOpts.length === 3 && /Blooming Espresso · 43 g · 92 °C/.test(brewOpts[0]), brewOpts.join(' | '));
+  check('Brew controls appear while the machine is connected, with its profiles', (await page.isVisible('#brew-controls')) && brewOpts.length === 4 && /Blooming Espresso · 43 g · 92 °C/.test(brewOpts[0]) && /Blooming Espresso · 38 g · 93 °C/.test(brewOpts[3]), brewOpts.join(' | '));
   await page.click('#brew-start');
   await page.waitForFunction(() => /click to start/i.test(document.querySelector('#brew-state').textContent), null, { timeout: 5000 });
   check('Start brew sends the dial click; the rail shows the machine waiting at "click to start"', /Ready — click to start · 93\.4 °C/.test(await page.textContent('#brew-state')) && (await page.textContent('#brew-start')) === 'Start brew now' && !(await page.isDisabled('#brew-stop')), (await page.textContent('#brew-state')).trim());

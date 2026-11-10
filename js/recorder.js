@@ -46,7 +46,7 @@ export class ShotRecorder extends EventTarget {
 
     if (rising && this.state !== 'recording' && this.autoStart) {
       if (this.state === 'settling') this._finalize(); // back-to-back shots
-      this._start({ machineTimeMs: s.timeMs, profile: s.profile, manual: false, now });
+      this._start({ machineTimeMs: s.timeMs, profile: s.profile, profileId: s.profileId, manual: false, now });
     }
     if (!this.isRecording) return;
 
@@ -59,6 +59,7 @@ export class ShotRecorder extends EventTarget {
     }
     this.shot.machine.push({ t: round3(t), p: s.p, f: s.f, w: s.w, g: s.g, temp: s.temp, status: s.name, setpoint: s.setpoints?.active ? s.setpoints[s.setpoints.active] : NaN });
     if (!this.shot.profileName && s.profile) this.shot.profileName = s.profile;
+    if (!this.shot.profileId && s.profileId) this.shot.profileId = s.profileId;
     if (Number.isFinite(s.w)) this.shot.finalWeightG = Math.max(this.shot.finalWeightG || 0, s.w);
     this._emit('sample', { kind: 'machine', t });
 
@@ -90,13 +91,14 @@ export class ShotRecorder extends EventTarget {
     this._finalize();
   }
 
-  _start({ machineTimeMs, profile, manual, now }) {
+  _start({ machineTimeMs, profile, profileId, manual, now }) {
     if (this._settleTimer) clearTimeout(this._settleTimer);
     this.wallZero = now - Math.max(0, machineTimeMs || 0);
     this.shot = {
       id: cryptoId(),
       startedAt: Date.now() - Math.max(0, machineTimeMs || 0),
       profileName: profile || null,
+      profileId: profileId || null, // the loaded profile's id from the status stream — names are not unique
       machine: [],
       portal: [],
       finalWeightG: 0,

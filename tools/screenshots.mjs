@@ -150,6 +150,16 @@ try {
   await page.waitForTimeout(300);
   await shot(page, 'shots');
   await shot(page, 'brew', { clip: { x: 0, y: 60, width: 300, height: 400 } });
+  // the after-brew prompt for the final weight (Settings → Recording → Final weight: typed)
+  await page.evaluate(() => { window.__pb.settings.beverageDefault = 'manual'; });
+  await page.evaluate((id) => window.__pb.openWeightDialog(id), liveId);
+  await page.waitForSelector('#weight-dialog[open]');
+  await page.fill('#w-bev', '43');
+  await page.waitForTimeout(200);
+  const wbox = await page.evaluate(() => { const r = document.querySelector('#weight-dialog').getBoundingClientRect(); return { x: Math.max(0, r.x - 12), y: Math.max(0, r.y - 12), width: r.width + 24, height: r.height + 24 }; });
+  await shot(page, 'final-weight', { clip: wbox });
+  await page.click('#w-later');
+  await page.evaluate(() => { window.__pb.settings.beverageDefault = 'profile'; });
 
   // ---- History: grind, ◎ / ⚖, ratio, data tags
   await page.setViewportSize({ width: 1440, height: 560 });

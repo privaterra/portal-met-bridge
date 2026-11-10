@@ -24,7 +24,7 @@ const shot = makeDemoShot({ seed: 42 });
 const startEpoch = Date.now() / 1000 + 3; // shot starts 3 s after boot
 let saved = null;
 // dial state driven by /api/v1/action/*: idle → heating → click to start → (idle again on abort)
-const dial = { phase: 'idle', since: 0, loadedProfile: 'Blooming Espresso (demo)', actions: [] };
+const dial = { phase: 'idle', since: 0, loadedProfile: 'Blooming Espresso (demo)', loadedId: 'demo0001', actions: [] };
 const AI_KEY = process.env.MOCK_AI_KEY || 'sk-test-123';
 const AI_REPORT = (n, noPortal) => `## Verdict
 
@@ -95,7 +95,7 @@ const server = http.createServer((req, res) => {
   if (req.url === '/api/v1/history/last') { res.setHeader('Content-Type', 'application/json'); return res.end(saved ? JSON.stringify(saved).replace('"motor_speed": 1', '"motor_speed": NaN') : 'null'); }
   if (req.url === '/api/v1/history') return json(res, { history: saved ? [saved] : [] });
   if (req.url === '/api/v1/machine') return json(res, { name: 'MeticulousMock', hostname: 'mock-000001', firmware: '0.2.24-mock', mainVoltage: 120, serial: '000001', color: 'BLACK', batch_number: '0047', build_date: '2026-06-14T06:25:10Z', software_version: '2026-10-31', image_build_channel: 'beta', image_version: '2026M1510-beta', disturbance_resilience: false, disturbance_resilience_supported: true, tare_behavior_supported: true, pour_over_profiles_supported: true, pour_over_profile_schema_version: 1, repository_info: { backend: { branch: 'beta', commit: '0044ec9 - mock' }, firmware: { branch: 'beta', commit: '1891448a - mock' } }, version_history: ['beta-20261031_225605'] });
-  if (req.url === '/api/v1/profile/list') return json(res, [{ id: '80c5ea87', name: 'Blooming Espresso', author: 'Robert Guerra', temperature: 92, final_weight: 43, last_changed: 1789974014, display: { accentColor: '#FA3012', shortDescription: 'Floral bloom', description: 'Start with 18.0 g, 43 g out.', image: '/api/v1/profile/image/x.jpeg' }, variables: [{ name: 'Bloom Time', key: 'bloom_time', type: 'time', value: 20 }, { name: 'Extraction Flow', key: 'extraction_flow', type: 'flow', value: 2 }] }, { id: '1a830a13', name: 'Blooming - Hatch Supernova', author: 'Robert Guerra', temperature: 93, final_weight: 38, display: { accentColor: '#433C36' }, variables: [] }, { id: 'demo0001', name: 'Blooming Espresso (demo)', author: 'mock', temperature: 93, final_weight: 38, display: { accentColor: '#2447B8' }, variables: [] }]);
+  if (req.url === '/api/v1/profile/list') return json(res, [{ id: '80c5ea87', name: 'Blooming Espresso', author: 'Robert Guerra', temperature: 92, final_weight: 43, last_changed: 1789974014, display: { accentColor: '#FA3012', shortDescription: 'Floral bloom', description: 'Start with 18.0 g, 43 g out.', image: '/api/v1/profile/image/x.jpeg' }, variables: [{ name: 'Bloom Time', key: 'bloom_time', type: 'time', value: 20 }, { name: 'Extraction Flow', key: 'extraction_flow', type: 'flow', value: 2 }] }, { id: '1a830a13', name: 'Blooming - Hatch Supernova', author: 'Robert Guerra', temperature: 93, final_weight: 38, display: { accentColor: '#433C36' }, variables: [] }, { id: 'demo0001', name: 'Blooming Espresso (demo)', author: 'mock', temperature: 93, final_weight: 38, display: { accentColor: '#2447B8' }, variables: [] }, { id: 'dup00002', name: 'Blooming Espresso', author: 'Robert Guerra', temperature: 93, final_weight: '$final_weight', last_changed: 1789900000, display: { accentColor: '#FA3012' }, variables: [{ name: 'Final weight', key: 'final_weight', type: 'weight', value: 38 }] }]); // a second "Blooming Espresso": same name, 38 g via a variable
   if (req.url === '/api/v1/settings') return json(res, { enable_sounds: true, heat_on_boot: true, heating_timeout: 10, update_channel: 'beta', tare_behavior: 'after_retraction', time_zone: 'America/Toronto', clock_format_24_hour: true, disturbance_resilience: false, partial_retraction: 45.33 });
   if (req.url === '/api/v1/wifi/config') return json(res, { config: { mode: 'CLIENT', apName: 'Mock' }, status: { connected: true, connection_name: 'HomeWiFi', gateway: '192.168.1.1', ips: ['192.168.1.50', 'fe80::1'], dns: ['192.168.1.1'], mac: '00:11:22:33:44:55', hostname: 'mock-000001' }, health: { mode: 'CLIENT', link_connected: true, has_ipv4: true, gateway_reachable: false, dns_resolves: false, internet_reachable: false, degraded: false, message: '' } });
   if (req.url === '/api/v1/notifications') return json(res, []);
@@ -116,10 +116,11 @@ const server = http.createServer((req, res) => {
   }
   const load = req.url.match(/^\/api\/v1\/profile\/load\/([0-9a-zA-Z-]+)$/);
   if (load) {
-    const list = { '80c5ea87': 'Blooming Espresso', '1a830a13': 'Blooming - Hatch Supernova', demo0001: 'Blooming Espresso (demo)' };
+    const list = { '80c5ea87': 'Blooming Espresso', '1a830a13': 'Blooming - Hatch Supernova', demo0001: 'Blooming Espresso (demo)', dup00002: 'Blooming Espresso' };
     if (!list[load[1]]) { res.statusCode = 404; return json(res, { status: 'error', error: 'profile not found', id: load[1] }); }
     if (dial.phase !== 'idle') { res.statusCode = 409; return json(res, { status: 'error', error: 'machine is busy' }); }
     dial.loadedProfile = list[load[1]];
+    dial.loadedId = load[1];
     return json(res, { name: dial.loadedProfile, id: load[1] });
   }
   if (req.url === '/mock/dial') return json(res, dial);
@@ -170,12 +171,12 @@ setInterval(() => {
   if (dial.phase === 'preheat' && Date.now() - dial.since > 800) dial.phase = 'idle';
   const dialPayload = dial.phase === 'heating' || dial.phase === 'preheat' ? { name: 'heating', state: 'brewing' } : dial.phase === 'ready' ? { name: 'click to start', state: 'brewing' } : null;
   if (elapsed < 0) {
-    payload = { name: 'idle', state: 'idle', extracting: false, time: -1, profile: dial.loadedProfile, profile_time: -1, sensors: { p: 0, f: 0, w: 0, t: 92, g: 0 }, setpoints: { active: null } };
+    payload = { name: 'idle', state: 'idle', extracting: false, time: -1, profile: dial.loadedProfile, loaded_profile: dial.loadedProfile, id: dial.loadedId, profile_time: -1, sensors: { p: 0, f: 0, w: 0, t: 92, g: 0 }, setpoints: { active: null } };
   } else if (idx < shot.machine.length) {
     while (idx < shot.machine.length - 1 && shot.machine[idx + 1].t <= elapsed) idx++;
     const s = shot.machine[idx];
     const extracting = s.t < shot.durationSec;
-    payload = { name: s.status, state: extracting ? 'brewing' : 'idle', extracting, time: Math.round(s.t * 1000), profile: shot.profileName, profile_time: Math.round(s.t * 1000), sensors: { p: s.p, f: s.f, w: s.w, t: s.temp, g: s.g }, setpoints: { active: 'pressure', pressure: 9 } };
+    payload = { name: s.status, state: extracting ? 'brewing' : 'idle', extracting, time: Math.round(s.t * 1000), profile: shot.profileName, loaded_profile: shot.profileName, id: 'demo0001', profile_time: Math.round(s.t * 1000), sensors: { p: s.p, f: s.f, w: s.w, t: s.temp, g: s.g }, setpoints: { active: 'pressure', pressure: 9 } };
     if (idx === shot.machine.length - 1) idx++;
   } else {
     if (!saved) {
@@ -183,12 +184,12 @@ setInterval(() => {
         id: 'saved-42',
         time: startEpoch,
         profile_name: shot.profileName,
-        profile: { name: shot.profileName, temperature: 93, final_weight: 38 }, // the scale ends at ~40 g: target + drips
+        profile: { id: 'demo0001', name: shot.profileName, temperature: 93, final_weight: 38 }, // the scale ends at ~40 g: target + drips
         data: shot.machine.map((s) => ({ time: Math.round(s.t * 1000), profile_time: Math.round(s.t * 1000), status: s.t < 2 ? 'Saturate' : s.t < 6 ? 'Bloom' : s.t < 9 ? 'Gentle Rebuild' : s.t < shot.durationSec ? 'Extract' : 'retracting', shot: { pressure: s.p, flow: s.f, weight: s.w, gravimetric_flow: s.g, setpoints: { active: 'flow', flow: 2, pressure: 7 } }, sensors: { external_1: 102.95, external_2: 103.43, bar_up: 83.99, tube: 86.35, motor_temp: 29.31, motor_speed: 1, motor_position: 40.96, motor_power: 25.77, bandheater_power: 0.0 } })),
       };
       console.log('saved shot available');
     }
-    payload = { name: 'idle', state: 'idle', extracting: false, time: -1, profile: dial.loadedProfile, profile_time: -1, sensors: { p: 0, f: 0, w: shot.finalWeightG, t: 92, g: 0 }, setpoints: { active: null } };
+    payload = { name: 'idle', state: 'idle', extracting: false, time: -1, profile: dial.loadedProfile, loaded_profile: dial.loadedProfile, id: dial.loadedId, profile_time: -1, sensors: { p: 0, f: 0, w: shot.finalWeightG, t: 92, g: 0 }, setpoints: { active: null } };
   }
   if (dialPayload && !payload.extracting) payload = { ...payload, ...dialPayload, sensors: { ...payload.sensors, t: 93.4 } };
   io.emit('status', payload);

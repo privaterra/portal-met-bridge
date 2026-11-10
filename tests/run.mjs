@@ -323,7 +323,7 @@ await test('recorder: checkpoint recovery finalises an interrupted shot, drops a
 });
 
 import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, splitStages, cumulativeWater } from '../js/review.js';
-import { PROVIDERS, buildRequest, deltaFromEvent, makeSseParser, normalizeModelList, textFromResponse, maskKey, baseUrlFor } from '../js/ai.js';
+import { PROVIDERS, buildRequest, deltaFromEvent, makeSseParser, normalizeModelList, textFromResponse, maskKey, baseUrlFor, isParamRejection, stripOptionalParams, streamCompletion } from '../js/ai.js';
 
 await test('review digest: stages, water, cup, EC shares; works without Portal data', () => {
   const demo = makeDemoShot({ seed: 3 });
@@ -410,6 +410,13 @@ await test('AI providers: request shapes, stream deltas, SSE framing, model list
   assert.equal(a.body.system, 'S');
   assert.equal(a.body.messages[0].content, 'U');
   assert.equal(a.body.stream, true);
+  assert.equal(a.body.max_tokens, 10);
+  // v0.11.2: no sampling parameters unless asked for — Opus 5.5 answers 400 "`temperature` is deprecated for this model"
+  assert.ok(!('temperature' in a.body) && !('top_p' in a.body), 'no temperature by default (Anthropic)');
+  assert.ok(!('temperature' in buildRequest('openai', opts).body), 'no temperature by default (OpenAI)');
+  assert.ok(!('temperature' in buildRequest('google', opts).body.generationConfig), 'no temperature by default (Gemini)');
+  assert.equal(buildRequest('anthropic', { ...opts, temperature: 0.2 }).body.temperature, 0.2, 'still sent when asked for');
+  assert.equal(buildRequest('google', { ...opts, temperature: 0 }).body.generationConfig.temperature, 0);
   const o = buildRequest('openai', { ...opts, baseUrl: 'http://127.0.0.1:1234/' });
   assert.equal(o.url, 'http://127.0.0.1:1234/v1/chat/completions', 'custom endpoint, trailing slash dropped');
   assert.equal(o.headers.authorization, 'Bearer k');
@@ -448,9 +455,42 @@ await test('AI providers: request shapes, stream deltas, SSE framing, model list
   assert.deepEqual(gg.map((m) => m.id), ['gemini-3.8-flash']);
   const an = normalizeModelList('anthropic', { data: [{ id: 'claude-sonnet-5-5', display_name: 'Claude Sonnet 5.5', created_at: '2026-05-01' }, { id: 'claude-haiku-5-5', display_name: 'Claude Haiku 5.5', created_at: '2026-06-01' }] });
   assert.deepEqual(an.map((m) => m.id), ['claude-haiku-5-5', 'claude-sonnet-5-5']);
+  // a model that refuses a parameter: recognised, stripped, retried once
+  assert.ok(isParamRejection(400, '`temperature` is deprecated for this model'));
+  assert.ok(isParamRejection(400, "Unsupported parameter: 'temperature' is not supported with this model."));
+  assert.ok(!isParamRejection(401, 'temperature'), 'only a 400 counts');
+  assert.ok(!isParamRejection(400, 'messages: text content blocks must be non-empty'), 'other 400s are not retried');
+  assert.deepEqual(stripOptionalParams({ model: 'm', temperature: 0.4, top_p: 1, stream: true }), { model: 'm', stream: true });
+  assert.deepEqual(stripOptionalParams({ generationConfig: { temperature: 0.4, topP: 1, maxOutputTokens: 5 } }), { generationConfig: { maxOutputTokens: 5 } });
+  assert.equal(stripOptionalParams({ model: 'm', stream: true }), null, 'nothing to strip → no retry');
   assert.equal(maskKey('sk-ant-api03-abcdefghijklmnop'), 'sk-ant…mnop');
   assert.equal(maskKey('short'), '•••••');
   assert.ok(Object.keys(PROVIDERS).every((k) => PROVIDERS[k].defaultModel && PROVIDERS[k].keyUrl.startsWith('https://')));
+});
+
+await test('AI providers: a 400 for a sampling parameter is retried once without it; other errors surface as they are', async () => {
+  const calls = [];
+  const fakeFetch = async (url, init) => {
+    const body = JSON.parse(init.body);
+    calls.push(body);
+    if ('temperature' in body) return new Response(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: '`temperature` is deprecated for this model' } }), { status: 400, headers: { 'content-type': 'application/json' } });
+    return new Response(JSON.stringify({ content: [{ type: 'text', text: 'fine without it' }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  const retried = [];
+  const text = await streamCompletion('anthropic', { key: 'k', model: 'claude-opus-5-5', system: 'S', user: 'U', temperature: 0.4 }, { fetchImpl: fakeFetch, onRetry: (e) => retried.push(e.detail) });
+  assert.equal(text, 'fine without it');
+  assert.equal(calls.length, 2);
+  assert.ok('temperature' in calls[0] && !('temperature' in calls[1]), 'second attempt has no temperature');
+  assert.deepEqual(retried, ['`temperature` is deprecated for this model']);
+  // the default request never carries temperature, so the first attempt already succeeds
+  calls.length = 0;
+  await streamCompletion('anthropic', { key: 'k', model: 'claude-opus-5-5', system: 'S', user: 'U' }, { fetchImpl: fakeFetch });
+  assert.equal(calls.length, 1);
+  // a different 400 is not retried and keeps the provider's message
+  const badFetch = async () => new Response(JSON.stringify({ error: { message: 'max_tokens: 8000 > 4096, which is the maximum allowed' } }), { status: 400, headers: { 'content-type': 'application/json' } });
+  await assert.rejects(() => streamCompletion('anthropic', { key: 'k', model: 'm', system: 'S', user: 'U' }, { fetchImpl: badFetch }), /HTTP 400 · max_tokens: 8000 > 4096/);
+  const stillBad = async () => new Response(JSON.stringify({ error: { message: 'temperature is not supported' } }), { status: 400, headers: { 'content-type': 'application/json' } });
+  await assert.rejects(() => streamCompletion('openai', { key: 'k', model: 'm', system: 'S', user: 'U', temperature: 1 }, { fetchImpl: stillBad }), /HTTP 400/, 'a second refusal is reported, not retried again');
 });
 
 await test('release: every version stamp agrees with package.json (tools/bump-version.mjs keeps them in step)', () => {

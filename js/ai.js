@@ -41,12 +41,20 @@ export function baseUrlFor(provider, override) {
 /**
  * Build the HTTP request for one completion.
  * Returns { url, headers, body } — body is the object, not yet serialised.
+ *
+ * Sampling knobs are left at the provider's defaults: the current reasoning
+ * models reject `temperature` outright (Anthropic answers HTTP 400
+ * "`temperature` is deprecated for this model" for Opus 5.5; OpenAI's
+ * reasoning models answer "Unsupported parameter"), and a shot review does
+ * not need it. Pass `temperature` explicitly to send one, e.g. for an older
+ * model behind a compatible endpoint.
  */
-export function buildRequest(provider, { model, key, system, user, maxTokens = 8000, temperature = 0.4, stream = true, baseUrl } = {}) {
+export function buildRequest(provider, { model, key, system, user, maxTokens = 8000, temperature, stream = true, baseUrl } = {}) {
   const base = baseUrlFor(provider, baseUrl);
   if (!PROVIDERS[provider]) throw new Error(`Unknown provider "${provider}"`);
   if (!model) throw new Error('No model chosen');
   if (!key) throw new Error('No API key');
+  const sampling = Number.isFinite(temperature) ? { temperature } : {};
   if (provider === 'anthropic') {
     return {
       url: `${base}/v1/messages`,
@@ -56,14 +64,14 @@ export function buildRequest(provider, { model, key, system, user, maxTokens = 8
         'anthropic-version': '2023-06-01',
         'anthropic-dangerous-direct-browser-access': 'true', // required for a page to call the API directly
       },
-      body: { model, max_tokens: maxTokens, temperature, system, messages: [{ role: 'user', content: user }], stream },
+      body: { model, max_tokens: maxTokens, ...sampling, system, messages: [{ role: 'user', content: user }], stream },
     };
   }
   if (provider === 'openai') {
     return {
       url: `${base}/v1/chat/completions`,
       headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
-      body: { model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], stream },
+      body: { model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], ...sampling, stream },
     };
   }
   // google
@@ -74,9 +82,31 @@ export function buildRequest(provider, { model, key, system, user, maxTokens = 8
     body: {
       system_instruction: { parts: [{ text: system }] },
       contents: [{ role: 'user', parts: [{ text: user }] }],
-      generationConfig: { temperature, maxOutputTokens: maxTokens },
+      generationConfig: { ...sampling, maxOutputTokens: maxTokens },
     },
   };
+}
+
+/** Optional body fields a model may refuse; dropped on a retry after an HTTP 400 that names one of them. */
+const OPTIONAL_PARAMS = ['temperature', 'top_p', 'top_k'];
+const PARAM_REJECTED = /temperature|top_p|top_k|unsupported parameter|not supported with this model|deprecated for this model|unknown parameter|unrecognized request argument/i;
+
+/** True when a 400 says the model refused an optional sampling parameter (not a bad key, model or body). */
+export function isParamRejection(status, message) {
+  return status === 400 && PARAM_REJECTED.test(String(message || ''));
+}
+
+/** The same body with the optional sampling parameters removed (also inside Gemini's generationConfig); null if nothing to remove. */
+export function stripOptionalParams(body) {
+  let changed = false;
+  const out = { ...body };
+  for (const k of OPTIONAL_PARAMS) if (k in out) { delete out[k]; changed = true; }
+  if (out.generationConfig) {
+    const gc = { ...out.generationConfig };
+    for (const k of ['temperature', 'topP', 'topK']) if (k in gc) { delete gc[k]; changed = true; }
+    out.generationConfig = gc;
+  }
+  return changed ? out : null;
 }
 
 /**
@@ -156,7 +186,7 @@ export function makeSseParser() {
   };
 }
 
-/** A readable error from a failed HTTP response (provider error JSON when present). */
+/** A readable error from a failed HTTP response (provider error JSON when present); carries .status and .detail. */
 async function httpError(r, provider) {
   let detail = '';
   try {
@@ -165,17 +195,18 @@ async function httpError(r, provider) {
   } catch {
     /* no JSON body */
   }
-  const hint =
-    r.status === 401 || r.status === 403
-      ? ' — check the API key under Settings → AI review'
-      : r.status === 404
-        ? ' — the model name is probably wrong; press "List models"'
-        : r.status === 429
-          ? ' — rate limit or no credit on the account'
-          : r.status === 0
-            ? ' — the browser blocked the request (CORS); see the README'
-            : '';
-  return new Error(`${PROVIDERS[provider]?.label || provider}: HTTP ${r.status}${detail ? ` · ${detail}` : ''}${hint}`);
+  const err = new Error(`${PROVIDERS[provider]?.label || provider}: HTTP ${r.status}${detail ? ` · ${detail}` : ''}${hintFor(r.status)}`);
+  err.status = r.status;
+  err.detail = detail;
+  return err;
+}
+
+function hintFor(status) {
+  if (status === 401 || status === 403) return ' — check the API key under Settings → AI review';
+  if (status === 404) return ' — the model name is probably wrong; press "List models"';
+  if (status === 429) return ' — rate limit or no credit on the account';
+  if (status === 0) return ' — the browser blocked the request (CORS); see the README';
+  return '';
 }
 
 /**
@@ -183,16 +214,26 @@ async function httpError(r, provider) {
  * the full text. `signal` aborts. Falls back to a non-streamed request when the
  * response is not an event stream (some proxies).
  */
-export async function streamCompletion(provider, opts, { onDelta, signal, fetchImpl = fetch } = {}) {
+export async function streamCompletion(provider, opts, { onDelta, signal, fetchImpl = fetch, onRetry } = {}) {
   const req = buildRequest(provider, { ...opts, stream: true });
-  let r;
-  try {
-    r = await fetchImpl(req.url, { method: 'POST', headers: req.headers, body: JSON.stringify(req.body), signal });
-  } catch (err) {
-    if (err?.name === 'AbortError') throw err;
-    throw new Error(`${PROVIDERS[provider]?.label || provider}: could not reach ${new URL(req.url).host} (${err?.message || err}). If this is a CORS error in the console, the endpoint does not allow browser calls; see the README.`);
+  const send = async (body) => {
+    try {
+      return await fetchImpl(req.url, { method: 'POST', headers: req.headers, body: JSON.stringify(body), signal });
+    } catch (err) {
+      if (err?.name === 'AbortError') throw err;
+      throw new Error(`${PROVIDERS[provider]?.label || provider}: could not reach ${new URL(req.url).host} (${err?.message || err}). If this is a CORS error in the console, the endpoint does not allow browser calls; see the README.`);
+    }
+  };
+  let r = await send(req.body);
+  if (!r.ok) {
+    const err = await httpError(r, provider);
+    // a model that refuses a sampling parameter gets the same request once more without it
+    const stripped = isParamRejection(err.status, err.detail) ? stripOptionalParams(req.body) : null;
+    if (!stripped) throw err;
+    onRetry?.(err);
+    r = await send(stripped);
+    if (!r.ok) throw await httpError(r, provider);
   }
-  if (!r.ok) throw await httpError(r, provider);
   const ctype = r.headers.get('content-type') || '';
   if (!/text\/event-stream/i.test(ctype)) {
     const j = JSON.parse(await r.text());
@@ -266,7 +307,7 @@ export function normalizeModelList(provider, j) {
 
 /** The cheapest round trip that proves the key and model work: a one-word answer. */
 export async function testKey(provider, { key, model, baseUrl, fetchImpl = fetch } = {}) {
-  const text = await streamCompletion(provider, { key, model, baseUrl, system: 'Answer with the single word OK.', user: 'Ready?', maxTokens: 16, temperature: 0 }, { fetchImpl });
+  const text = await streamCompletion(provider, { key, model, baseUrl, system: 'Answer with the single word OK.', user: 'Ready?', maxTokens: 16 }, { fetchImpl });
   return text.trim();
 }
 

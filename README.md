@@ -107,7 +107,7 @@ The Analysis tab talks to the provider directly from the page (the page runs on 
 
 **Keep the key safe.** It lives in this browser's database on this computer only. If the browser profile is shared, use a key you can revoke, and revoke it from the provider's console if in doubt. *Start over* under Settings deletes it with everything else.
 
-**If a request fails:** a `401`/`403` means the key is wrong or has no access — re-paste it; a `404` means the model name is wrong — press *List models*; a `429` is a rate or spending limit on the account; "could not reach …" with a CORS message in the console means the endpoint does not allow browser calls (OpenAI, Anthropic and Google do; some proxies do not).
+**If a request fails:** a `401`/`403` means the key is wrong or has no access — re-paste it; a `404` means the model name is wrong — press *List models*; a `429` is a rate or spending limit on the account; "could not reach …" with a CORS message in the console means the endpoint does not allow browser calls (OpenAI, Anthropic and Google do; some proxies do not). A `400` that names a parameter (for example Anthropic's "`temperature` is deprecated for this model" on Opus 5.5, or OpenAI's "Unsupported parameter") is handled for you: since v0.11.2 the app sends no sampling parameters at all, and if a model still refuses one the request is retried once without it (the debug log notes the retry).
 
 ### Portal on macOS with Chrome — checklist
 

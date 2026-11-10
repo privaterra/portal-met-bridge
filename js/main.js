@@ -1,18 +1,18 @@
 // main.js — wires the devices, the recorder, storage, charts and export together.
 
-import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.11.1';
-import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.11.1';
-import { MachinePanel } from './machine-panel.js?v=0.11.1';
-import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.11.1';
-import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.11.1';
-import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.11.1';
-import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, setBeveragePreference, grindMicrons, measuredEy, DEFAULTS } from './analysis.js?v=0.11.1';
-import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, approxTokens } from './review.js?v=0.11.1';
-import { PROVIDERS, streamCompletion, listModels, testKey, maskKey } from './ai.js?v=0.11.1';
-import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.11.1';
-import { makeDemoShot } from './demo.js?v=0.11.1';
-import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug } from './export.js?v=0.11.1';
-import { log, Logger, formatLine } from './log.js?v=0.11.1';
+import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.11.2';
+import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.11.2';
+import { MachinePanel } from './machine-panel.js?v=0.11.2';
+import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.11.2';
+import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.11.2';
+import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.11.2';
+import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, setBeveragePreference, grindMicrons, measuredEy, DEFAULTS } from './analysis.js?v=0.11.2';
+import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, approxTokens } from './review.js?v=0.11.2';
+import { PROVIDERS, streamCompletion, listModels, testKey, maskKey } from './ai.js?v=0.11.2';
+import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.11.2';
+import { makeDemoShot } from './demo.js?v=0.11.2';
+import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug } from './export.js?v=0.11.2';
+import { log, Logger, formatLine } from './log.js?v=0.11.2';
 import qrcode from '../vendor/qrcode.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -350,8 +350,8 @@ async function init() {
   log.configure({ enabled: settings.logEnabled, level: settings.logLevel, packets: settings.logPackets });
   await restoreLogFolder();
   renderLogStatus();
-  $('about-version').textContent = 'v0.11.1';
-  log.info('app', `portal-met-bridge v0.11.1 started · ${navigator.userAgent}`);
+  $('about-version').textContent = 'v0.11.2';
+  log.info('app', `portal-met-bridge v0.11.2 started · ${navigator.userAgent}`);
 
   const env = await environmentCheck();
   renderPortalSteps({ secure: env.secure, api: env.api, adapter: env.adapter });
@@ -2725,6 +2725,7 @@ async function runReview() {
       { key, model, baseUrl, system, user },
       {
         signal: ctrl.signal,
+        onRetry: (err) => log.warn('ai', `${model} refused a sampling parameter (${err.detail || err.message}); retrying without it`),
         onDelta: (d) => {
           an.markdown += d;
           if (!reportRenderTimer) reportRenderTimer = setTimeout(() => { reportRenderTimer = null; renderReport(); }, 150);

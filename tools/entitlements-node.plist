@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Hardened-runtime entitlements for the Node binaries bundled in "Portal Met Bridge.app".
+     The same ones nodejs.org signs its own macOS builds with (tools/osx-entitlements.plist in
+     the Node repository), minus get-task-allow, which Apple's notarization refuses in shipped
+     code. V8 needs allow-jit and allow-unsigned-executable-memory; without them a re-signed
+     Node crashes at start on Apple silicon. Used by .github/workflows/release.yml and the
+     local signing example in docs/PACKAGING.md. -->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.disable-executable-page-protection</key>
+  <true/>
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

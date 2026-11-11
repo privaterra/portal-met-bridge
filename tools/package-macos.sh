@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 # Build "Portal Met Bridge.app" — a double-clickable macOS app that serves the
 # page on http://localhost:8787, keeps its files in ~/Documents/portal-met-bridge
-# and opens Chrome. The bundle is plain files: a launcher script, the app, and
-# (optionally) a Node runtime per CPU, so it needs nothing installed.
+# and opens Chrome. The bundle is plain files — a launcher, the app, and
+# (optionally) a Node runtime per CPU — so it needs nothing installed:
+#   Contents/MacOS/portal-met-bridge   the main executable: tools/launcher.c compiled (macOS, needs cc from
+#                                      the Xcode command-line tools), which runs the script below; without a
+#                                      compiler the script itself is copied here (works, cannot be notarized)
+#   Contents/Helpers/launcher.sh       the real launcher (bash): finds Node, starts serve.mjs, opens Chrome
+#   Contents/Helpers/node/<arch>/bin/node   bundled Node runtimes (Helpers is where Apple wants nested code)
+#   Contents/Resources/app/            index.html, js/, css/, vendor/, serve.mjs, docs
 #
 #   tools/package-macos.sh                       # app + zip, uses the Node already on the Mac
 #   tools/package-macos.sh --download-node       # also bundles Node for Apple silicon and Intel
@@ -43,7 +49,7 @@ contents="$app/Contents"
 echo "portal-met-bridge v$version → $app"
 
 rm -rf "$app"
-mkdir -p "$contents/MacOS" "$contents/Resources/app"
+mkdir -p "$contents/MacOS" "$contents/Helpers" "$contents/Resources/app"
 
 # ---- the web app itself (no screenshots, no tests, no git)
 for f in index.html serve.mjs package.json LICENSE README.md CONTRIBUTING.md start.command; do cp "$here/$f" "$contents/Resources/app/"; done
@@ -71,7 +77,7 @@ fetch_node() { # arch → path of a tarball in $out/.node
   echo "$out/.node/$file"
 }
 unpack_node() { # tarball arch
-  local tgz="$1" arch="$2" dest="$contents/Resources/node/$arch"
+  local tgz="$1" arch="$2" dest="$contents/Helpers/node/$arch"
   mkdir -p "$dest"
   tar -xzf "$tgz" -C "$dest" --strip-components=1 '*/bin/node' '*/LICENSE' 2>/dev/null || tar -xzf "$tgz" -C "$dest" --strip-components=1
   rm -rf "$dest/lib" "$dest/include" "$dest/share" "$dest/bin/npm" "$dest/bin/npx" "$dest/bin/corepack" "$dest/CHANGELOG.md" "$dest/README.md"
@@ -85,10 +91,11 @@ fi
 [ -n "$node_arm64" ] && unpack_node "$node_arm64" arm64
 [ -n "$node_x64" ] && unpack_node "$node_x64" x64
 
-# ---- the launcher
-cat > "$contents/MacOS/portal-met-bridge" <<'LAUNCHER'
+# ---- the launcher script (Contents/Helpers/launcher.sh)
+cat > "$contents/Helpers/launcher.sh" <<'LAUNCHER'
 #!/bin/bash
 # Portal Met Bridge launcher: serve the app on localhost and open Chrome.
+# Run by Contents/MacOS/portal-met-bridge (a tiny compiled program), or directly.
 # Settings (optional): ~/Library/Application Support/portal-met-bridge/config
 #   PORT=8787                                  # the port
 #   DATA_DIR="$HOME/Documents/portal-met-bridge"  # where the app's files go (Settings → Files and folders → server)
@@ -126,7 +133,7 @@ fi
 
 # A Node runtime: bundled for this CPU, else the one installed on the Mac.
 arch="$(uname -m)"
-case "$arch" in arm64) node="$contents/Resources/node/arm64/bin/node" ;; x86_64) node="$contents/Resources/node/x64/bin/node" ;; *) node="" ;; esac
+case "$arch" in arm64) node="$contents/Helpers/node/arm64/bin/node" ;; x86_64) node="$contents/Helpers/node/x64/bin/node" ;; *) node="" ;; esac
 if [ ! -x "$node" ]; then
   for c in "$(command -v node 2>/dev/null)" /opt/homebrew/bin/node /usr/local/bin/node; do
     if [ -n "$c" ] && [ -x "$c" ]; then node="$c"; break; fi
@@ -144,7 +151,20 @@ say "starting: $node $app/serve.mjs on $url · files in $DATA_DIR"
 cd "$app" || exit 1
 exec "$node" "$app/serve.mjs" >>"$log" 2>&1
 LAUNCHER
-chmod +x "$contents/MacOS/portal-met-bridge"
+chmod +x "$contents/Helpers/launcher.sh"
+
+# ---- the main executable: tools/launcher.c compiled as a universal Mach-O when a compiler
+# is at hand (macOS with the Xcode command-line tools), else the script itself.
+main_exe="$contents/MacOS/portal-met-bridge"
+if [ "$(uname -s)" = Darwin ] && command -v cc >/dev/null 2>&1 && cc -O2 -Wall -arch arm64 -arch x86_64 -mmacosx-version-min=12.0 -o "$main_exe" "$here/tools/launcher.c" 2>/dev/null; then
+  echo "main executable: compiled launcher (universal)"
+elif [ "$(uname -s)" = Darwin ] && command -v cc >/dev/null 2>&1 && cc -O2 -Wall -mmacosx-version-min=12.0 -o "$main_exe" "$here/tools/launcher.c" 2>/dev/null; then
+  echo "main executable: compiled launcher ($(uname -m) only)"
+else
+  cp "$contents/Helpers/launcher.sh" "$main_exe"
+  echo "main executable: the launcher script (no C compiler here; fine unsigned, cannot be notarized)"
+fi
+chmod +x "$main_exe"
 
 # ---- Info.plist
 cat > "$contents/Info.plist" <<PLIST

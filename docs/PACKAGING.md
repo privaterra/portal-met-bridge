@@ -47,7 +47,7 @@ To build a package without a release (to try it): Actions → Release → *Run w
 2. opens the page in Google Chrome (or Microsoft Edge, or the default browser — only Chrome and Edge can reach the Portal over Bluetooth);
 3. stays in the Dock while it serves; **Quit** from the Dock stops the server. Opening the app while it is already running just brings the page up again.
 
-It writes a log to `~/Library/Logs/portal-met-bridge.log`, and reads `~/Library/Application Support/portal-met-bridge/config` if that file exists, with any of `PORT=`, `DATA_DIR=`, `BROWSER=`, `HOST=` lines (the launcher script at `Contents/MacOS/portal-met-bridge` documents them).
+It writes a log to `~/Library/Logs/portal-met-bridge.log`, and reads `~/Library/Application Support/portal-met-bridge/config` if that file exists, with any of `PORT=`, `DATA_DIR=`, `BROWSER=`, `HOST=` lines (the launcher script at `Contents/Helpers/launcher.sh` documents them).
 
 The `.dmg` carries the same app with an *Applications* shortcut, the usual drag-to-install picture.
 
@@ -68,12 +68,16 @@ Chrome itself may ask for Bluetooth permission the first time (System Settings �
 ```
 Portal Met Bridge.app/
   Contents/Info.plist                bundle id org.privaterra.portal-met-bridge, version from package.json
-  Contents/MacOS/portal-met-bridge   the launcher (bash)
+  Contents/MacOS/portal-met-bridge   the main executable: tools/launcher.c compiled as a universal binary (it just runs
+                                     the script below). Built without a C compiler (Linux), the script is copied here instead.
+  Contents/Helpers/launcher.sh       the real launcher (bash): finds Node, starts serve.mjs, opens Chrome
+  Contents/Helpers/node/arm64/bin/node   Node for Apple silicon   } with --download-node or --node-arm64/--node-x64;
+  Contents/Helpers/node/x64/bin/node     Node for Intel           } without them the launcher uses the Mac's own Node
   Contents/Resources/app/            index.html, js/, css/, vendor/, serve.mjs, README, LICENSE, docs/NOTES.md, docs/PACKAGING.md
-  Contents/Resources/node/arm64/bin/node   Node for Apple silicon   } with --download-node or --node-arm64/--node-x64;
-  Contents/Resources/node/x64/bin/node     Node for Intel           } without them the launcher uses the Mac's own Node
   Contents/Resources/AppIcon.icns    from assets/icon-1024.png (macOS only: sips + iconutil)
 ```
+
+Why a compiled main executable: notarization (2.3) requires every executable in the bundle to be a signed Mach-O binary with the hardened runtime, and a shell script cannot be one. `launcher.c` is 40 lines that `execv` `/bin/bash Contents/Helpers/launcher.sh`; the Xcode command-line tools on the macOS runner compile it. Node lives under `Contents/Helpers/` because that is one of the places Apple expects nested code (not `Resources/`).
 
 ```sh
 tools/package-macos.sh --download-node          # app + zip (+ dmg on macOS); downloads the newest Node 24 LTS for both CPUs and checks SHASUMS256
@@ -81,23 +85,59 @@ tools/package-macos.sh                          # smaller: no Node bundled, the 
 tools/package-macos.sh --out dist --no-zip      # only the .app
 ```
 
-The workflow (`release.yml`) runs the unit tests on Linux, then on `macos-latest`: checks the tag against `package.json`, runs the script with `--download-node`, signs and notarizes when the secrets exist, zips with `ditto` (which keeps the executable bits and resource forks that `zip` loses), makes the `.dmg` with `hdiutil`, adds a source archive, and hands everything to `softprops/action-gh-release` as a draft release.
+The workflow (`release.yml`) runs the unit tests on Linux, then on `macos-latest`: checks the tag against `package.json`, runs the script with `--download-node`, signs and notarizes when the secrets exist, zips with `ditto` (which keeps the executable bits and resource forks that `zip` loses), makes the `.dmg` with `hdiutil` (and signs, notarizes and staples it too when the secrets exist), adds a source archive, and hands everything to `softprops/action-gh-release` as a **draft** release named `portal-met-bridge v0.14.0` with generated notes. A draft is visible only to people with write access to the repository; you read it at github.com/privaterra/portal-met-bridge/releases, edit the notes if you want, and press **Publish release** — that is the moment the assets become public, and the moment the *Home Assistant app image* workflow runs (it listens for `release: published`).
 
 Try the bundle on a Mac without a release: `tools/package-macos.sh --out /tmp/pmb && open "/tmp/pmb/Portal Met Bridge.app"`.
 
 ### 2.3 Signing and notarizing (optional)
 
-With an Apple Developer Program membership (US$99/year) the app opens without the Gatekeeper step. The workflow does it when these repository secrets exist (Settings → Secrets and variables → Actions):
+Unsigned, the app works but macOS makes every user do the right-click → Open dance once (2.1). **Signing** with a Developer ID certificate tells macOS who built it; **notarizing** means Apple scanned that exact build and issued a ticket, which the workflow **staples** to the app so Gatekeeper can check it offline. With both, the app opens on first launch like any other download. The workflow does all of it on its own once five repository secrets exist; without them it skips those steps and ships the unsigned app.
+
+**What you need, once**
+
+1. **An Apple Developer Program membership** (US$99 a year, as an individual or as Privaterra): developer.apple.com/programs/enroll, with the Apple ID you will use for notarization. Two-factor authentication must be on for that Apple ID.
+2. **A "Developer ID Application" certificate** — the kind that signs software distributed outside the App Store. Only the account holder can create it. Either way the private key is created on your Mac and the certificate ends up in your login keychain:
+   - *With Xcode*: Xcode → Settings → Accounts → your Apple ID → *Manage Certificates…* → **+** → **Developer ID Application**.
+   - *Without Xcode*: Keychain Access → Certificate Assistant → *Request a Certificate From a Certificate Authority…* → your email, *Saved to disk*; then developer.apple.com/account/resources/certificates → **+** → **Developer ID Application** → upload the request → download the `.cer` and double-click it.
+   In Keychain Access → *login* → *My Certificates* you should now see **Developer ID Application: Your Name (TEAMID)** with a disclosure triangle and a private key under it. If there is no triangle, the key is missing and the export below will not work — create the certificate again on the Mac that made the request.
+3. **Export it as a `.p12`**: select that certificate (the row with the triangle, so the key comes along) → File → *Export Items…* → format *Personal Information Exchange (.p12)* → choose a strong password when asked. That password is `MACOS_CERTIFICATE_PASSWORD`. Then, in Terminal, `base64 -i DeveloperID.p12 | pbcopy` puts the file's text form on the clipboard — that is `MACOS_CERTIFICATE_P12`. Delete the `.p12` afterwards or keep it somewhere safe; it is your signing identity.
+4. **Your Team ID**: developer.apple.com/account → *Membership details* → **Team ID**, ten characters like `AB12CD34EF` — `APPLE_TEAM_ID`. (It is also the part in brackets in the certificate's name.)
+5. **An app-specific password** for notarization: account.apple.com → *Sign-In and Security* → *App-Specific Passwords* → **+**, name it "portal-met-bridge notarization", copy the `xxxx-xxxx-xxxx-xxxx` it shows once — `APPLE_APP_PASSWORD`. `APPLE_ID` is the account's email address. (notarytool refuses your normal password; it must be an app-specific one.)
+6. **Add the five secrets** to the repository: github.com/privaterra/portal-met-bridge → Settings → *Secrets and variables* → *Actions* → **New repository secret**, one per row:
 
 | Secret | Contents |
 | --- | --- |
-| `MACOS_CERTIFICATE_P12` | Your **Developer ID Application** certificate and private key exported from Keychain Access as a `.p12`, base64-encoded: `base64 -i cert.p12 \| pbcopy` |
-| `MACOS_CERTIFICATE_PASSWORD` | The password you gave the `.p12` on export |
-| `APPLE_ID` | The Apple ID of the developer account |
-| `APPLE_TEAM_ID` | The 10-character team id (developer.apple.com → Membership) |
-| `APPLE_APP_PASSWORD` | An app-specific password for that Apple ID (appleid.apple.com → Sign-In and Security → App-Specific Passwords) |
+| `MACOS_CERTIFICATE_P12` | the base64 text of the `.p12` (step 3) |
+| `MACOS_CERTIFICATE_PASSWORD` | the password you gave the `.p12` |
+| `APPLE_ID` | the Apple ID (email) of the developer account |
+| `APPLE_TEAM_ID` | the 10-character Team ID |
+| `APPLE_APP_PASSWORD` | the app-specific password |
 
-The steps then: import the certificate into a temporary keychain, `codesign --options runtime --timestamp` the bundled `node` binaries and the bundle, submit a zip to `notarytool` and wait, `stapler staple` the ticket onto the app, and only then zip and build the dmg. Without the secrets those two steps are skipped and the app is unsigned, which is fine for your own Macs.
+Secrets are write-only on GitHub (you can replace them, not read them back) and are never printed in the workflow log.
+
+**What the workflow then does** (`release.yml`, the two steps that run only when `MACOS_CERTIFICATE_P12` is set):
+
+1. *Import the signing certificate*: decodes the `.p12` into a temporary keychain on the runner (`security create-keychain` / `import`), so `codesign` can use it, and deletes the file. The runner is thrown away after the job.
+2. *Sign and notarize the app*, inside-out and without `--deep`: first the two bundled `node` binaries with `--options runtime --timestamp` and `tools/entitlements-node.plist` — the entitlements Node itself ships with (`allow-jit`, `allow-unsigned-executable-memory`, …, minus `get-task-allow`, which notarization refuses); V8 needs them under the hardened runtime, and re-signing Node without them makes it crash on Apple silicon, then the bundle, whose main executable is the compiled launcher (2.2). `codesign --verify --strict --deep` must pass. Then `ditto` zips the app, `xcrun notarytool submit --wait` uploads it to Apple and waits (usually one to five minutes), the step fetches Apple's log either way and prints it, fails if the status is not `Accepted`, and `xcrun stapler staple` attaches the ticket to the app. `spctl -a -t exec -vv` confirms Gatekeeper now says *accepted · source=Notarized Developer ID*.
+3. *Zip and disk image* then packs the stapled app, and *Sign and notarize the disk image* signs the `.dmg`, notarizes it as well and staples that, so the dmg opens without a warning too.
+
+If notarization is rejected, the printed log (a JSON with an `issues` array) says exactly which file and why — the usual ones are an unsigned nested binary, a missing hardened-runtime flag, or a missing secure timestamp. Re-run with *Actions → Release → Run workflow* and the tag name after fixing; nothing is released until the draft is published.
+
+**What users see**: the app opens on first launch with no prompt (macOS still asks for Bluetooth access for Chrome, as always). A signed-but-not-notarized app — for example a build you made locally with your certificate but did not submit — still gets the "cannot check it for malicious software" prompt, so the two go together.
+
+**Signing locally instead** (to try it before adding the secrets): on a Mac with the certificate in the keychain,
+
+```sh
+tools/package-macos.sh --download-node --out dist --no-zip
+app="dist/Portal Met Bridge.app"; id="Developer ID Application: Your Name (TEAMID)"
+find "$app/Contents/Helpers/node" -name node -type f -exec codesign --force --options runtime --timestamp --entitlements tools/entitlements-node.plist --sign "$id" {} \;
+codesign --force --options runtime --timestamp --sign "$id" "$app" && codesign --verify --strict --deep --verbose=2 "$app"
+ditto -c -k --sequesterRsrc --keepParent "$app" pmb.zip
+xcrun notarytool store-credentials pmb --apple-id you@example.com --team-id TEAMID    # asks for the app-specific password, once
+xcrun notarytool submit pmb.zip --keychain-profile pmb --wait && xcrun stapler staple "$app" && spctl -a -t exec -vv "$app"
+```
+
+(`store-credentials` keeps the app-specific password in your keychain so later submits need only `--keychain-profile pmb`.)
 
 ## 3. The Home Assistant app (Raspberry Pi 5)
 

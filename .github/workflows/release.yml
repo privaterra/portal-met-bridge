@@ -77,23 +77,38 @@ jobs:
           security import cert.p12 -k build.keychain -P "$P12_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple: -s -k ci build.keychain
           rm cert.p12
-      - name: Sign and notarize
+      - name: Sign and notarize the app
         if: env.HAVE_CERT == 'true'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
+          set -euo pipefail
           identity="$(security find-identity -v -p codesigning build.keychain | awk -F'"' '/Developer ID Application/ {print $2; exit}')"
+          [ -n "$identity" ] || { echo "no 'Developer ID Application' certificate in the imported .p12"; exit 1; }
+          echo "signing as: $identity"
           app="dist/Portal Met Bridge.app"
-          # inside-out: the bundled node binaries first, then the bundle
-          find "$app/Contents/Resources/node" -type f -name node -exec codesign --force --options runtime --timestamp --sign "$identity" {} \; || true
-          codesign --force --deep --options runtime --timestamp --sign "$identity" "$app"
-          codesign --verify --strict --verbose=2 "$app"
+          # Node (V8) needs JIT entitlements under the hardened runtime: tools/entitlements-node.plist (Node's own, minus get-task-allow).
+          # Inside-out, no --deep: nested code first (the bundled Node runtimes), then the bundle,
+          # whose main executable is the compiled launcher (tools/launcher.c).
+          find "$app/Contents/Helpers/node" -type f -name node -print0 2>/dev/null | xargs -0 -I{} codesign --force --options runtime --timestamp --entitlements tools/entitlements-node.plist --sign "$identity" {}
+          codesign --force --options runtime --timestamp --sign "$identity" "$app"
+          codesign --verify --strict --deep --verbose=2 "$app"
+          # Notarize: upload a zip, wait for Apple's verdict, always fetch the log (it names any problem), then staple.
+          notarize() { # file
+            xcrun notarytool submit "$1" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait --output-format json > notary.json || true
+            cat notary.json; echo
+            local id status
+            id="$(jq -r '.id // empty' notary.json)"; status="$(jq -r '.status // empty' notary.json)"
+            if [ -n "$id" ]; then xcrun notarytool log "$id" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" notary-log.json >/dev/null 2>&1 && cat notary-log.json && echo; fi
+            [ "$status" = "Accepted" ] || { echo "::error::notarization of $1 ended with status '${status:-none}' — see the log above"; return 1; }
+          }
           ditto -c -k --sequesterRsrc --keepParent "$app" notarize.zip
-          xcrun notarytool submit notarize.zip --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+          notarize notarize.zip
           xcrun stapler staple "$app"
-          rm notarize.zip
+          spctl -a -t exec -vv "$app"
+          rm -f notarize.zip notary.json notary-log.json
 
       - name: Zip and disk image
         run: |
@@ -104,6 +119,23 @@ jobs:
           hdiutil create -quiet -volname "Portal Met Bridge" -srcfolder dmg -ov -format UDZO "portal-met-bridge-$version-macos.dmg"
           rm -rf dmg .node
           ls -la
+
+      - name: Sign and notarize the disk image
+        if: env.HAVE_CERT == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          set -euo pipefail
+          identity="$(security find-identity -v -p codesigning build.keychain | awk -F'"' '/Developer ID Application/ {print $2; exit}')"
+          dmg="$(ls dist/*.dmg)"
+          codesign --force --timestamp --sign "$identity" "$dmg"
+          xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait --output-format json > notary.json || true
+          cat notary.json; echo
+          [ "$(jq -r '.status // empty' notary.json)" = "Accepted" ] || { echo "::error::notarization of the dmg failed"; exit 1; }
+          xcrun stapler staple "$dmg"
+          rm -f notary.json
 
       - name: Source archive
         run: |

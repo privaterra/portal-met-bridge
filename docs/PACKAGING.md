@@ -24,7 +24,7 @@ tools/tag-release.sh                    # create the signed tag v0.14.0 and push
 
 Pushing the tag does two things:
 
-1. GitHub runs **Release** (Actions tab). It builds the macOS app, attaches `portal-met-bridge-0.14.0-macos.zip`, `…-macos.dmg` and `…-source.zip` to a **draft** release named after the tag, with release notes it writes itself. Open github.com/privaterra/portal-met-bridge/releases, read the draft, edit the notes if you like, and press **Publish release**.
+1. GitHub runs **Release** (Actions tab). It builds the macOS app, attaches `portal-met-bridge-0.14.0-macos.zip`, `…-macos.dmg` and `…-source.zip` to a **draft** release. Its notes come from `docs/releases/<tag>.md` when that file exists (write it before tagging — `docs/releases/v0.15.0.md` is the first; the title then follows the pattern *portal-met-bridge 0.15.0 (alpha)*), otherwise from a short generated stub. Versions below 1.0, and any tag with a suffix such as `v1.0.0-rc.1`, are marked **pre-release**. Open github.com/privaterra/portal-met-bridge/releases, read the draft, edit the notes if you like, and press **Publish release**.
 2. Home Assistant machines that have the repository added see version 0.14.0 in the store, with an **Update** button for anyone who already has it installed, because the Supervisor reads `homeassistant/portal_met_bridge/config.yaml` from the repository's default branch and builds the image from the tag with the same number.
 
 Publishing the release also runs **Home Assistant app image** (`ha-app.yml`), which pushes a prebuilt image to GHCR. That image is only used once `image:` is uncommented in `config.yaml` (section 3.4); until then the workflow is a build check.
@@ -213,7 +213,7 @@ Switching back is a matter of commenting the line out again.
 ## 4. Checklist per release
 
 1. `node tools/bump-version.mjs X.Y.Z`; update `homeassistant/portal_met_bridge/CHANGELOG.md`; `node tests/run.mjs`; commit; `tools/publish.sh`.
-2. `tools/tag-release.sh` → wait for **Release** to finish → publish the draft release (edit the notes: the README's prompt history has the changes).
+2. Write `docs/releases/vX.Y.Z.md` (the release notes; commit it with the version) → `tools/tag-release.sh` → wait for **Release** to finish → read the draft and press **Publish release**.
 3. On a Home Assistant machine: Settings → Apps → ⋮ → *Check for updates* → Portal Met Bridge shows the new version → Update → Open Web UI → Settings → About shows the version.
 4. If prebuilt images are in use: confirm **Home Assistant app image** succeeded and the package has the new tag before announcing the update.
 

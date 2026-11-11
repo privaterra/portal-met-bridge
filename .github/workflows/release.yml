@@ -149,10 +149,17 @@ jobs:
             dist/*.zip
             dist/*.dmg
 
-      - name: Release notes from the README's prompt history
+      - name: Release notes (docs/releases/<tag>.md when it exists, else a generated stub)
         if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
+        id: notes
         run: |
           version="$(node -p "require('./package.json').version")"
+          tag="${{ inputs.tag || github.ref_name }}"
+          # 0.x and anything with a suffix (v1.0.0-rc.1) is a pre-release; the title says so
+          if [[ "$version" == 0.* || "$tag" == *-* ]]; then pre=true; title="portal-met-bridge $version (alpha)"; else pre=false; title="portal-met-bridge $version"; fi
+          echo "prerelease=$pre" >> "$GITHUB_OUTPUT"
+          echo "title=$title" >> "$GITHUB_OUTPUT"
+          if [ -f "docs/releases/$tag.md" ]; then cp "docs/releases/$tag.md" notes.md; echo "using docs/releases/$tag.md"; exit 0; fi
           {
             echo "portal-met-bridge v$version"
             echo
@@ -169,9 +176,10 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
-          name: portal-met-bridge ${{ inputs.tag || github.ref_name }}
+          name: ${{ steps.notes.outputs.title }}
           body_path: notes.md
           draft: true
+          prerelease: ${{ steps.notes.outputs.prerelease == 'true' }}
           files: |
             dist/*.zip
             dist/*.dmg

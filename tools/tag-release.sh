@@ -9,10 +9,13 @@
 #     tools/tag-release.sh                 # tag v0.14.0 (signed) and push it
 #
 # Refuses to tag a commit that is not on GitHub yet, or a version already tagged.
+# Needs only git and sed (not Node).
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 remote=${REMOTE:-origin}
-version="$(node -p "require('./package.json').version")"
+# The version from package.json, without needing Node on the PATH (a plain sed on the "version" line).
+version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' package.json | head -1)"
+[ -n "$version" ] || { echo "could not read the version from package.json" >&2; exit 1; }
 tag="v$version"
 if [ -n "$(git status --porcelain)" ]; then echo "Working tree has uncommitted changes — commit them first." >&2; exit 1; fi
 git fetch -q "$remote" --tags

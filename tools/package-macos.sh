@@ -9,7 +9,8 @@
 #   tools/package-macos.sh --node-arm64 node-v24.x-darwin-arm64.tar.gz --node-x64 node-v24.x-darwin-x64.tar.gz
 #   tools/package-macos.sh --out dist --no-zip   # just the .app
 #
-# Runs on macOS (then also makes a .dmg and an .icns icon) and on Linux (zip only,
+# Needs only bash, curl and tar (no Node on the building machine). Runs on macOS (then
+# also makes a .dmg and an .icns icon) and on Linux (zip only,
 # which is what the GitHub workflow in .github/workflows/release.yml uses on the
 # macOS runner anyway). See docs/PACKAGING.md for signing and notarization.
 set -euo pipefail
@@ -34,7 +35,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-version="$(node -p "require('$here/package.json').version")"
+version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$here/package.json" | head -1)" # no Node needed to build the bundle
+[ -n "$version" ] || { echo "could not read the version from package.json" >&2; exit 1; }
 name="Portal Met Bridge"
 app="$out/$name.app"
 contents="$app/Contents"
@@ -54,7 +56,10 @@ fetch_node() { # arch → path of a tarball in $out/.node
   local arch="$1" index ver file url sums
   mkdir -p "$out/.node"
   index="$(curl -fsSL https://nodejs.org/dist/index.json)"
-  ver="$(node -e 'const l=JSON.parse(require("fs").readFileSync(0,"utf8"));const v=l.find(x=>x.lts&&x.version.startsWith("v"+process.argv[1]+"."))||l.find(x=>x.version.startsWith("v"+process.argv[1]+"."));if(!v)process.exit(1);console.log(v.version)' "$node_major" <<<"$index")"
+  # newest LTS release of that major (an entry whose "lts" is a name, not false); falls back to the newest release of the major
+  ver="$(printf '%s' "$index" | tr '{' '\n' | grep '"lts":"[A-Za-z]' | grep -o "\"version\":\"v$node_major\.[0-9.]*\"" | head -1 | cut -d'"' -f4)"
+  [ -n "$ver" ] || ver="$(printf '%s' "$index" | tr '{' '\n' | grep -o "\"version\":\"v$node_major\.[0-9.]*\"" | head -1 | cut -d'"' -f4)"
+  [ -n "$ver" ] || { echo "no Node $node_major release found in nodejs.org/dist/index.json" >&2; exit 1; }
   file="node-$ver-darwin-$arch.tar.gz"
   url="https://nodejs.org/dist/$ver/$file"
   if [ ! -f "$out/.node/$file" ]; then

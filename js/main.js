@@ -1,21 +1,21 @@
 // main.js — wires the devices, the recorder, storage, charts and export together.
 
-import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.15.0';
-import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.15.0';
-import { MachinePanel } from './machine-panel.js?v=0.15.0';
-import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.15.0';
-import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.15.0';
-import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.15.0';
-import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, profileFinalWeight, setBeveragePreference, grindMicrons, measuredEy, DEFAULTS } from './analysis.js?v=0.15.0';
-import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, approxTokens, reviewProfileOf } from './review.js?v=0.15.0';
-import { PROVIDERS, streamCompletion, listModels, testKey, maskKey } from './ai.js?v=0.15.0';
-import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.15.0';
-import { makeDemoShot } from './demo.js?v=0.15.0';
-import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug, loadJsPdf } from './export.js?v=0.15.0';
-import { REVIEW_FORMATS, reviewFile, reviewMarkdownFile } from './review-export.js?v=0.15.0';
-import { log, formatLine } from './log.js?v=0.15.0';
-import { files, Files, FILE_KINDS, DEFAULT_ROOT, cleanDirName } from './files.js?v=0.15.0';
-import { HeatMonitor, HEAT_RULES, HEAT_SENSORS, sensorTemp } from './heat.js?v=0.15.0';
+import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.16.0';
+import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, machineBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.16.0';
+import { MachinePanel } from './machine-panel.js?v=0.16.0';
+import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.16.0';
+import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.16.0';
+import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.16.0';
+import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, profileFinalWeight, setBeveragePreference, grindMicrons, measuredEy, DEFAULTS } from './analysis.js?v=0.16.0';
+import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, approxTokens, reviewProfileOf } from './review.js?v=0.16.0';
+import { PROVIDERS, streamCompletion, listModels, testKey, maskKey } from './ai.js?v=0.16.0';
+import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.16.0';
+import { makeDemoShot } from './demo.js?v=0.16.0';
+import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug, loadJsPdf } from './export.js?v=0.16.0';
+import { REVIEW_FORMATS, reviewFile, reviewMarkdownFile } from './review-export.js?v=0.16.0';
+import { log, formatLine } from './log.js?v=0.16.0';
+import { files, Files, FILE_KINDS, DEFAULT_ROOT, cleanDirName } from './files.js?v=0.16.0';
+import { HeatMonitor, HEAT_RULES, HEAT_SENSORS, sensorTemp } from './heat.js?v=0.16.0';
 import qrcode from '../vendor/qrcode.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -75,6 +75,7 @@ const SETTINGS = {
   autoConnectMeticulous: { def: false, el: 'set-autoconnect', bool: true },
   autoAttach: { def: true, el: 'set-autoattach', bool: true },
   attachDelaySec: { def: 4, el: 'set-attach-delay', num: true, min: 1, max: 60 },
+  machineVia: { def: 'auto', el: 'set-machine-via' },
   heatRule: { def: 'hold', el: 'set-heat-rule' },
   heatSensor: { def: 'status', el: 'set-heat-sensor' },
   heatToleranceC: { def: 1, el: 'set-heat-tol', num: true, min: 0.2, max: 5 },
@@ -166,10 +167,12 @@ async function settingChanged(key) {
 function applySetting(key, v) {
   switch (key) {
     case 'meticulousHost':
-      $('meticulous-addr').textContent = v || DEFAULT_HOST;
+    case 'machineVia':
+      $('meticulous-addr').textContent = settings.meticulousHost || DEFAULT_HOST;
+      renderMachineVia();
       if (meticulous) {
         try {
-          const url = normalizeBaseUrl(v);
+          const url = machineBaseUrl(settings.meticulousHost || $('meticulous-host').value, { via: machineVia() });
           if (url !== meticulous.baseUrl) connectMeticulous();
         } catch {
           /* bad address; leave the connection alone */
@@ -294,7 +297,7 @@ async function resetSettings() {
 // Human-readable names for the save bar.
 const SETTING_LABELS = {
   meticulousHost: 'machine address', autoConnectMeticulous: 'connect on open', autoAttach: 'attach machine record', attachDelaySec: 'attach delay',
-  autoRecord: 'auto-record', heatRule: 'ready-to-brew rule', heatSensor: 'temperature reading', heatToleranceC: 'temperature tolerance', heatHoldSec: 'hold time', heatSettleC: 'settled threshold', settleSec: 'settle window', lagSec: 'Portal lag', minShotSec: 'minimum shot length', autoGraph: 'Portal screen', autoSaveFiles: 'write shot files', beverageDefault: 'final weight',
+  autoRecord: 'auto-record', machineVia: 'machine reached via', heatRule: 'ready-to-brew rule', heatSensor: 'temperature reading', heatToleranceC: 'temperature tolerance', heatHoldSec: 'hold time', heatSettleC: 'settled threshold', settleSec: 'settle window', lagSec: 'Portal lag', minShotSec: 'minimum shot length', autoGraph: 'Portal screen', autoSaveFiles: 'write shot files', beverageDefault: 'final weight',
   minCalibrationShots: 'reference shots', estimatePool: 'estimate pool', logEnabled: 'logging', logLevel: 'log detail', logPackets: 'packet logging',
   logShowTail: 'live tail', fileDestination: 'where files go', fileRoot: 'root folder', dirShots: 'shot files folder', dirExports: 'exports folder', dirReports: 'reports folder',
   dirReviews: 'reviews folder', dirBackups: 'backups folder', dirLogs: 'logs folder', autoBackup: 'automatic backup',
@@ -403,14 +406,18 @@ async function init() {
   applyFileSettings();
   store.onChange = (kind) => scheduleAutoBackup(kind);
   applyHeatSettings();
-  probeAppServer().catch(() => {});
+  await probeAppServer().catch(() => {});
+  renderMachineVia();
   renderLogStatus();
-  $('about-version').textContent = 'v0.15.0';
-  log.info('app', `portal-met-bridge v0.15.0 started · ${navigator.userAgent}`);
+  $('about-version').textContent = 'v0.16.0';
+  log.info('app', `portal-met-bridge v0.16.0 started · ${navigator.userAgent}`);
 
   const env = await environmentCheck();
   renderPortalSteps({ secure: env.secure, api: env.api, adapter: env.adapter });
-  if (!env.secure || !env.api) {
+  if (!env.secure) {
+    $('portal-connect').disabled = true;
+    renderInsecureHint();
+  } else if (!env.api) {
     $('portal-connect').disabled = true;
     $('portal-hint').textContent = env.hint;
   } else if (env.adapter === false) {
@@ -433,11 +440,38 @@ async function init() {
 
 // ------------------------------------------------------------- Meticulous --
 
+/**
+ * How the page reaches the machine: directly at its address, or through the
+ * server's /machine/ proxy. 'auto' uses the proxy when this page is https (the
+ * machine's plain-http API would be mixed content) and the server offers one.
+ */
+function machineVia() {
+  const pref = settings.machineVia || 'auto';
+  if (pref === 'server') return appServer?.machineProxy ? 'server' : 'direct';
+  if (pref === 'direct') return 'direct';
+  return location.protocol === 'https:' && appServer?.machineProxy ? 'server' : 'direct';
+}
+
+function renderMachineVia() {
+  const el = $('machine-via-note');
+  if (!el) return;
+  const via = machineVia();
+  const pref = settings.machineVia || 'auto';
+  const host = settings.meticulousHost || DEFAULT_HOST;
+  let text;
+  if (via === 'server') text = `The page talks to the machine through the server that serves it (${location.host} → ${host}); the machine must be reachable from that server.`;
+  else if (pref === 'server') text = "This page is not served by portal-met-bridge's own server (no proxy), so the machine is reached directly.";
+  else if (location.protocol === 'https:') text = 'This page is https and the server offers no proxy: a plain-http machine cannot be reached from here (mixed content). Open the http address, or serve with serve.mjs.';
+  else text = `The browser talks to the machine directly at http://${host}.`;
+  el.textContent = text;
+}
+
 function connectMeticulous() {
   const host = settings.meticulousHost || $('meticulous-host').value;
+  const via = machineVia();
   let url;
   try {
-    url = normalizeBaseUrl(host);
+    url = machineBaseUrl(host, { via });
   } catch {
     toast('That address does not look right. Set it under Settings → Machine.', 'error');
     return;
@@ -446,8 +480,8 @@ function connectMeticulous() {
     machinePanel.detach();
     meticulous.disconnect();
   }
-  log.info('machine', `connecting to ${url}`);
-  meticulous = new MeticulousClient(url);
+  log.info('machine', `connecting to ${url}${via === 'server' ? ' (through the server)' : ''}`);
+  meticulous = new MeticulousClient(host, { via });
   meticulous.addEventListener('state', (e) => {
     const d = e.detail;
     log.info('machine', `socket ${d.state}${d.error ? ': ' + d.error : ''}${d.reason ? ' (' + d.reason + ')' : ''}`);
@@ -492,8 +526,10 @@ async function testMeticulous() {
     out.textContent = 'That address does not look right.';
     return;
   }
+  const via = machineVia();
+  if (via === 'server') url = machineBaseUrl($('meticulous-host').value, { via });
   out.textContent = `Trying ${url} …`;
-  const probe = new MeticulousClient(url);
+  const probe = new MeticulousClient($('meticulous-host').value, { via });
   try {
     const t0 = performance.now();
     const [stats, info] = await Promise.all([probe.ping(), probe.machineInfo().catch(() => null)]);
@@ -2318,7 +2354,32 @@ async function copyLogTail() {
 // started on this computer and allows it (GET api/server → quit: true), the
 // local server too (POST api/quit), so start.command / the macOS app exit.
 
-let appServer = null; // GET api/server: { version, pid, dataDir, quit, local } or null (python's http.server, a plain host)
+let appServer = null; // GET api/server: { version, pid, platform, dataDir, quit, quitStopsApp, local, tls, machineProxy } or null (python's http.server, a plain host)
+
+/**
+ * The page is not a secure context (a LAN address over plain http, or a file),
+ * so Chrome hides Web Bluetooth: say exactly how to get one — the server's
+ * https address when it has one, else the chrome://flags exception — with this
+ * page's own origin filled in, since that is the string Chrome wants.
+ */
+function renderInsecureHint() {
+  const el = $('portal-hint');
+  const origin = location.origin;
+  if (location.protocol === 'file:') {
+    el.textContent = 'This page was opened as a file. Serve it (start.command, node serve.mjs, or the macOS app) and open http://localhost:8787 — Web Bluetooth needs a secure page.';
+    return;
+  }
+  const parts = [`<b>Bluetooth is off because this page (${esc(origin)}) is not a secure context</b> — Chrome only offers Web Bluetooth on https or on localhost. The machine still works. Two ways to fix it:`];
+  if (appServer?.tls?.port) {
+    const secure = `https://${location.hostname}:${appServer.tls.port}${location.pathname}`;
+    parts.push(`<b>1.</b> Open the secure address <a href="${esc(secure)}">${esc(secure)}</a>.${appServer.tls.selfSigned ? ` Its certificate is self-signed, so the first time: <a href="api/cert" download="portal-met-bridge.pem">download the certificate</a>, double-click it to add it to Keychain Access (login), open it there → Trust → <i>Always Trust</i>, then quit and reopen Chrome. After that the https page is secure and Bluetooth works.` : ''}`);
+    parts.push(`<b>2.</b> Or keep this address and allow it in Chrome: open <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code>, paste <code>${esc(origin)}</code>, set it to <i>Enabled</i>, press <i>Relaunch</i>.`);
+  } else {
+    parts.push(`<b>1.</b> Allow this address in Chrome: open <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code>, paste <code>${esc(origin)}</code>, set it to <i>Enabled</i>, press <i>Relaunch</i>.`);
+    parts.push(`<b>2.</b> Or open the app at <code>http://localhost:8787</code> on the computer that runs it${appServer ? '' : ', or serve it with serve.mjs (which can also offer an https address — see docs/PACKAGING.md)'}.`);
+  }
+  el.innerHTML = parts.join(' ');
+}
 async function probeAppServer() {
   try {
     const res = await fetch('api/server', { cache: 'no-store' });
@@ -2349,9 +2410,15 @@ function openStopDialog() {
   const canQuit = !!appServer?.quit;
   $('stop-server-row').hidden = !canQuit;
   $('stop-server').checked = false;
-  if (canQuit) $('stop-server-label').textContent = `Also stop the local server (serve.mjs, pid ${appServer.pid}${appServer.dataDir ? `, files in ${appServer.dataDir}` : ''}) — start.command or the app will exit`;
+  const ha = appServer?.platform === 'home-assistant';
+  if (canQuit) $('stop-server-label').textContent = ha
+    ? `Also stop the Portal Met Bridge app in Home Assistant (${appServer.host}${appServer.dataDir ? `, files in ${appServer.dataDir}` : ''}) — it shows as stopped there until you start it again`
+    : `Also stop the local server (serve.mjs, pid ${appServer.pid}${appServer.dataDir ? `, files in ${appServer.dataDir}` : ''}) — start.command or the app will exit`;
+  $('stop-server').checked = ha; // in Home Assistant, stopping the app is what Stop is for
   $('stop-note').textContent = canQuit
-    ? 'Without the last box the server keeps serving the page; Start again reloads it. With it, start the app again before reloading.'
+    ? ha
+      ? 'Without the last box only this page stops and the app keeps serving it; with it, Home Assistant shows the app stopped and its Start button brings it back.'
+      : 'Without the last box the server keeps serving the page; Start again reloads it. With it, start the app again before reloading.'
     : appServer
       ? 'This server is not on this computer (or was started with ALLOW_QUIT=0), so it keeps running; only this page stops.'
       : 'Only this page stops; the server that serves it is not one this page can stop.';
@@ -2440,7 +2507,7 @@ async function stopEverything({ quitServer = false, abortBrew = false } = {}) {
       const body = await res.json().catch(() => ({}));
       if (res.ok && body.stopping) {
         serverStopped = true;
-        report.push(`server stopped (pid ${body.pid})`);
+        report.push(body.app ? 'the Portal Met Bridge app in Home Assistant is stopping' : `server stopped (pid ${body.pid})`);
       } else report.push(`server: ${body.error || res.status}`);
     } catch (err) {
       report.push(`server: ${err?.message || err}`);
@@ -2448,7 +2515,11 @@ async function stopEverything({ quitServer = false, abortBrew = false } = {}) {
   }
   // 6. Show it.
   $('stopped-list').innerHTML = report.map((t) => `<li>${esc(t)}</li>`).join('');
-  $('stopped-note').textContent = serverStopped ? 'The server that served this page has exited. Start it again (start.command, the app, or node serve.mjs) and then open http://localhost:8787 — this page can no longer reload itself.' : 'Nothing saved was touched. Start again reloads the page; the machine and the Portal reconnect when you ask them to.';
+  $('stopped-note').textContent = serverStopped
+    ? appServer?.platform === 'home-assistant'
+      ? 'The app has been stopped in Home Assistant (Settings → Apps → Portal Met Bridge shows it stopped). Press Start there to bring it back, then reload this page.'
+      : 'The server that served this page has exited. Start it again (start.command, the app, or node serve.mjs) and then open http://localhost:8787 — this page can no longer reload itself.'
+    : 'Nothing saved was touched. Start again reloads the page; the machine and the Portal reconnect when you ask them to.';
   $('stopped-again').disabled = serverStopped;
   $('stopped').hidden = false;
   document.title = 'portal-met-bridge — stopped';

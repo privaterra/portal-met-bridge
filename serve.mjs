@@ -6,18 +6,31 @@
 //       → the app can write its shot files, exports, reports, reviews, backups and
 //         logs into that folder on this computer (Settings → Files and folders)
 //   HOST=0.0.0.0 node serve.mjs            → reachable from the LAN (the Home Assistant app does this)
+//   TLS_PORT=8788 TLS_CERT=cert.pem TLS_KEY=key.pem node serve.mjs
+//       → the same app also on https://…:8788. Web Bluetooth needs a secure page, and a
+//         LAN address is only secure over https with a certificate the browser trusts;
+//         GET api/cert hands out the certificate so it can be trusted once. A page on
+//         https cannot call the machine's plain-http API itself (mixed content), so it
+//         goes through the proxy below.
 //   ALLOW_QUIT=0 node serve.mjs            → the page's Stop button may not stop this server
 //       (by default a page served to this same computer may: POST api/quit; the macOS app
-//        and start.command rely on it, the Home Assistant app sets ALLOW_QUIT=0 — s6 would
-//        only restart it)
+//        and start.command rely on it); ALLOW_QUIT=1 lets any client stop it (the Home
+//        Assistant app, where a stop also stops the app itself through the Supervisor)
+// Machine proxy: /machine/<host[:port]>/<path> is forwarded to http://<host[:port]>/<path>
+//   — REST and the socket.io WebSocket alike — so the page can reach the Meticulous
+//   through this server when it cannot directly (an https page, or a browser on
+//   another network). Only private/LAN hosts are accepted; see machineTarget().
 // Web Bluetooth only works from a secure origin, and http://localhost counts,
-// so the app must be served (not opened as a file) and opened as localhost — or,
-// when it is served from another machine, that origin must be allowed in
-// chrome://flags/#unsafely-treat-insecure-origin-as-secure (see docs/PACKAGING.md).
+// so the app must be served (not opened as a file) and opened as localhost — or
+// over https as above — or, when it is served from another machine over plain
+// http, that origin must be allowed in chrome://flags/#unsafely-treat-insecure-origin-as-secure
+// (see docs/PACKAGING.md).
 
 import http from 'node:http';
+import https from 'node:https';
+import net from 'node:net';
 import { readFile, stat, mkdir, rm, open } from 'node:fs/promises';
-import { createWriteStream } from 'node:fs';
+import { readFileSync, createWriteStream } from 'node:fs';
 import { extname, join, normalize, resolve, sep, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { networkInterfaces, hostname } from 'node:os';
@@ -36,7 +49,14 @@ const dataDirShown = dataDirArg.startsWith('~') ? dataDirArg.replace(/\/+$/, '')
 const MAX_BODY = 512 * 1024 * 1024; // a backup with years of shots is tens of MB; leave room
 const allowQuit = process.env.ALLOW_QUIT !== '0';
 const version = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).version;
+const tlsPort = Number(process.env.TLS_PORT) || 0;
+const tlsCertFile = process.env.TLS_CERT || '';
+const tlsKeyFile = process.env.TLS_KEY || '';
+const tlsSelfSigned = process.env.TLS_SELF_SIGNED === '1';
+const supervisorToken = process.env.SUPERVISOR_TOKEN || ''; // present inside a Home Assistant app container
+const platform = supervisorToken ? 'home-assistant' : process.env.PMB_PLATFORM || 'server';
 let server = null;
+let tlsServer = null;
 
 /** Requests from this computer itself (the page opened on localhost). */
 export function isLoopback(addr) {
@@ -126,31 +146,146 @@ async function handleFiles(req, res, path) {
   return json(res, 405, { error: 'GET, PUT or DELETE' });
 }
 
+/**
+ * The machine behind /machine/<host[:port]>/…: a LAN/private address or a
+ * .local name only, so this is not an open proxy. Returns { host, port } or null.
+ */
+export function machineTarget(spec) {
+  if (typeof spec !== 'string' || spec.length > 253) return null;
+  const m = spec.match(/^([a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)(?::(\d{1,5}))?$/i);
+  if (!m) return null;
+  const host = m[1];
+  const port = m[2] ? Number(m[2]) : 80;
+  if (!(port >= 1 && port <= 65535)) return null;
+  const ip4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (ip4) {
+    const [a, b] = [Number(ip4[1]), Number(ip4[2])];
+    if (ip4.slice(1).some((x) => Number(x) > 255)) return null;
+    const privateIp = a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || a === 127;
+    return privateIp ? { host, port } : null;
+  }
+  if (/^localhost$/i.test(host) || /\.local$/i.test(host) || /\.lan$/i.test(host) || /\.home$/i.test(host) || /\.internal$/i.test(host) || !host.includes('.')) return { host, port };
+  return null;
+}
+
+/** REST through the proxy: /machine/<target>/<path> → http://<target>/<path>, streamed both ways. */
+function handleMachineProxy(req, res, path) {
+  const m = path.match(/^\/machine\/([^/]+)(\/.*)?$/);
+  const target = m && machineTarget(m[1]);
+  if (!target) return json(res, 400, { error: 'machine proxy: give a LAN address, e.g. /machine/192.168.1.20/api/v1/machine' });
+  const search = new URL(req.url, 'http://x').search;
+  const headers = { ...req.headers, host: `${target.host}:${target.port}` };
+  delete headers['accept-encoding'];
+  const up = http.request({ host: target.host, port: target.port, method: req.method, path: (m[2] || '/') + search, headers, timeout: 15000 }, (r) => {
+    const h = { ...r.headers };
+    delete h['access-control-allow-origin'];
+    res.writeHead(r.statusCode || 502, h);
+    r.pipe(res);
+  });
+  up.on('timeout', () => up.destroy(new Error('timeout')));
+  up.on('error', (e) => {
+    if (!res.headersSent) json(res, 502, { error: `machine ${target.host}:${target.port}: ${e.message}` });
+    else res.end();
+  });
+  req.pipe(up);
+  return undefined;
+}
+
+/** The WebSocket (socket.io) through the proxy: pipe the upgrade to the machine and the bytes both ways. */
+function handleMachineUpgrade(req, socket, head) {
+  const path = req.url;
+  const m = path.match(/^\/machine\/([^/?]+)(\/[^?]*)?(\?.*)?$/);
+  const target = m && machineTarget(m[1]);
+  if (!target) {
+    socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+    return socket.destroy();
+  }
+  const upstream = net.connect(target.port, target.host, () => {
+    const lines = [`${req.method} ${(m[2] || '/') + (m[3] || '')} HTTP/1.1`];
+    for (const [k, v] of Object.entries(req.headers)) lines.push(`${k}: ${k.toLowerCase() === 'host' ? `${target.host}:${target.port}` : v}`);
+    upstream.write(lines.join('\r\n') + '\r\n\r\n');
+    if (head?.length) upstream.write(head);
+    socket.pipe(upstream).pipe(socket);
+  });
+  const drop = () => {
+    socket.destroy();
+    upstream.destroy();
+  };
+  upstream.on('error', drop);
+  socket.on('error', drop);
+  upstream.setTimeout(0);
+  socket.setTimeout(0);
+  return undefined;
+}
+
+/** Inside a Home Assistant app, ask the Supervisor to stop this app (so Home Assistant shows it stopped). */
+async function supervisorStopSelf() {
+  if (!supervisorToken) return false;
+  return new Promise((resolve) => {
+    const r = http.request({ host: 'supervisor', port: 80, path: '/addons/self/stop', method: 'POST', headers: { Authorization: `Bearer ${supervisorToken}`, 'Content-Type': 'application/json' }, timeout: 8000 }, (res) => {
+      res.resume();
+      resolve(res.statusCode >= 200 && res.statusCode < 300);
+    });
+    r.on('error', () => resolve(false));
+    r.on('timeout', () => r.destroy(new Error('timeout')));
+    r.end();
+  });
+}
+
 /** What the page may ask of this server: GET api/server → who it is; POST api/quit → stop it (Stop button). */
 function handleServer(req, res, path) {
   const local = isLoopback(req.socket.remoteAddress);
   const mayQuit = allowQuit && (local || process.env.ALLOW_QUIT === '1');
-  if (path === '/api/server' && req.method === 'GET') return json(res, 200, { app: 'portal-met-bridge', version, pid: process.pid, host: hostname(), dataDir: dataDir ? dataDirShown : null, quit: mayQuit, local });
+  if (path === '/api/server' && req.method === 'GET') {
+    return json(res, 200, {
+      app: 'portal-met-bridge',
+      version,
+      pid: process.pid,
+      host: hostname(),
+      platform,
+      dataDir: dataDir ? dataDirShown : null,
+      quit: mayQuit,
+      quitStopsApp: mayQuit && !!supervisorToken, // Home Assistant: the Stop button stops the app itself
+      local,
+      tls: tlsServer ? { port: tlsPort, selfSigned: tlsSelfSigned, certUrl: 'api/cert' } : null,
+      machineProxy: true,
+    });
+  }
+  if (path === '/api/cert' && req.method === 'GET') {
+    if (!tlsCertFile) return json(res, 404, { error: 'This server has no certificate (TLS_CERT is not set).' });
+    try {
+      const pem = readFileSync(tlsCertFile, 'utf8');
+      const cert = pem.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/)?.[0] || pem; // the leaf only, never a key
+      res.writeHead(200, { 'Content-Type': 'application/x-pem-file', 'Content-Disposition': 'attachment; filename="portal-met-bridge.pem"', 'Cache-Control': 'no-store' });
+      return res.end(cert + '\n');
+    } catch (e) {
+      return json(res, 500, { error: e.message });
+    }
+  }
   if (path === '/api/quit') {
     if (req.method !== 'POST') return json(res, 405, { error: 'POST' });
     if (!mayQuit) return json(res, 403, { error: local ? 'quitting is disabled (ALLOW_QUIT=0)' : 'only the computer running the server may stop it' });
-    console.log(`stop requested by ${req.socket.remoteAddress}; exiting`);
-    json(res, 200, { stopping: true, pid: process.pid });
-    setTimeout(() => {
-      server?.close();
-      process.exit(0);
+    console.log(`stop requested by ${req.socket.remoteAddress}; ${supervisorToken ? 'asking the Supervisor to stop this app' : 'exiting'}`);
+    json(res, 200, { stopping: true, pid: process.pid, app: !!supervisorToken });
+    setTimeout(async () => {
+      const stoppedByHa = await supervisorStopSelf();
+      if (!stoppedByHa) {
+        server?.close();
+        tlsServer?.close();
+        process.exit(0);
+      }
     }, 150);
     return undefined;
   }
   return json(res, 404, { error: 'unknown' });
 }
 
-export function createServer() {
-  return http.createServer(async (req, res) => {
+async function handleRequest(req, res) {
     try {
       let path = decodeURIComponent(new URL(req.url, 'http://x').pathname);
       if (path === '/api/files' || path.startsWith('/api/files/')) return await handleFiles(req, res, path);
-      if (path === '/api/server' || path === '/api/quit') return handleServer(req, res, path);
+      if (path === '/api/server' || path === '/api/quit' || path === '/api/cert') return handleServer(req, res, path);
+      if (path.startsWith('/machine/')) return handleMachineProxy(req, res, path);
       if (path === '/') path = '/index.html';
       const file = normalize(join(root, path));
       if (!file.startsWith(root)) throw Object.assign(new Error('forbidden'), { code: 'EACCES' });
@@ -164,10 +299,19 @@ export function createServer() {
       res.writeHead(e.code === 'ENOENT' ? 404 : 403, { 'Content-Type': 'text/plain' });
       res.end(e.code === 'ENOENT' ? 'Not found' : 'Forbidden');
     }
-  });
 }
 
-const isApi = (req) => req.url.startsWith('/api/');
+export function createServer(tlsOptions = null) {
+  const srv = tlsOptions ? https.createServer(tlsOptions, handleRequest) : http.createServer(handleRequest);
+  srv.on('upgrade', (req, socket, head) => {
+    if (req.url.startsWith('/machine/')) return handleMachineUpgrade(req, socket, head);
+    socket.destroy();
+    return undefined;
+  });
+  return srv;
+}
+
+const isApi = (req) => req.url.startsWith('/api/') || req.url.startsWith('/machine/');
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   if (dataDir) await mkdir(dataDir, { recursive: true }).catch((e) => console.error(`data folder ${dataDir}: ${e.message}`));
@@ -175,9 +319,22 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
   server.listen(port, host, () => {
     const lines = [`portal-met-bridge → http://localhost:${port}`];
     if (host !== '127.0.0.1' && host !== 'localhost') {
-      for (const list of Object.values(networkInterfaces())) for (const n of list || []) if (n.family === 'IPv4' && !n.internal) lines.push(`                    http://${n.address}:${port}  (LAN; Bluetooth needs the chrome://flags exception, see docs/PACKAGING.md)`);
+      for (const list of Object.values(networkInterfaces())) for (const n of list || []) if (n.family === 'IPv4' && !n.internal) lines.push(`                    http://${n.address}:${port}  (LAN; for Bluetooth open the https address below, or set the chrome://flags exception — docs/PACKAGING.md)`);
     }
     if (dataDir) lines.push(`files               ${dataDir}`);
+    if (platform === 'home-assistant') lines.push('platform            Home Assistant app (Stop in the page stops the app)');
     console.log(lines.join('\n'));
   });
+  if (tlsPort && tlsCertFile && tlsKeyFile) {
+    try {
+      tlsServer = createServer({ cert: readFileSync(tlsCertFile), key: readFileSync(tlsKeyFile) });
+      tlsServer.listen(tlsPort, host, () => {
+        const names = [];
+        if (host !== '127.0.0.1' && host !== 'localhost') for (const list of Object.values(networkInterfaces())) for (const n of list || []) if (n.family === 'IPv4' && !n.internal) names.push(n.address);
+        console.log(`secure              https://${names[0] || 'localhost'}:${tlsPort}${tlsSelfSigned ? '  (self-signed: trust the certificate from api/cert once)' : ''}`);
+      });
+    } catch (e) {
+      console.error(`TLS not started: ${e.message}`);
+    }
+  }
 }

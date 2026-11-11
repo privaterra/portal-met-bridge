@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>portal-met-bridge</title>
   <link rel="stylesheet" href="vendor/uPlot.min.css" />
-  <link rel="stylesheet" href="css/app.css?v=0.15.0" />
+  <link rel="stylesheet" href="css/app.css?v=0.16.0" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M4 26 L10 8 L16 20 L22 6 L28 26' fill='none' stroke='%232447B8' stroke-width='3' stroke-linejoin='round'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -201,6 +201,14 @@
           <label class="check"><input type="checkbox" id="set-autoconnect" /> Connect to the machine when the app opens</label>
           <label class="check"><input type="checkbox" id="set-autoattach" checked /> After a shot, fetch the machine's own saved record and attach it (replaces the live samples)</label>
           <label class="field narrow"><span>Wait before fetching it (s)</span><input id="set-attach-delay" type="number" min="1" max="60" step="1" value="4" /></label>
+          <label class="field"><span>Reach the machine</span>
+            <select id="set-machine-via">
+              <option value="auto" selected>automatically — directly, or through the server when this page is https</option>
+              <option value="direct">directly from the browser at the address above</option>
+              <option value="server">through the server that serves this page (its /machine/ proxy)</option>
+            </select>
+          </label>
+          <p class="hint" id="machine-via-note"></p>
           <h3>Ready to brew — when has the water reached the profile's temperature?</h3>
           <p class="hint">While the machine heats, the <em>Start brew</em> button turns <b>green</b> once the rule below is met, and goes back to plain after the shot until the machine heats again. The target is the loaded profile's temperature; the reading is the sensor you choose.</p>
           <label class="field"><span>Rule</span>
@@ -875,6 +883,6 @@
   </dialog>
 
   <div class="toast" id="toast" hidden></div>
-  <script type="module" src="js/main.js?v=0.15.0"></script>
+  <script type="module" src="js/main.js?v=0.16.0"></script>
 </body>
 </html>

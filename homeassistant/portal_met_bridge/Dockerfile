@@ -10,7 +10,7 @@ ARG APP_VERSION=${BUILD_VERSION}
 # APP_REF overrides the tag: a branch name (main) or a commit, for testing unreleased code.
 ARG APP_REF=v${APP_VERSION}
 
-RUN apk add --no-cache nodejs \
+RUN apk add --no-cache nodejs openssl \
   && mkdir -p /opt/app \
   && curl -fsSL "https://github.com/privaterra/portal-met-bridge/archive/${APP_REF}.tar.gz" | tar -xz -C /opt/app --strip-components=1 \
   && rm -rf /opt/app/docs/*.png /opt/app/tests /opt/app/tools /opt/app/.github /opt/app/homeassistant

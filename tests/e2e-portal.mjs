@@ -711,11 +711,27 @@ try {
   // ---- Stop (v0.15): one confirmation, then everything stops; the server only when asked
   await page.click('.view-tab[data-view="settings"]'); // the wipe above reset the address to the default
   await page.fill('#meticulous-host', `localhost:${MOCK_PORT}`);
+  // ---- the machine through the server's /machine/ proxy (v0.16): what an https page has to do
+  await page.selectOption('#set-machine-via', 'server');
   await page.click('#settings-save');
   await page.waitForTimeout(200);
+  check('Settings → Machine explains the relay when "through the server" is chosen', /through the server that serves it \(localhost:\d+ → localhost:\d+\)/.test(await page.textContent('#machine-via-note')), (await page.textContent('#machine-via-note')).trim());
+  await page.click('#meticulous-test');
+  await page.waitForFunction(() => /MeticulousMock|saved shots/.test(document.querySelector('#meticulous-test-result').textContent), null, { timeout: 8000 });
+  check('Test connection works through the relay', /MeticulousMock/.test(await page.textContent('#meticulous-test-result')), (await page.textContent('#meticulous-test-result')).trim().slice(0, 160));
   await page.click('.view-tab[data-view="shots"]');
   await page.click('#meticulous-connect');
-  await page.waitForFunction(() => window.__pb.meticulous?.connected, null, { timeout: 8000 });
+  await page.waitForFunction(() => window.__pb.meticulous?.connected && window.__pb.meticulous.lastStatus, null, { timeout: 8000 });
+  const viaServer = await page.evaluate(() => ({ via: window.__pb.meticulous.via, base: window.__pb.meticulous.baseUrl, status: window.__pb.meticulous.lastStatus?.name, profiles: window.__pb.state.profileList?.length }));
+  check('the live socket and the REST calls flow through /machine/<address>/ on the serving host', viaServer.via === 'server' && new RegExp(`^http://localhost:\\d+/machine/localhost:${MOCK_PORT}$`).test(viaServer.base) && typeof viaServer.status === 'string' && viaServer.profiles >= 4, JSON.stringify(viaServer));
+  check('GET api/cert without TLS says so', (await page.evaluate(async () => (await fetch('api/cert')).status)) === 404);
+  check('the relay refuses a public host', (await page.evaluate(async () => (await fetch('machine/example.com/api/v1/machine')).status)) === 400);
+  await page.click('.view-tab[data-view="settings"]');
+  await page.selectOption('#set-machine-via', 'auto');
+  await page.click('#settings-save');
+  await page.waitForFunction(() => window.__pb.meticulous?.via === 'direct' && window.__pb.meticulous.connected, null, { timeout: 8000 });
+  check('back to automatic on an http page: the browser talks to the machine directly again', /^http:\/\/localhost:\d+$/.test(await page.evaluate(() => window.__pb.meticulous.baseUrl)));
+  await page.click('.view-tab[data-view="shots"]');
   await page.click('#portal-connect');
   await page.waitForFunction(() => window.__pb.portal.connected, null, { timeout: 8000 });
   const serverInfo = await page.evaluate(async () => (await (await fetch('api/server')).json()));

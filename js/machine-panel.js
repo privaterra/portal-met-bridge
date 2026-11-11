@@ -10,8 +10,8 @@
 //   Settings            /settings, read-only
 
 import uPlot from '../vendor/uPlot.esm.js';
-import { COLORS } from './charts.js?v=0.15.0';
-import { isEndStage } from './meticulous.js?v=0.15.0';
+import { COLORS } from './charts.js?v=0.16.0';
+import { isEndStage } from './meticulous.js?v=0.16.0';
 
 const $ = (id) => document.getElementById(id);
 const font = '12px "Avenir Next", Avenir, system-ui, -apple-system, sans-serif';

@@ -47,10 +47,25 @@ export function parseLooseJson(text) {
   return JSON.parse(text.replace(/:\s*(-?Infinity|NaN)\b/g, ': null'));
 }
 
+/**
+ * The machine's origin as the page can reach it. `via: 'server'` goes through
+ * the serving host's proxy (serve.mjs: /machine/<host[:port]>/…), which a page
+ * on https must use (its plain-http API would be mixed content) and which also
+ * works when the browser cannot reach the machine's address itself.
+ */
+export function machineBaseUrl(input, { via = 'direct', pageOrigin = typeof location !== 'undefined' ? location.origin : '' } = {}) {
+  const direct = normalizeBaseUrl(input);
+  if (via !== 'server') return direct;
+  const u = new URL(direct);
+  return `${pageOrigin}/machine/${u.host}`;
+}
+
 export class MeticulousClient extends EventTarget {
-  constructor(baseUrl) {
+  constructor(baseUrl, { via = 'direct' } = {}) {
     super();
-    this.baseUrl = normalizeBaseUrl(baseUrl);
+    this.via = via === 'server' ? 'server' : 'direct';
+    this.directUrl = normalizeBaseUrl(baseUrl);
+    this.baseUrl = machineBaseUrl(baseUrl, { via: this.via });
     this.socket = null;
     this.connected = false;
     this.lastStatus = null;
@@ -62,7 +77,12 @@ export class MeticulousClient extends EventTarget {
   connect() {
     if (this.socket) return;
     this._emit('state', { state: 'connecting', url: this.baseUrl });
-    this.socket = io(this.baseUrl, { transports: ['websocket', 'polling'], reconnection: true, reconnectionDelayMax: 10000, timeout: 8000 });
+    const opts = { transports: ['websocket', 'polling'], reconnection: true, reconnectionDelayMax: 10000, timeout: 8000 };
+    if (this.via === 'server') {
+      // socket.io on the proxy path: ws(s)://<page host>/machine/<host>/socket.io/…
+      const u = new URL(this.baseUrl);
+      this.socket = io(u.origin, { ...opts, path: `${u.pathname.replace(/\/$/, '')}/socket.io` });
+    } else this.socket = io(this.baseUrl, opts);
     this.socket.on('connect', () => {
       this.connected = true;
       this._emit('state', { state: 'connected', url: this.baseUrl });

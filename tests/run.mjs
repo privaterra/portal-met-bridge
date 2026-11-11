@@ -324,7 +324,7 @@ await test('recorder: checkpoint recovery finalises an interrupted shot, drops a
 
 import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, splitStages, cumulativeWater } from '../js/review.js';
 import { profileFinalWeight, BEVERAGE_PREFERENCES } from '../js/analysis.js';
-import { parseMarkdown, parseInline, markdownToText, beverageNoteFor, reviewProfileOf, REVIEW_TEMPLATE } from '../js/review.js';
+import { parseMarkdown, parseInline, markdownToText, beverageNoteFor, reviewProfileOf, REVIEW_TEMPLATE, buildSeriesComparison } from '../js/review.js';
 import { reviewToDocx, reviewMarkdownFile, reviewFileName, reviewFile, REVIEW_FORMATS, pdfSafe } from '../js/review-export.js';
 import { unzipSync, strFromU8 } from '../vendor/fflate.esm.js';
 import { PROVIDERS, buildRequest, deltaFromEvent, makeSseParser, normalizeModelList, textFromResponse, maskKey, baseUrlFor, isParamRejection, stripOptionalParams, streamCompletion } from '../js/ai.js';
@@ -783,6 +783,82 @@ await test('review markdown (v0.15): numbered items a blank line apart, or all w
   assert.ok(text.includes('1. First finding.\n2. Second finding.\n  • Unconfirmed: a hypothesis\n3. Third finding.'), text);
   assert.ok(text.includes('1. Set bloom_time to 25 s. Look for a later peak.\n2. Grind 2 steps finer.'), 'an indented paragraph after a blank stays with its item');
   assert.ok(/numbered list \(1\., 2\., 3\. — consecutive/.test(REVIEW_TEMPLATE), 'the template asks for consecutive numbers');
+});
+
+await test('series review (v0.16): several shots get the comparing template and an app-computed comparison', () => {
+  const mk = (seed, over) => {
+    const d = makeDemoShot({ seed });
+    const machine = d.machine.map((m) => ({ ...m, status: m.t < 2 ? 'Saturate' : m.t < 6 ? 'Bloom' : m.t < 29 ? 'Extract' : 'retracting' }));
+    const shot = { ...d, machine, id: `s${seed}`, finalWeightG: over.out, beverageG: over.out, profileTargetG: 40, profileTemperatureC: 93, context: { doseG: over.dose, grindSize: `${over.grind} µm`, grinderName: 'Z1', beanName: 'Geishify' }, machineSource: { profile: { name: 'Blooming Espresso', temperature: 93, final_weight: 40, variables: [{ key: 'bloom_time', name: 'Bloom Time', type: 'time', value: over.bloom }] } } };
+    return buildShotDigest(shot, analyzeShot(shot.portal, machine.map((m) => ({ t: m.t, w: m.w })), { doseG: over.dose, stopTimeSec: shot.durationSec }));
+  };
+  const a = mk(11, { dose: 18, grind: 420, out: 40, bloom: 15 });
+  const b = mk(12, { dose: 18, grind: 410, out: 41, bloom: 15 });
+  const c = mk(13, { dose: 18.2, grind: 410, out: 39.5, bloom: 20 });
+  const cmp = buildSeriesComparison([a, b, c]);
+  assert.equal(cmp.shots.length, 3);
+  assert.deepEqual(cmp.shots.map((x) => x.shot), [1, 2, 3]);
+  assert.equal(cmp.steps.length, 2);
+  assert.deepEqual(cmp.steps[0].setupChanged, ['grindUm'], 'shot 1 → 2 changed only the grind');
+  assert.equal(cmp.steps[0].changes.grindUm.delta, -10);
+  assert.ok(cmp.steps[1].setupChanged.includes('doseG') && cmp.steps[1].setupChanged.includes('variable:bloom_time'), JSON.stringify(cmp.steps[1].setupChanged));
+  assert.deepEqual(cmp.steps[1].changes['variable:bloom_time'], { from: 15, to: 20 });
+  assert.ok(cmp.stages.length > 0 && cmp.stages.every((st) => st.perShot.length === 3), 'every stage has a cell per shot');
+  assert.ok(cmp.stages[0].perShot.every((cell) => cell.present && Number.isFinite(cell.durationSec)));
+  assert.equal(cmp.trends.grindUm.direction, 'falling');
+  assert.equal(cmp.trends.grindUm.change, -10);
+  assert.ok(cmp.notes.some((n) => /More than one setup variable changed/.test(n)));
+  assert.equal(buildSeriesComparison([a]), null, 'one shot: nothing to compare');
+  const single = buildReviewMessages([{ digest: a, profile: null }], {});
+  const series = buildReviewMessages([{ digest: a, profile: null }, { digest: b, profile: null }, { digest: c, profile: null }], {});
+  assert.ok(single.system.includes('## Shots compared\n(Only when more than one shot is given.)') && !single.user.includes('# Series comparison'));
+  assert.ok(series.system.includes('every section must compare them') && series.system.includes('## What helped and what did not') && series.system.includes('one item per step between consecutive shots'), 'the series template is used');
+  assert.ok(series.user.includes('# Series comparison (computed by the app)') && series.user.includes('"setupChanged":["grindUm"]') && series.user.includes('(a series, in brewing order'), 'the comparison goes in ahead of the digests');
+});
+
+await test('machine via the server (v0.16): the proxy target guard and the client\'s proxied URLs', async () => {
+  const { machineTarget } = await import('../serve.mjs');
+  assert.deepEqual(machineTarget('192.168.30.2'), { host: '192.168.30.2', port: 80 });
+  assert.deepEqual(machineTarget('10.0.0.5:8080'), { host: '10.0.0.5', port: 8080 });
+  assert.deepEqual(machineTarget('meticulous.local'), { host: 'meticulous.local', port: 80 });
+  assert.deepEqual(machineTarget('meticulous'), { host: 'meticulous', port: 80 }, 'a bare LAN hostname');
+  assert.deepEqual(machineTarget('127.0.0.1:8792'), { host: '127.0.0.1', port: 8792 });
+  for (const bad of ['8.8.8.8', 'example.com', 'meticulous.local:70000', '192.168.1.300', 'a b', '', '../x', 'http://x']) assert.equal(machineTarget(bad), null, `refused: ${bad}`);
+  const { machineBaseUrl, normalizeBaseUrl } = await import('../js/meticulous.js');
+  assert.equal(normalizeBaseUrl('192.168.30.2'), 'http://192.168.30.2');
+  assert.equal(machineBaseUrl('192.168.30.2', { via: 'direct', pageOrigin: 'https://homeassistant.local:8788' }), 'http://192.168.30.2');
+  assert.equal(machineBaseUrl('192.168.30.2', { via: 'server', pageOrigin: 'https://homeassistant.local:8788' }), 'https://homeassistant.local:8788/machine/192.168.30.2');
+  assert.equal(machineBaseUrl('meticulous.local:8080', { via: 'server', pageOrigin: 'http://localhost:8787' }), 'http://localhost:8787/machine/meticulous.local:8080');
+});
+
+await test('https (v0.16): serve.mjs with TLS_* answers on the secure port and hands out the certificate without the key', async () => {
+  const { spawnSync, spawn } = await import('node:child_process');
+  const { mkdtempSync, rmSync, existsSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const https = await import('node:https');
+  if (spawnSync('openssl', ['version']).status !== 0) return; // no openssl here: nothing to test with
+  const dir = mkdtempSync(join(tmpdir(), 'pmb-tls-'));
+  spawnSync('openssl', ['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes', '-keyout', join(dir, 'key.pem'), '-out', join(dir, 'cert.pem'), '-days', '2', '-subj', '/CN=pmb-test', '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1']);
+  assert.ok(existsSync(join(dir, 'cert.pem')));
+  const srv = spawn('node', [new URL('../serve.mjs', import.meta.url).pathname], { env: { ...process.env, PORT: '8813', TLS_PORT: '8814', TLS_CERT: join(dir, 'cert.pem'), TLS_KEY: join(dir, 'key.pem'), TLS_SELF_SIGNED: '1' }, stdio: 'ignore' });
+  const get = (url) => new Promise((resolve, reject) => https.get(url, { rejectUnauthorized: false }, (res) => { let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => resolve({ status: res.statusCode, body: b, type: res.headers['content-type'] })); }).on('error', reject));
+  try {
+    await new Promise((r) => setTimeout(r, 800));
+    const info = JSON.parse((await get('https://127.0.0.1:8814/api/server')).body);
+    assert.equal(info.tls.port, 8814);
+    assert.equal(info.tls.selfSigned, true);
+    assert.equal(info.machineProxy, true);
+    const plain = await (await fetch('http://127.0.0.1:8813/api/server')).json();
+    assert.equal(plain.tls.port, 8814, 'the http server advertises the https port');
+    const cert = await (await fetch('http://127.0.0.1:8813/api/cert')).text();
+    assert.ok(cert.startsWith('-----BEGIN CERTIFICATE-----') && !cert.includes('PRIVATE'), 'the certificate, never the key');
+    const page = await get('https://127.0.0.1:8814/');
+    assert.ok(page.status === 200 && /<!doctype html>/i.test(page.body));
+  } finally {
+    srv.kill();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 await test('release: every version stamp agrees with package.json (tools/bump-version.mjs keeps them in step)', () => {

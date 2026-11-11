@@ -6,7 +6,7 @@
 //   buildReviewMessages(...)         → { system, user } for any provider
 //   renderMarkdown(md)               → safe HTML for the report pane
 
-import { beverageOf, beverageSource, profileTargetOf, profileFinalWeight, measuredEy, grindMicrons } from './analysis.js?v=0.15.0';
+import { beverageOf, beverageSource, profileTargetOf, profileFinalWeight, measuredEy, grindMicrons } from './analysis.js?v=0.16.0';
 
 const r1 = (v) => (Number.isFinite(v) ? Math.round(v * 10) / 10 : null);
 const r2 = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
@@ -332,10 +332,139 @@ Bullets listing only the data you were given: the shot ids/dates, the profile na
 Rules: use the numbers from the digest and do not recompute or round them differently; never invent values that are not there — say "not recorded" instead; keep the tone plain and specific; write for the person who pulled the shot; do not describe the chart (the app shows it); do not add a title, preamble or closing remarks.
 Weights: meta.beverageG is the cup — the yield to use for ratio and EY — and meta.beverageNote says where it came from (weighed by hand, the profile's target, or the scale). meta.profileTargetG is only what the profile aimed to stop at and meta.scaleFinalG only what the machine's scale read; quote them as such and never present either as the measured yield when a hand-weighed value exists. When the three disagree, say so and by how much.`;
 
+/** The report outline when several shots are reviewed together: every section compares. */
+export const REVIEW_TEMPLATE_SERIES = `Write the report in Markdown with exactly these sections, in this order (use "##" headings; no top-level title, the app adds it). Several shots are given, in brewing order, and every section must compare them — never review only the last one.
+
+## Verdict
+Two or three sentences: did the shots get better from the first to the last, and which one came closest to what the profile describes? Then a short bullet list of the headline numbers of the latest shot against the best one (yield and ratio against the target, time, extraction pressure, mean EC/g or, without Portal data, how the cup filled). End with one line "Setup: …" naming what stayed fixed across the series (machine, profile and setpoint, grinder, coffee) and what was varied.
+
+## Shots compared
+A table with one row per shot in brewing order: # | date | grind (µm) | dose → beverage | ratio | time | peak extraction pressure | mean EC/g (or "–") | TDS/EY if known. Then a short paragraph on what the user changed between the shots (grind, dose, profile or its variables, temperature setpoint, target weight) and what stayed the same — taken from the comparison the app computed, not guessed.
+
+## Stages
+One table with a row per stage (in profile order, "Drips" last) and one column per shot — Stage | Shot 1 | Shot 2 | … | What differed — where each cell gives time span · water in · cup at the end (and the share of ∫EC dm by then when Portal data exists). Below it, a numbered list (1., 2., 3.) of how the stages differed between the shots: duration, exit on the trigger or on the time limit, peak pressure, mean flow, cup gain, where the solubles came from — and which stages were the same within noise. Say so when a stage exists in one shot and not in another.
+
+## What stands out
+A numbered list (1., 2., 3. — consecutive, never "1." on every item), in brewing order: one item per step between consecutive shots (1 → 2, 2 → 3, …) saying what was varied, what that did to pressure, time, yield, EC and taste when given, and a plain verdict — better, worse, or no clear change — with the numbers that say so. Then items on what varied without being changed on purpose (temperature, dose scatter, final weight) and on anything inconsistent in the records, with hypotheses labelled "Unconfirmed:". Finish with one item that begins "Trend:" — whether the shots improved in sequence, and what the best shot did that the others did not.
+
+## What helped and what did not
+Two short bullet lists — "Keep:" the changes the series shows helped, and "Revert or stop:" the ones that did not — each with the shot numbers as evidence; write "undecided" when one shot is not enough to tell.
+
+## Suggested changes
+Start with "Change one thing per shot, in this order." then a numbered list (1., 2., 3. — consecutive) of single changes for the next shots, meant to improve on the latest shot and built on what the series showed. Each item names the exact variable or stage parameter (the profile's own keys when given, e.g. bloom_time, extraction_flow, saturation_pressure, the final weight, the temperature setpoint) and the value to set, or the grind move in whole steps of the grinder's step size; says why the series points to it (which shots showed what); and says what to look for in the next trace. Respect how the user drinks the coffee (ratio targets differ for milk drinks and straight espresso).
+
+## Open questions
+Bullets: what you need to know to go further (taste of each shot, a second-scale weight, a refractometer reading, which profile version was loaded for which shot).
+
+## Sources
+Bullets listing only the data you were given: the shot ids/dates in order, the profile name(s) and version, the coffee as recorded. Do not invent URLs or literature.
+
+Rules: use the numbers from the digests and the app's comparison and do not recompute or round them differently; never invent values that are not there — say "not recorded" instead; keep the tone plain and specific; write for the person who pulled the shots; do not describe the charts (the app shows them); do not add a title, preamble or closing remarks.
+Weights: meta.beverageG is the cup — the yield to use for ratio and EY — and meta.beverageNote says where it came from (weighed by hand, the profile's target, or the scale). meta.profileTargetG is only what the profile aimed to stop at and meta.scaleFinalG only what the machine's scale read; quote them as such and never present either as the measured yield when a hand-weighed value exists. When the three disagree, say so and by how much.`;
+
+const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
+const delta = (a, b, digits = 2) => (a === null || b === null ? null : Math.round((b - a) * 10 ** digits) / 10 ** digits);
+
+/**
+ * What the app can say about a series before the model does: one row per shot
+ * with the setup and outcome numbers, the differences between consecutive
+ * shots, and every stage laid side by side by name. Null when fewer than two
+ * shots are given. The model is told to compare from this, not to guess.
+ */
+export function buildSeriesComparison(digests) {
+  if (!Array.isArray(digests) || digests.length < 2) return null;
+  const peakPressure = (d) => {
+    const ps = (d.stages || []).map((st) => num(st.pressureMaxBar)).filter((v) => v !== null);
+    return ps.length ? Math.max(...ps) : null;
+  };
+  const variables = (d) => Object.fromEntries((d.meta?.profileVariables || []).map((v) => [v.key, v.value]));
+  const shots = digests.map((d, i) => ({
+    shot: i + 1,
+    id: d.meta?.id ?? null,
+    startedAt: d.meta?.startedAt ?? null,
+    profile: d.meta?.profile ?? null,
+    profileTargetG: num(d.meta?.profileTargetG),
+    temperatureSetpointC: num(d.meta?.profileTemperatureC),
+    variables: variables(d),
+    grindUm: num(d.meta?.grindUm),
+    doseG: num(d.meta?.doseG),
+    beverageG: num(d.meta?.beverageG),
+    beverageSource: d.meta?.beverageSource ?? null,
+    ratio: num(d.meta?.ratio),
+    durationSec: num(d.meta?.durationSec),
+    firstDropSec: num(d.timeline?.firstDropSec),
+    pumpStopSec: num(d.timeline?.pumpStopSec),
+    dripsAfterPumpG: num(d.timeline?.dripsAfterPumpG),
+    totalWaterMl: num(d.timeline?.totalWaterMl),
+    peakPressureBar: peakPressure(d),
+    waterTempStartC: num(d.temperature?.startC),
+    waterTempEndC: num(d.temperature?.endC),
+    meanEcPerG: num(d.ec?.meanEcPerG),
+    integralEcG: num(d.ec?.integralEcG),
+    peakEc: num(d.ec?.peakEc),
+    peakAtCupG: num(d.ec?.peakAtCupG),
+    tailLast5gRatioToPeakPct: num(d.ec?.tailLast5g?.ratioToPeakPct),
+    refractometerTdsPct: num(d.meta?.refractometerTdsPct),
+    measuredEyPct: num(d.meta?.measuredEyPct),
+    portalData: !!d.ec && d.ec.meanEcPerG != null,
+    stageNames: (d.stages || []).map((st) => st.name),
+  }));
+  const numericKeys = ['grindUm', 'doseG', 'beverageG', 'ratio', 'durationSec', 'firstDropSec', 'pumpStopSec', 'dripsAfterPumpG', 'totalWaterMl', 'peakPressureBar', 'waterTempStartC', 'waterTempEndC', 'meanEcPerG', 'integralEcG', 'peakEc', 'peakAtCupG', 'tailLast5gRatioToPeakPct', 'refractometerTdsPct', 'measuredEyPct', 'profileTargetG', 'temperatureSetpointC'];
+  const steps = shots.slice(1).map((b, i) => {
+    const a = shots[i];
+    const changes = {};
+    for (const k of numericKeys) {
+      const dv = delta(a[k], b[k]);
+      if (dv !== null && dv !== 0) changes[k] = { from: a[k], to: b[k], delta: dv };
+    }
+    if (a.profile !== b.profile) changes.profile = { from: a.profile, to: b.profile };
+    const varKeys = new Set([...Object.keys(a.variables), ...Object.keys(b.variables)]);
+    for (const k of varKeys) if (JSON.stringify(a.variables[k]) !== JSON.stringify(b.variables[k])) changes[`variable:${k}`] = { from: a.variables[k] ?? null, to: b.variables[k] ?? null };
+    if (a.beverageSource !== b.beverageSource) changes.beverageSource = { from: a.beverageSource, to: b.beverageSource };
+    const setupChanged = ['grindUm', 'doseG', 'profile', 'temperatureSetpointC', 'profileTargetG'].filter((k) => k in changes).concat(Object.keys(changes).filter((k) => k.startsWith('variable:')));
+    return { from: a.shot, to: b.shot, setupChanged, changes };
+  });
+  // stages side by side, by name, in order of first appearance
+  const names = [];
+  for (const d of digests) for (const st of d.stages || []) if (!names.includes(st.name)) names.push(st.name);
+  const stages = names.map((name) => ({
+    stage: name,
+    perShot: digests.map((d, i) => {
+      const st = (d.stages || []).find((x) => x.name === name);
+      if (!st) return { shot: i + 1, present: false };
+      const share = (d.ec?.solublesShareByStageEnd || []).find((x) => x.stage === name)?.solublesPctByEnd ?? null;
+      return { shot: i + 1, present: true, fromSec: st.fromSec, toSec: st.toSec, durationSec: st.durationSec, waterInMl: st.waterInMl, cupEndG: st.cupEndG, cupGainG: st.cupGainG, pressureMaxBar: st.pressureMaxBar, pressureEndBar: st.pressureEndBar, flowMeanMlPerS: st.flowMeanMlPerS, tempEndC: st.tempEndC, ecEnd: st.ecEnd, solublesPctByEnd: share };
+    }),
+  }));
+  const trend = (key, digits = 2) => {
+    const vals = shots.map((x) => x[key]).filter((v) => v !== null);
+    if (vals.length < 2) return null;
+    const ds = vals.slice(1).map((v, i) => v - vals[i]).filter((d) => d !== 0); // unchanged steps do not break a trend
+    const dir = !ds.length ? 'flat' : ds.every((d) => d > 0) ? 'rising' : ds.every((d) => d < 0) ? 'falling' : 'mixed';
+    return { first: vals[0], last: vals[vals.length - 1], change: Math.round((vals[vals.length - 1] - vals[0]) * 10 ** digits) / 10 ** digits, direction: dir };
+  };
+  const sameProfile = shots.every((x) => x.profile === shots[0].profile);
+  const notes = [];
+  if (!sameProfile) notes.push('The shots were not all brewed with the same profile; compare stages by name with care.');
+  if (!shots.every((x) => x.portalData)) notes.push(`Portal (EC) data exists for shot(s) ${shots.filter((x) => x.portalData).map((x) => x.shot).join(', ') || 'none'} only; EC comparisons are limited to those.`);
+  if (steps.some((st) => st.setupChanged.length > 1)) notes.push('More than one setup variable changed between some shots, so their effects cannot be separated from these shots alone.');
+  if (steps.every((st) => st.setupChanged.length === 0)) notes.push('No recorded setup change between the shots: differences are repeatability, not an experiment.');
+  return {
+    order: 'brewing order, oldest first',
+    sameProfile,
+    shots,
+    steps,
+    stages,
+    trends: { durationSec: trend('durationSec', 1), ratio: trend('ratio'), peakPressureBar: trend('peakPressureBar'), meanEcPerG: trend('meanEcPerG', 3), beverageG: trend('beverageG', 1), grindUm: trend('grindUm', 0) },
+    notes,
+  };
+}
+
 /**
  * Build the two messages for the model. `shots` is [{ digest, profile }] in
  * chronological order; `options` carries the user's standing notes and the
- * questions for this review.
+ * questions for this review. With more than one shot the series template is
+ * used and the app's own comparison goes in ahead of the per-shot digests.
  */
 export function buildReviewMessages(shots, options = {}) {
   const o = { grindStepUm: 5, drink: 'espresso', standingNotes: '', question: '', taste: '', ...options };
@@ -345,15 +474,21 @@ export function buildReviewMessages(shots, options = {}) {
     '',
     REVIEW_METHOD,
     '',
-    REVIEW_TEMPLATE,
+    shots.length > 1 ? REVIEW_TEMPLATE_SERIES : REVIEW_TEMPLATE,
   ].join('\n');
 
   const parts = [];
   parts.push(`# Review request`);
-  parts.push(`Shots to review: ${shots.length}. The grinder adjusts in steps of ${o.grindStepUm} µm, so any grind change must be a whole number of steps. The user normally drinks this coffee as ${drinkLabel}.`);
+  parts.push(`Shots to review: ${shots.length}${shots.length > 1 ? ' (a series, in brewing order — compare them in every section)' : ''}. The grinder adjusts in steps of ${o.grindStepUm} µm, so any grind change must be a whole number of steps. The user normally drinks this coffee as ${drinkLabel}.`);
   if (o.standingNotes) parts.push(`Standing notes from the user about their setup:\n${o.standingNotes}`);
   if (o.taste) parts.push(`How the shot(s) tasted, in the user's words:\n${o.taste}`);
   if (o.question) parts.push(`What the user wants to know:\n${o.question}`);
+  const comparison = buildSeriesComparison(shots.map((x) => x.digest));
+  if (comparison) {
+    parts.push(`\n# Series comparison (computed by the app)`);
+    if (comparison.notes.length) parts.push(comparison.notes.map((n) => `- ${n}`).join('\n'));
+    parts.push(`One row per shot, the setup and outcome changes between consecutive shots ("steps": what was changed on purpose is in setupChanged), every stage side by side by name, and the trend of the main numbers:\n\`\`\`json\n${JSON.stringify(comparison)}\n\`\`\``);
+  }
   shots.forEach(({ digest, profile }, i) => {
     parts.push(`\n# Shot ${i + 1} of ${shots.length}${digest.meta.startedAt ? ` — ${digest.meta.startedAt}` : ''}`);
     if (digest.gaps.length) parts.push(`Data gaps for this shot:\n${digest.gaps.map((g) => `- ${g}`).join('\n')}`);

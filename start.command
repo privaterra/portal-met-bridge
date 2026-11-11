@@ -1,9 +1,15 @@
 #!/bin/bash
 # portal-met-bridge launcher for macOS. Double-click in Finder, or run from Terminal.
-# Serves the app on http://localhost:8787 and opens it in Chrome (Web Bluetooth
-# needs Chrome or Edge, and needs the page to come from localhost).
+# Serves the app on http://localhost:8787, keeps its files in ~/Documents/portal-met-bridge
+# (Settings → Files and folders → "the data folder of the server") and opens it in
+# Chrome (Web Bluetooth needs Chrome or Edge, and needs the page to come from localhost).
+#   PORT=9000 ./start.command                  another port
+#   DATA_DIR=~/Espresso/logs ./start.command   another folder for the files
+#   DATA_DIR= ./start.command                  no server folder (files stay in the browser / a picked folder)
 cd "$(dirname "$0")" || exit 1
 PORT="${PORT:-8787}"
+if [ -z "${DATA_DIR+x}" ]; then DATA_DIR="$HOME/Documents/portal-met-bridge"; fi
+export PORT DATA_DIR
 URL="http://localhost:$PORT"
 
 open_browser() {
@@ -19,10 +25,12 @@ open_browser() {
 }
 
 echo "portal-met-bridge → $URL   (press Ctrl-C to stop)"
+[ -n "$DATA_DIR" ] && echo "files            → $DATA_DIR"
 if command -v node >/dev/null 2>&1; then
   open_browser &
   exec node serve.mjs
 elif command -v python3 >/dev/null 2>&1; then
+  echo "Node was not found; serving with python3 instead (no server data folder — pick a folder in Settings → Files and folders)."
   open_browser &
   exec python3 -m http.server "$PORT" --bind 127.0.0.1
 else

@@ -13,10 +13,11 @@ Thanks for looking. This is a small, vibe-coded tool (see "How this was built" i
 
 ```bash
 npm start                 # http://localhost:8787  (or: node serve.mjs)
-npm test                  # unit tests: analysis maths, calibration pools, packet parser, CSV, hand-off round-trip, review digest + prompt, markdown, AI providers
+npm test                  # unit tests: analysis maths, calibration pools, packet parser, CSV, hand-off round-trip, review digest + prompt, markdown, AI providers, file destinations + the server's path guard
 npm i -D playwright socket.io
-npm run test:e2e          # Chrome + simulated Portal + mock machine + mock AI endpoint, 125 checks; add --headed to watch
+npm run test:e2e          # Chrome + simulated Portal + mock machine + mock AI endpoint, 135 checks; add --headed to watch
 npm run screenshots       # rebuilds docs/screenshot-*.png for the README from the same fixtures (run after UI changes)
+tools/package-macos.sh    # builds "Portal Met Bridge.app" into dist/ (see docs/PACKAGING.md for releases and the Home Assistant app)
 npm run mock              # mock machine on :8080 (PORT=… to change); point the app at localhost:8080
 ```
 

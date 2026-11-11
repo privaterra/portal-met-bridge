@@ -1,19 +1,20 @@
 // main.js — wires the devices, the recorder, storage, charts and export together.
 
-import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.13.0';
-import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.13.0';
-import { MachinePanel } from './machine-panel.js?v=0.13.0';
-import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.13.0';
-import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.13.0';
-import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.13.0';
-import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, profileFinalWeight, setBeveragePreference, grindMicrons, measuredEy, DEFAULTS } from './analysis.js?v=0.13.0';
-import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, approxTokens, reviewProfileOf } from './review.js?v=0.13.0';
-import { PROVIDERS, streamCompletion, listModels, testKey, maskKey } from './ai.js?v=0.13.0';
-import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.13.0';
-import { makeDemoShot } from './demo.js?v=0.13.0';
-import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug, loadJsPdf } from './export.js?v=0.13.0';
-import { REVIEW_FORMATS, reviewFile, reviewMarkdownFile } from './review-export.js?v=0.13.0';
-import { log, Logger, formatLine } from './log.js?v=0.13.0';
+import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.14.0';
+import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.14.0';
+import { MachinePanel } from './machine-panel.js?v=0.14.0';
+import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.14.0';
+import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.14.0';
+import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.14.0';
+import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, profileFinalWeight, setBeveragePreference, grindMicrons, measuredEy, DEFAULTS } from './analysis.js?v=0.14.0';
+import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, approxTokens, reviewProfileOf } from './review.js?v=0.14.0';
+import { PROVIDERS, streamCompletion, listModels, testKey, maskKey } from './ai.js?v=0.14.0';
+import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.14.0';
+import { makeDemoShot } from './demo.js?v=0.14.0';
+import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug, loadJsPdf } from './export.js?v=0.14.0';
+import { REVIEW_FORMATS, reviewFile, reviewMarkdownFile } from './review-export.js?v=0.14.0';
+import { log, formatLine } from './log.js?v=0.14.0';
+import { files, Files, FILE_KINDS, DEFAULT_ROOT, cleanDirName } from './files.js?v=0.14.0';
 import qrcode from '../vendor/qrcode.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -77,8 +78,17 @@ const SETTINGS = {
   lagSec: { def: 0, el: 'lag-sec', num: true, min: -2, max: 3 },
   minShotSec: { def: 5, el: 'set-min-shot', num: true, min: 0, max: 60 },
   autoGraph: { def: true, el: 'portal-auto-graph', bool: true },
-  autoSaveFiles: { def: true, el: 'set-autosave-files', bool: true },
   beverageDefault: { def: 'profile', el: 'set-beverage-default' },
+  fileDestination: { def: 'auto', el: 'set-file-destination' },
+  fileRoot: { def: DEFAULT_ROOT, el: 'set-dir-root', dir: '' },
+  dirShots: { def: FILE_KINDS.shots.def, el: 'set-dir-shots', dir: FILE_KINDS.shots.def },
+  dirExports: { def: FILE_KINDS.exports.def, el: 'set-dir-exports', dir: FILE_KINDS.exports.def },
+  dirReports: { def: FILE_KINDS.reports.def, el: 'set-dir-reports', dir: FILE_KINDS.reports.def },
+  dirReviews: { def: FILE_KINDS.reviews.def, el: 'set-dir-reviews', dir: FILE_KINDS.reviews.def },
+  dirBackups: { def: FILE_KINDS.backups.def, el: 'set-dir-backups', dir: FILE_KINDS.backups.def },
+  dirLogs: { def: FILE_KINDS.logs.def, el: 'set-dir-logs', dir: FILE_KINDS.logs.def },
+  autoSaveFiles: { def: true, el: 'set-autosave-files', bool: true },
+  autoBackup: { def: true, el: 'set-auto-backup', bool: true },
   minCalibrationShots: { def: 5, el: 'set-min-cal', num: true, min: 2, max: 20 },
   estimatePool: { def: 'auto', el: 'est-pool' },
   aiProvider: { def: 'anthropic', el: 'set-ai-provider' },
@@ -96,7 +106,6 @@ const SETTINGS = {
   logEnabled: { def: false, el: 'log-enabled', bool: true },
   logLevel: { def: 'info', el: 'log-level' },
   logPackets: { def: false, el: 'log-packets', bool: true },
-  logSaveExports: { def: false, el: 'log-save-exports', bool: true },
   logShowTail: { def: true, el: 'log-show', bool: true },
 };
 const settings = {}; // live values
@@ -133,6 +142,10 @@ async function settingChanged(key) {
     el.value = v;
   }
   if (typeof v === 'string') v = v.trim();
+  if ('dir' in spec) {
+    v = cleanDirName(v, spec.dir);
+    el.value = v;
+  }
   if (settings[key] === v) return v; // e.g. a second 'change' event for the same value
   settings[key] = v;
   await store.setSetting(key, v);
@@ -187,6 +200,20 @@ function applySetting(key, v) {
     case 'logShowTail':
       renderLogTail();
       break;
+    case 'fileDestination':
+    case 'fileRoot':
+    case 'dirShots':
+    case 'dirExports':
+    case 'dirReports':
+    case 'dirReviews':
+    case 'dirBackups':
+    case 'dirLogs':
+      applyFileSettings();
+      break;
+    case 'autoSaveFiles':
+    case 'autoBackup':
+      renderFiles();
+      break;
     case 'aiProvider':
     case 'aiKeyAnthropic':
     case 'aiKeyOpenai':
@@ -225,6 +252,7 @@ async function importSettingsDocument(doc) {
       if (!Number.isFinite(v)) continue;
       v = Math.min(spec.max, Math.max(spec.min, v));
     } else v = String(v ?? spec.def);
+    if ('dir' in spec) v = cleanDirName(v, spec.dir);
     settings[key] = v;
     await store.setSetting(key, v);
     n++;
@@ -254,7 +282,8 @@ const SETTING_LABELS = {
   meticulousHost: 'machine address', autoConnectMeticulous: 'connect on open', autoAttach: 'attach machine record', attachDelaySec: 'attach delay',
   autoRecord: 'auto-record', settleSec: 'settle window', lagSec: 'Portal lag', minShotSec: 'minimum shot length', autoGraph: 'Portal screen', autoSaveFiles: 'write shot files', beverageDefault: 'final weight',
   minCalibrationShots: 'reference shots', estimatePool: 'estimate pool', logEnabled: 'logging', logLevel: 'log detail', logPackets: 'packet logging',
-  logSaveExports: 'save exports to folder', logShowTail: 'live tail',
+  logShowTail: 'live tail', fileDestination: 'where files go', fileRoot: 'root folder', dirShots: 'shot files folder', dirExports: 'exports folder', dirReports: 'reports folder',
+  dirReviews: 'reviews folder', dirBackups: 'backups folder', dirLogs: 'logs folder', autoBackup: 'automatic backup',
   aiProvider: 'AI provider', aiKeyAnthropic: 'Anthropic key', aiModelAnthropic: 'Claude model', aiKeyOpenai: 'OpenAI key', aiModelOpenai: 'OpenAI model', aiBaseOpenai: 'OpenAI endpoint',
   aiKeyGoogle: 'Gemini key', aiModelGoogle: 'Gemini model', aiGrindStepUm: 'grinder step', aiDrink: 'usual drink', aiNotes: 'standing notes', reviewFormat: 'review file format',
 };
@@ -354,10 +383,14 @@ async function init() {
   recorder.autoStart = settings.autoRecord;
   setBeveragePreference(settings.beverageDefault);
   log.configure({ enabled: settings.logEnabled, level: settings.logLevel, packets: settings.logPackets });
-  await restoreLogFolder();
+  log.setWriter(files);
+  await files.probeServer();
+  await restoreFolder();
+  applyFileSettings();
+  store.onChange = (kind) => scheduleAutoBackup(kind);
   renderLogStatus();
-  $('about-version').textContent = 'v0.13.0';
-  log.info('app', `portal-met-bridge v0.13.0 started · ${navigator.userAgent}`);
+  $('about-version').textContent = 'v0.14.0';
+  log.info('app', `portal-met-bridge v0.14.0 started · ${navigator.userAgent}`);
 
   const env = await environmentCheck();
   renderPortalSteps({ secure: env.secure, api: env.api, adapter: env.adapter });
@@ -760,7 +793,7 @@ recorder.addEventListener('shot', async (e) => {
  * record of truth; files are a convenience for other tools.
  */
 async function autosaveShotFiles(shot) {
-  if (!log.folder || log.folderState !== 'granted') return false;
+  if (!files.ready) return false;
   const analysis = recomputeCache(shot);
   let estimate = null;
   try {
@@ -769,8 +802,8 @@ async function autosaveShotFiles(shot) {
     /* no calibration yet */
   }
   const base = fileBase(shot);
-  const json = await log.saveFile('shots', `${base}.json`, new Blob([shotJson(shot, analysis, estimate)], { type: 'application/json' }));
-  const csv = await log.saveFile('shots', `${base}.csv`, new Blob([shotSamplesCsv(shot)], { type: 'text/csv' }));
+  const json = await files.write('shots', `${base}.json`, shotJson(shot, analysis, estimate), { type: 'application/json' });
+  const csv = await files.write('shots', `${base}.csv`, shotSamplesCsv(shot), { type: 'text/csv' });
   shot.files = { json, csv, at: Date.now() };
   await store.putShot(shot);
   log.info('export', `shot files written: ${json}, ${csv}`);
@@ -1655,19 +1688,22 @@ async function downloadEnvelope() {
 // ---------------------------------------------------------- files out --
 
 /**
- * Hand a file to the user: into the chosen folder (Settings → Logging) when
- * "save exports there" is on and the folder is writable, else a browser download.
+ * Hand a file to the user: into the file destination (Settings → Files and
+ * folders) under the subfolder for its kind when one is writable, else a
+ * browser download.
  */
-async function deliver(name, data, type, sub = 'exports') {
-  if (settings.logSaveExports && log.folder && log.folderState === 'granted') {
+async function deliver(name, data, type, kind = 'exports') {
+  if (files.ready) {
     try {
       const blob = data instanceof Blob ? data : new Blob([data], { type: type || 'application/octet-stream' });
-      const path = await log.saveFile(sub, name, blob);
+      const path = await files.write(kind, name, blob);
       log.info('export', `saved ${path} (${blob.size} B)`);
       toast(`Saved ${path}`);
+      renderFiles();
       return path;
     } catch (err) {
-      log.warn('export', `folder save failed for ${name}: ${err?.message || err}; downloading instead`);
+      log.warn('export', `save failed for ${name}: ${err?.message || err}; downloading instead`);
+      renderFiles();
     }
   }
   log.info('export', `download ${name}`);
@@ -1708,10 +1744,10 @@ async function downloadJpegs() {
   const shot = state.selected;
   if ($('view-shots').hidden) showView('shots');
   const { time, mass } = await chartImages(shot, state.analysis);
-  await deliver(`${fileBase(shot)}-time.jpg`, time.blob);
+  await deliver(`${fileBase(shot)}-time.jpg`, time.blob, 'image/jpeg', 'reports');
   if (mass) {
     await new Promise((r) => setTimeout(r, 300));
-    await deliver(`${fileBase(shot)}-ec-vs-mass.jpg`, mass.blob);
+    await deliver(`${fileBase(shot)}-ec-vs-mass.jpg`, mass.blob, 'image/jpeg', 'reports');
   }
 }
 
@@ -1770,7 +1806,7 @@ async function downloadPdf() {
   try {
     const images = await chartImages(shot, state.analysis);
     const blob = await shotReportPdf(reportFor(shot, state.analysis, state.estimate, state.fit, images));
-    deliver(`${fileBase(shot)}-report.pdf`, blob);
+    deliver(`${fileBase(shot)}-report.pdf`, blob, 'application/pdf', 'reports');
   } catch (err) {
     toast('PDF failed: ' + (err.message || err), 'error');
   }
@@ -2059,65 +2095,147 @@ function toast(msg, level = 'info', ms) {
 
 // ------------------------------------------------------------ log & debug --
 
-const LOG_FOLDER_KEY = 'logFolderHandle';
+// ------------------------------------------------------------------ files --
 
-async function restoreLogFolder() {
-  try {
-    const handle = await store.getSetting(LOG_FOLDER_KEY, null);
-    if (handle && typeof handle.queryPermission === 'function') await log.useFolder(handle);
-  } catch (err) {
-    log.warn('log', `could not restore the log folder: ${err?.message || err}`);
-  }
-  renderLogFolder();
+const FOLDER_KEY = 'logFolderHandle'; // the picked folder's handle (name kept since v0.5)
+const KIND_SETTING = { shots: 'dirShots', exports: 'dirExports', reports: 'dirReports', reviews: 'dirReviews', backups: 'dirBackups', logs: 'dirLogs' };
+
+/** Push the destination and folder names from the settings into files.js. */
+function applyFileSettings() {
+  const layout = { root: settings.fileRoot };
+  for (const [kind, key] of Object.entries(KIND_SETTING)) layout[kind] = settings[key];
+  files.configure({ destination: settings.fileDestination, layout });
+  renderFiles();
 }
 
-async function pickLogFolder() {
+async function restoreFolder() {
   try {
-    const handle = await log.pickFolder();
+    const handle = await store.getSetting(FOLDER_KEY, null);
+    if (handle && typeof handle.queryPermission === 'function') await files.useFolder(handle);
+  } catch (err) {
+    log.warn('files', `could not restore the save folder: ${err?.message || err}`);
+  }
+  renderFiles();
+}
+
+async function pickFolder() {
+  try {
+    const handle = await files.pickFolder();
     try {
-      await store.setSetting(LOG_FOLDER_KEY, handle); // Chrome can persist the handle
+      await store.setSetting(FOLDER_KEY, handle); // Chrome can persist the handle
     } catch (err) {
-      log.warn('log', `folder handle could not be saved for next time: ${err?.message || err}`);
+      log.warn('files', `folder handle could not be saved for next time: ${err?.message || err}`);
     }
-    renderLogFolder();
-    toast(`Log folder set to ${handle.name}`);
+    if (settings.fileDestination !== 'folder' && settings.fileDestination !== 'auto') {
+      settings.fileDestination = 'folder';
+      await store.setSetting('fileDestination', 'folder');
+      $('set-file-destination').value = 'folder';
+      files.configure({ destination: 'folder' });
+    }
+    log.info('files', `save folder: ${handle.name}`);
+    renderFiles();
+    toast(`Files go to ${files.describe()}`);
   } catch (err) {
     if (err?.name === 'AbortError') return;
     toast(err.message || String(err), 'error');
   }
 }
 
-async function reallowLogFolder() {
-  if (!log.folder) return;
-  await log.useFolder(log.folder, { request: true });
-  renderLogFolder();
+async function reallowFolder() {
+  if (!files.folder) return;
+  await files.useFolder(files.folder, { request: true });
+  renderFiles();
 }
 
-async function forgetLogFolder() {
+async function forgetFolder() {
   await log.flush().catch(() => {});
-  log.forgetFolder();
-  await store.setSetting(LOG_FOLDER_KEY, null);
-  renderLogFolder();
+  files.forgetFolder();
+  await store.setSetting(FOLDER_KEY, null);
+  renderFiles();
 }
 
-function renderLogFolder() {
-  const name = log.folder?.name;
-  const st = log.folderState;
-  const el = $('log-folder');
-  $('log-reallow-folder').hidden = st !== 'prompt';
-  $('log-forget-folder').hidden = !log.folder;
-  if (!log.folder) el.textContent = Logger.canPickFolder ? 'No folder chosen — the log stays in the page.' : 'Folder picking needs Chrome or Edge; use Download instead.';
-  else if (st === 'granted') el.textContent = `${name}/portal-met-bridge/ — writable${log.bytesWritten ? ` · ${(log.bytesWritten / 1024).toFixed(1)} kB written this session` : ''}${log.lastFlushError ? ' · last error: ' + log.lastFlushError : ''}`;
-  else if (st === 'prompt') el.textContent = `${name} — Chrome needs you to re-allow it (click Re-allow folder).`;
-  else el.textContent = `${name} — not writable (${st}${log.lastFlushError ? ': ' + log.lastFlushError : ''}).`;
+/** Settings → Files and folders, the Logging status line, and every note that says where files land. */
+function renderFiles() {
+  const sel = $('set-file-destination');
+  const serverOpt = sel.querySelector('option[value="server"]');
+  serverOpt.disabled = !files.server;
+  serverOpt.textContent = files.server ? `the data folder of the server that serves this page — ${files.server.dataDir}${files.server.host ? ` on ${files.server.host}` : ''}` : 'the data folder of the server (not offered: it was started without DATA_DIR)';
+  sel.querySelector('option[value="folder"]').disabled = !Files.canPickFolder && !files.folder;
+  sel.querySelector('option[value="auto"]').textContent = `whatever is available — ${files.folder ? 'the chosen folder' : files.server ? "the server's data folder" : 'downloads'} right now`;
+  const eff = files.effective;
+  $('files-folder-row').hidden = !(eff === 'folder' || settings.fileDestination === 'auto' || Files.canPickFolder);
+  $('files-reallow-folder').hidden = files.folderState !== 'prompt';
+  $('files-forget-folder').hidden = !files.folder;
+  $('files-pick-folder').textContent = files.folder ? 'Choose another folder…' : 'Choose folder…';
+  const where = $('files-folder');
+  if (!files.folder) where.textContent = Files.canPickFolder ? 'No folder chosen.' : 'Folder picking needs Chrome or Edge.';
+  else if (files.folderState === 'granted') where.textContent = `${files.folder.name}/ — writable`;
+  else if (files.folderState === 'prompt') where.textContent = `${files.folder.name}/ — Chrome needs you to re-allow it`;
+  else where.textContent = `${files.folder.name}/ — not writable (${files.folderState}${files.lastError ? ': ' + files.lastError : ''})`;
+  const status = $('files-status');
+  if (files.ready) {
+    status.textContent = `Files are written to ${files.describe()}${files.filesWritten ? ` · ${files.filesWritten} file${files.filesWritten === 1 ? '' : 's'}, ${(files.bytesWritten / 1024).toFixed(1)} kB this session` : ''}${files.lastError ? ` · last error: ${files.lastError}` : ''}`;
+    status.dataset.level = 'ok';
+  } else {
+    status.textContent = files.blocker;
+    status.dataset.level = eff === 'downloads' && settings.fileDestination === 'downloads' ? 'ok' : 'warn';
+  }
+  const base = files.describe();
+  $('files-layout').innerHTML = Object.entries(FILE_KINDS)
+    .map(([kind, spec]) => `<tr><td>${esc(spec.label)}</td><td><code>${esc(files.ready ? base + (files.layout[kind] ? files.layout[kind] + '/' : '') : 'download folder')}</code></td><td>${esc(spec.what)}</td></tr>`)
+    .join('');
+  $('autosave-note').textContent = files.ready ? `Shot files land in ${files.whereOf('shots')}.` : 'Nothing is written until a folder (or the server\'s data folder) is chosen above; the database copy in this browser is kept regardless.';
+  $('backup-note-where').textContent = files.ready ? `Backups and exports are written to ${files.describe()}; the automatic backup is ${settings.autoBackup ? 'on' : 'off'}.` : "Files go to the browser's download folder; the automatic backup needs a folder (Settings → Files and folders).";
+  $('log-folder').textContent = files.ready ? `The log is appended to ${files.whereOf('logs')}<date>.log as it happens.` : 'The log stays in this page (last 5,000 lines); choose a destination under Files and folders to have it written as a file.';
   renderLogStatus();
+}
+files.addEventListener('change', () => {
+  if (document.readyState !== 'loading' && $('files-status')) renderFiles();
+});
+
+// ---------------------------------------------------------- auto backup --
+
+let backupTimer = null;
+let backupBusy = false;
+/**
+ * Keep a current copy of the whole database at the destination:
+ * <backups>/portal-met-bridge-latest.json after every change (debounced), and a
+ * dated copy the first time each day. Never downloads anything on its own.
+ */
+function scheduleAutoBackup(reason = 'change') {
+  if (!settings.autoBackup || !files.ready) return;
+  if (backupTimer) clearTimeout(backupTimer);
+  backupTimer = setTimeout(() => {
+    backupTimer = null;
+    runAutoBackup(reason).catch((err) => log.warn('backup', `automatic backup failed: ${err?.message || err}`));
+  }, 12000);
+}
+
+async function runAutoBackup(reason, { force = false } = {}) {
+  if (backupBusy || (!force && !settings.autoBackup) || !files.ready) return false;
+  backupBusy = true;
+  try {
+    const doc = await backupDocument();
+    const text = JSON.stringify(doc);
+    const path = await files.write('backups', 'portal-met-bridge-latest.json', text, { type: 'application/json' });
+    const today = new Date().toISOString().slice(0, 10);
+    const lastDaily = await store.getSetting('lastDailyBackup', '');
+    if (lastDaily !== today) {
+      await files.write('backups', `portal-met-bridge-${today}.json`, text, { type: 'application/json' });
+      await store.setSetting('lastDailyBackup', today);
+    }
+    log.info('backup', `automatic backup (${reason}): ${path} · ${doc.shots.length} shots, ${(text.length / 1024).toFixed(0)} kB`);
+    return true;
+  } finally {
+    backupBusy = false;
+  }
 }
 
 function renderLogStatus() {
   const bits = [];
   bits.push(log.enabled ? `on · ${settings.logLevel}${settings.logPackets ? ' + packets' : ''}` : 'off');
   bits.push(`${log.ring.length} lines in memory${log.dropped ? ` (${log.dropped} dropped)` : ''}`);
-  if (log.folder && log.folderState === 'granted') bits.push(`writing to ${log.folder.name}`);
+  if (log.writing) bits.push(`writing to ${files.describe()}${files.layout.logs ? files.layout.logs + '/' : ''}`);
   $('log-status').textContent = bits.join(' · ');
   const tab = document.querySelector('.view-tab[data-view="settings"]');
   let badge = tab.querySelector('.badge');
@@ -2188,12 +2306,13 @@ async function openResetDialog() {
   ];
   if (portal.device) items.push(`the Bluetooth pairing with ${portal.device.name || 'the Portal'} (Chrome will ask you to pick it again)`);
   $('reset-list').innerHTML = items.map((t) => `<li>${esc(t)}</li>`).join('');
-  const hasFolder = !!log.folder;
+  const hasFolder = files.effective !== 'downloads' && (files.folder || files.server);
   $('reset-folder-row').hidden = !hasFolder;
   if (hasFolder) {
-    $('reset-folder-label').textContent = `Also delete the files this app wrote in ${log.folder.name}/portal-met-bridge/ (logs, exports, backups)${log.folderState !== 'granted' ? ' — folder access must be re-allowed first' : ''}`;
-    $('reset-folder').checked = log.folderState === 'granted';
-    $('reset-folder').disabled = log.folderState !== 'granted';
+    const what = files.rootInUse ? `${files.describe()}` : `the ${Object.keys(FILE_KINDS).map((k) => files.layout[k]).filter(Boolean).join(', ')} folders in ${files.describe()}`;
+    $('reset-folder-label').textContent = `Also delete the files this app wrote in ${what} (shot files, exports, reports, reviews, backups, logs)${!files.ready ? ' — the folder must be writable first' : ''}`;
+    $('reset-folder').checked = files.ready;
+    $('reset-folder').disabled = !files.ready;
   }
   $('reset-confirm').value = '';
   $('reset-go').disabled = true;
@@ -2239,19 +2358,22 @@ async function eraseEverything() {
       /* ignore */
     }
 
-    // 2. Files in the save folder (only our own subfolder), then stop using the folder.
+    // 2. Files at the destination (only our own folders), then stop writing there.
+    log.dropPending(); // never recreate logs after the wipe
+    if (backupTimer) clearTimeout(backupTimer);
+    backupTimer = null;
     if (wipeFolder) {
-      say('Deleting files in the save folder…');
+      say('Deleting the files this app wrote…');
       try {
-        const folderName = log.folder?.name || 'folder';
-        const removed = await log.eraseFolderContents();
-        report.push(removed ? `deleted ${folderName}/portal-met-bridge/` : 'save folder had no app files');
+        const where = files.describe();
+        const removed = await files.eraseAll();
+        report.push(removed.length ? `deleted ${where}${removed.length > 1 ? ` (${removed.join(', ')})` : ''}` : 'no app files found at the destination');
       } catch (err) {
-        report.push(`save folder: ${err?.message || err}`);
+        report.push(`files: ${err?.message || err}`);
       }
-    } else {
-      log.forgetFolder(); // never recreate logs after the wipe
     }
+    files.forgetFolder();
+    files.configure({ destination: 'downloads' });
 
     // 3. The database (shots, beans, settings, folder handle) and any other storage.
     say('Deleting the database…');
@@ -2357,7 +2479,7 @@ $('settings-import').addEventListener('change', async (e) => {
   e.target.value = '';
 });
 $('settings-reset').addEventListener('click', async () => {
-  if (!confirm('Reset every setting to its default? Shots, beans and the log folder are kept.')) return;
+  if (!confirm('Reset every setting to its default? Shots, beans and the chosen folder are kept.')) return;
   await resetSettings();
   toast('Settings reset to defaults.');
 });
@@ -2376,9 +2498,18 @@ $('reset-cancel').addEventListener('click', () => $('reset-dialog').close());
 $('reset-dialog').addEventListener('cancel', (e) => {
   if (erasing) e.preventDefault(); // Esc must not interrupt a wipe in progress
 });
-$('log-pick-folder').addEventListener('click', pickLogFolder);
-$('log-reallow-folder').addEventListener('click', reallowLogFolder);
-$('log-forget-folder').addEventListener('click', forgetLogFolder);
+$('files-pick-folder').addEventListener('click', pickFolder);
+$('files-reallow-folder').addEventListener('click', reallowFolder);
+$('files-forget-folder').addEventListener('click', forgetFolder);
+$('files-backup-now').addEventListener('click', async () => {
+  if (!files.ready) return toast(files.blocker, 'error');
+  try {
+    const ok = await runAutoBackup('button', { force: true });
+    toast(ok ? `Backup written to ${files.whereOf('backups')}` : 'A backup is already being written.');
+  } catch (err) {
+    toast(`Backup failed: ${err?.message || err}`, 'error');
+  }
+});
 $('log-download').addEventListener('click', () => downloadLog(false));
 $('log-download-json').addEventListener('click', () => downloadLog(true));
 $('log-copy').addEventListener('click', copyLogTail);
@@ -2441,8 +2572,11 @@ $('dl-summary').addEventListener('click', downloadSummaryCsv);
 $('dl-zip').addEventListener('click', downloadZip);
 $('demo-load').addEventListener('click', addDemoShot);
 $('demo-replay').addEventListener('click', replayDemoLive);
+async function backupDocument() {
+  return store.exportAll();
+}
 $('backup-export').addEventListener('click', async () => {
-  const doc = await store.exportAll();
+  const doc = await backupDocument();
   await deliver(`portal-met-bridge-backup-${stamp(Date.now())}.json`, JSON.stringify(doc), 'application/json', 'backups');
   $('backup-note').textContent = `${doc.shots.length} shots, ${doc.beans.length} beans.`;
 });
@@ -3130,7 +3264,7 @@ $('an-saved-rows').addEventListener('click', async (e) => {
   }
 });
 
-window.__pb = { state, store, portal, recorder, timeChart, massChart, calChart, compareChart, compare, machinePanel, settings, log, hist, an, openShotDialog, openWeightDialog, openCompare, openAnalysis, runReview, refreshShotList, recoverUnfinishedShots, backfillMachineRecords, autosaveShotFiles, refreshProfileTargets, get meticulous() { return meticulous; } };
+window.__pb = { state, store, portal, recorder, timeChart, massChart, calChart, compareChart, compare, machinePanel, settings, log, files, hist, an, runAutoBackup, openShotDialog, openWeightDialog, openCompare, openAnalysis, runReview, refreshShotList, recoverUnfinishedShots, backfillMachineRecords, autosaveShotFiles, refreshProfileTargets, get meticulous() { return meticulous; } };
 
 init().catch((err) => {
   console.error(err);

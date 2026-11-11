@@ -11,7 +11,8 @@
 // Needs playwright (npm i -D playwright) and socket.io for the mock, like the e2e.
 
 import { spawn } from 'node:child_process';
-import { readFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,7 +29,10 @@ const APP_PORT = 8791;
 const MOCK_PORT = 8792;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const app = spawn(process.execPath, [join(root, 'serve.mjs')], { env: { ...process.env, PORT: String(APP_PORT) }, stdio: 'ignore' });
+// The server gets a data folder, as the macOS app and the Home Assistant app give it, so the
+// Files and folders panel shows "~/Documents/portal-met-bridge" as the destination.
+const fakeHome = mkdtempSync(join(tmpdir(), 'pmb-shots-home-'));
+const app = spawn(process.execPath, [join(root, 'serve.mjs')], { env: { ...process.env, PORT: String(APP_PORT), HOME: fakeHome, DATA_DIR: '~/Documents/portal-met-bridge' }, stdio: 'ignore' });
 let mock = null; // started right before the machine connects, so its scripted shot (3 s after boot) is recorded from the start
 await wait(800);
 
@@ -227,6 +231,14 @@ try {
   await narrow.waitForTimeout(300);
   await narrow.evaluate(() => { const r = document.querySelector('.ai-provider[data-provider="anthropic"]'); if (r) { r.hidden = false; } document.querySelectorAll('.ai-provider:not([data-provider="anthropic"])').forEach((el) => (el.hidden = true)); document.querySelector('#set-ai-provider').value = 'anthropic'; window.scrollTo(0, 0); });
   await shot(narrow, 'settings');
+  // the Files and folders panel after a few files were written
+  await narrow.evaluate(async () => { await window.__pb.runAutoBackup('screenshot', { force: true }); await window.__pb.log.flush(); });
+  await narrow.click('#files-backup-now');
+  await narrow.waitForTimeout(400);
+  await narrow.evaluate(() => { document.querySelector('#toast').hidden = true; document.querySelector('#savebar').style.visibility = 'hidden'; });
+  await narrow.locator('#files-panel').screenshot({ path: join(docs, 'screenshot-files.png') });
+  await narrow.evaluate(() => { document.querySelector('#savebar').style.visibility = ''; });
+  console.log('  wrote docs/screenshot-files.png');
   await narrow.locator('#set-ai-panel').screenshot({ path: join(docs, 'screenshot-settings-ai.png') });
   console.log('  wrote docs/screenshot-settings-ai.png');
   await narrow.locator('#about-version').locator('xpath=ancestor::section[1]').screenshot({ path: join(docs, 'screenshot-about.png') });
@@ -253,4 +265,5 @@ try {
   await browser.close();
   app.kill();
   mock?.kill();
+  rmSync(fakeHome, { recursive: true, force: true });
 }

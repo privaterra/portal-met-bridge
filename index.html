@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>portal-met-bridge</title>
   <link rel="stylesheet" href="vendor/uPlot.min.css" />
-  <link rel="stylesheet" href="css/app.css?v=0.13.0" />
+  <link rel="stylesheet" href="css/app.css?v=0.14.0" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M4 26 L10 8 L16 20 L22 6 L28 26' fill='none' stroke='%232447B8' stroke-width='3' stroke-linejoin='round'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -196,9 +196,52 @@
           </label>
           <p class="hint">The profile's <code>final_weight</code> is read from the machine's own record of the shot (so two profiles sharing a name cannot be mixed up); until the record is attached it comes from the loaded profile's id. The scale option misses nothing that happened after the pump stopped as long as the settle window covers the drips. With the typed option nothing stands in: a shot shows <em>? g</em> until you enter the weight (Enter final weight on the Shots tab, <em>? g</em> in History, or History → Edit). A weight you type always wins, whichever option is chosen; the choice applies to every shot, including earlier ones.</p>
           <h3>Saving</h3>
-          <p class="hint">Every shot is written to this browser's database while it is being recorded (a checkpoint every two seconds) and finalised when the pump stops, so a closed tab or a crash loses at most the last two seconds. The machine's own record is attached afterwards, and any shot still missing it is completed the next time the machine connects.</p>
-          <label class="check"><input type="checkbox" id="set-autosave-files" checked /> Also write each shot's JSON and CSV to the save folder as soon as it is saved (and again when the machine's record arrives)</label>
-          <p class="hint" id="autosave-note">The save folder is chosen under <em>Logging and debug → Where to save</em>; files land in <code>portal-met-bridge/shots/</code>.</p>
+          <p class="hint">Every shot is written to this browser's database while it is being recorded (a checkpoint every two seconds) and finalised when the pump stops, so a closed tab or a crash loses at most the last two seconds. The machine's own record is attached afterwards, and any shot still missing it is completed the next time the machine connects. Where the files go is set under <em>Files and folders</em>, below.</p>
+        </div>
+      </section>
+
+      <section class="panel settings" id="files-panel">
+        <div class="panel-head">
+          <h2>Files and folders</h2>
+          <span class="panel-note" id="files-status"></span>
+        </div>
+        <div class="settings-grid">
+          <p class="hint">Shots, settings and reviews live in this browser's database; everything the app writes as a <em>file</em> — shot files, exports, reports, AI reviews, backups and the debug log — goes to one place, with a subfolder per kind. Choose the place and name the folders here.</p>
+          <label class="field"><span>Where files go</span>
+            <select id="set-file-destination">
+              <option value="auto">whatever is available</option>
+              <option value="folder">a folder on this computer, chosen below (Chrome or Edge; Chrome asks to re-allow it after a restart)</option>
+              <option value="server">the data folder of the server that serves this page</option>
+              <option value="downloads">the browser's download folder, one file at a time (no automatic shot files, backups or log files)</option>
+            </select>
+          </label>
+          <div class="row" id="files-folder-row">
+            <button id="files-pick-folder" class="btn small">Choose folder…</button>
+            <button id="files-reallow-folder" class="btn small" hidden>Re-allow folder</button>
+            <button id="files-forget-folder" class="btn small" hidden>Stop using folder</button>
+            <span class="inline-note" id="files-folder"></span>
+          </div>
+          <p class="hint">The <em>server's data folder</em> is offered when the app is started with one — the macOS app and the Home Assistant app do that (<code>~/Documents/portal-met-bridge</code> and <code>/share/portal-met-bridge</code>); <code>DATA_DIR=… node serve.mjs</code> sets any other. It works from every browser, never asks to be re-allowed, and the files stay where the server runs — on the Raspberry Pi, say — so they survive a browser reset. A folder picked in Chrome stays on this computer and works with any server.</p>
+          <h3>Folder names</h3>
+          <div class="row three dir-names">
+            <label class="field narrow"><span>Root folder (blank = directly in the chosen place)</span><input id="set-dir-root" type="text" maxlength="120" placeholder="portal-met-bridge" /></label>
+            <label class="field narrow"><span>Shot files</span><input id="set-dir-shots" type="text" maxlength="120" /></label>
+            <label class="field narrow"><span>Exports</span><input id="set-dir-exports" type="text" maxlength="120" /></label>
+            <label class="field narrow"><span>Reports</span><input id="set-dir-reports" type="text" maxlength="120" /></label>
+            <label class="field narrow"><span>AI reviews</span><input id="set-dir-reviews" type="text" maxlength="120" /></label>
+            <label class="field narrow"><span>Backups</span><input id="set-dir-backups" type="text" maxlength="120" /></label>
+            <label class="field narrow"><span>Logs</span><input id="set-dir-logs" type="text" maxlength="120" /></label>
+          </div>
+          <p class="hint">Plain names, or a short path like <code>espresso/shots</code>; <code>..</code>, hidden names and characters no file system likes are dropped. The root is not repeated when the chosen place already bears its name (the server's <code>~/Documents/portal-met-bridge</code> holds <code>shots/</code> directly). Renaming a folder here does not move files already written; the app simply writes the next ones to the new name.</p>
+          <table class="files-layout"><thead><tr><th>What</th><th>Where it goes now</th><th>Contents</th></tr></thead><tbody id="files-layout"></tbody></table>
+          <h3>What is written on its own</h3>
+          <label class="check"><input type="checkbox" id="set-autosave-files" checked /> Each shot's JSON and CSV, as soon as the shot is saved (and again when the machine's record arrives)</label>
+          <p class="hint" id="autosave-note"></p>
+          <label class="check"><input type="checkbox" id="set-auto-backup" checked /> A backup of the whole database (shots with samples, readings, beans, reviews) after every change — <code>portal-met-bridge-latest.json</code> in the backups folder, plus a dated copy the first time each day</label>
+          <div class="row">
+            <button id="files-backup-now" class="btn small">Write a backup now</button>
+          </div>
+          <p class="hint">The debug log is appended to a file per day in the logs folder whenever logging is on (<em>Logging and debug</em>). Exports, reports and reviews are written when you press their buttons. With <em>the browser's download folder</em> nothing is written on its own.</p>
         </div>
       </section>
 
@@ -303,8 +346,8 @@
             <label class="btn small file"><input type="file" id="backup-import" accept="application/json" hidden />Restore</label>
             <span class="inline-note" id="backup-note"></span>
           </div>
-          <p class="hint">All shots with their samples, refractometer readings, the bean library and the settings. Restoring merges by shot id; nothing is deleted.</p>
-          <p class="hint">Files go to Chrome's download folder unless a save folder is set below.</p>
+          <p class="hint">All shots with their samples, refractometer readings, the bean library and the saved reviews. Restoring merges by shot id; nothing is deleted.</p>
+          <p class="hint" id="backup-note-where"></p>
         </div>
       </section>
 
@@ -326,16 +369,8 @@
             </label>
             <label class="check tall"><input type="checkbox" id="log-packets" /> Also log every Portal packet and machine status (~20 lines/s)</label>
           </div>
-          <h3>Where to save</h3>
-          <p class="hint">By default the log lives in this page (last 5,000 lines) and you download it. Pick a folder on this Mac and the log is appended to <code>portal-met-bridge/logs/&lt;date&gt;.log</code> there as it happens; exports and backups can be saved there too. Chrome asks you to re-allow the folder after a restart.</p>
-          <div class="row">
-            <button id="log-pick-folder" class="btn small">Choose folder…</button>
-            <button id="log-reallow-folder" class="btn small" hidden>Re-allow folder</button>
-            <button id="log-forget-folder" class="btn small" hidden>Stop using folder</button>
-            <span class="inline-note" id="log-folder"></span>
-          </div>
-          <label class="check"><input type="checkbox" id="log-save-exports" /> Save exports and backups to that folder instead of downloading them</label>
           <h3>Log</h3>
+          <p class="hint" id="log-folder"></p>
           <div class="row">
             <button id="log-download" class="btn small">Download log (txt)</button>
             <button id="log-download-json" class="btn small">Download log (JSON lines)</button>
@@ -788,6 +823,6 @@
   </dialog>
 
   <div class="toast" id="toast" hidden></div>
-  <script type="module" src="js/main.js?v=0.13.0"></script>
+  <script type="module" src="js/main.js?v=0.14.0"></script>
 </body>
 </html>

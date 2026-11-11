@@ -631,6 +631,68 @@ await test('review export: parser blocks, Markdown file, Word document (zip part
   function reviewToDocxText(r) { return strFromU8(unzipSync(reviewToDocx(r))['word/document.xml']); }
 });
 
+await test('files and folders (v0.14): folder names are cleaned, the destination resolves, the server refuses escapes', async () => {
+  const { cleanDirName, joinPath, Files, FILE_KINDS, DEFAULT_ROOT } = await import('../js/files.js');
+  assert.equal(cleanDirName(' ../weird: name/ ', 'exports'), 'weird name');
+  assert.equal(cleanDirName('espresso/shots'), 'espresso/shots');
+  assert.equal(cleanDirName('a\\b\\c'), 'a/b/c', 'backslashes are separators');
+  assert.equal(cleanDirName('.hidden/../x'), 'x');
+  assert.equal(cleanDirName('', 'logs'), 'logs');
+  assert.equal(cleanDirName('', ''), '', 'an empty root is allowed');
+  assert.equal(cleanDirName('name.', 'x'), 'name', 'trailing dots and spaces go (Windows)');
+  assert.equal(cleanDirName('what?*|<>"', 'x'), 'what');
+  assert.equal(cleanDirName('x'.repeat(200)).length, 120);
+  assert.equal(joinPath('', 'shots', 'a.csv'), 'shots/a.csv');
+  assert.equal(joinPath('root', '', 'a.csv'), 'root/a.csv');
+  const f = new Files();
+  assert.equal(f.effective, 'downloads');
+  assert.equal(f.ready, false);
+  assert.equal(f.pathOf('shots', 'a.json'), `${DEFAULT_ROOT}/shots/a.json`);
+  f.configure({ layout: { root: ' /espresso/pmb/ ', exports: 'CSV: out', logs: '' } });
+  assert.equal(f.layout.root, 'espresso/pmb');
+  assert.equal(f.layout.exports, 'CSV out');
+  assert.equal(f.layout.logs, 'logs', 'an emptied subfolder falls back to its default');
+  assert.equal(f.pathOf('exports', 'x.csv'), 'espresso/pmb/CSV out/x.csv');
+  assert.equal(f.pathOf('nonsense', 'x'), 'espresso/pmb/nonsense/x', 'an unknown kind gets its own folder');
+  // server probe + destination resolution
+  const fetchOk = async () => ({ ok: true, json: async () => ({ dataDir: '/share/portal-met-bridge', host: 'pi' }) });
+  await f.probeServer(fetchOk);
+  assert.deepEqual(f.server, { dataDir: '/share/portal-met-bridge', host: 'pi' });
+  assert.equal(f.effective, 'server', 'auto → server when no folder is chosen');
+  assert.equal(f.ready, true);
+  assert.equal(f.describe(), '/share/portal-met-bridge/espresso/pmb/');
+  f.configure({ layout: { root: 'portal-met-bridge' } });
+  assert.equal(f.describe(), '/share/portal-met-bridge/', 'the root is not repeated when the place already bears its name');
+  assert.equal(f.pathOf('logs', 'x.log'), 'logs/x.log');
+  assert.equal(f.rootInUse, '');
+  f.configure({ layout: { root: 'espresso/pmb' } });
+  assert.equal(f.whereOf('exports'), '/share/portal-met-bridge/espresso/pmb/CSV out/');
+  f.folder = { name: 'Espresso' };
+  f.folderState = 'granted';
+  assert.equal(f.effective, 'folder', 'auto → a chosen folder beats the server');
+  assert.equal(f.describe(), 'Espresso/espresso/pmb/');
+  f.folderState = 'prompt';
+  assert.equal(f.ready, false);
+  assert.match(f.blocker, /re-allow/);
+  f.configure({ destination: 'server' });
+  assert.equal(f.ready, true);
+  f.configure({ destination: 'downloads' });
+  assert.equal(f.ready, false);
+  assert.equal(f.describe(), 'the download folder');
+  await f.probeServer(async () => ({ ok: false, status: 404 }));
+  assert.equal(f.server, null, 'a plain static host has no data folder');
+  f.configure({ destination: 'server' });
+  assert.equal(f.ready, false);
+  assert.match(f.blocker, /DATA_DIR/);
+  assert.deepEqual(Object.keys(FILE_KINDS), ['shots', 'exports', 'reports', 'reviews', 'backups', 'logs']);
+  // the server's path guard
+  const { safeDataPath } = await import('../serve.mjs');
+  const dir = '/data/pmb';
+  assert.equal(safeDataPath(dir, 'portal-met-bridge/shots/a.json'), '/data/pmb/portal-met-bridge/shots/a.json');
+  assert.equal(safeDataPath(dir, '/leading/slash.txt'), '/data/pmb/leading/slash.txt');
+  for (const bad of ['', '..', '../x', 'a/../../x', 'a/.hidden', 'a/b:c', 'a\\b', 'a/\u0000', '.', 'x'.repeat(201)]) assert.equal(safeDataPath(dir, bad), null, `refuses ${JSON.stringify(bad)}`);
+});
+
 await test('release: every version stamp agrees with package.json (tools/bump-version.mjs keeps them in step)', () => {
   const version = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
   const files = ['index.html', ...readdirSync(new URL('../js', import.meta.url)).filter((f) => f.endsWith('.js')).map((f) => `js/${f}`)];
@@ -647,6 +709,11 @@ await test('release: every version stamp agrees with package.json (tools/bump-ve
   assert.ok(bc.includes(`version: '${version}'`), 'Beanconqueror envelope version');
   const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
   assert.ok(html.includes(`js/main.js?v=${version}`) && html.includes(`css/app.css?v=${version}`), 'index.html stamps');
+  // the Home Assistant app installs the release tag named by its own version, so it must match too
+  const ha = readFileSync(new URL('../homeassistant/portal_met_bridge/config.yaml', import.meta.url), 'utf8');
+  assert.ok(ha.includes(`\nversion: "${version}"\n`), `homeassistant config.yaml version is ${/version: "([^"]*)"/.exec(ha)?.[1]}, package.json ${version}`);
+  const changelog = readFileSync(new URL('../homeassistant/portal_met_bridge/CHANGELOG.md', import.meta.url), 'utf8');
+  assert.ok(changelog.includes(`## ${version}`), 'the Home Assistant CHANGELOG has an entry for this version');
 });
 
 console.log(`\n${passed} test group(s) passed in total${process.exitCode ? ', with failures' : ''}.`);

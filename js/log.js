@@ -1,7 +1,7 @@
 // log.js — an in-page debug log with three outlets: an in-memory ring buffer
-// (always), a live tail in the Settings view (when shown), and files in a folder
-// the user picked with Chrome's folder picker (File System Access API) when
-// one is configured. Nothing is sent anywhere.
+// (always), a live tail in the Settings view (when shown), and a file per day at
+// the app's file destination (files.js: a chosen folder or the server's data
+// folder) when one is writable. Nothing is sent anywhere.
 //
 // Levels: error < warn < info < debug. "debug" includes per-packet detail and is
 // gated separately because the Portal sends ~8 packets/s.
@@ -17,9 +17,8 @@ export class Logger extends EventTarget {
     this.packets = false; // log every Portal packet / machine status (very verbose)
     this.ring = [];
     this.dropped = 0;
-    this.folder = null; // FileSystemDirectoryHandle or null
-    this.folderState = 'none'; // none | granted | prompt | denied | error
-    this.pending = []; // lines not yet flushed to the folder
+    this.writer = null; // files.js destination (setWriter)
+    this.pending = []; // lines not yet flushed to the destination
     this.flushTimer = null;
     this.lastFlushError = null;
     this.bytesWritten = 0;
@@ -64,9 +63,10 @@ export class Logger extends EventTarget {
       this.ring.shift();
       this.dropped++;
     }
-    if (this.folder && this.folderState === 'granted') {
+    if (this.writer) {
       this.pending.push(formatLine(entry));
-      this._scheduleFlush();
+      if (this.pending.length > RING_MAX) this.pending.splice(0, this.pending.length - RING_MAX);
+      if (this.writer.ready) this._scheduleFlush();
     }
     this.dispatchEvent(new CustomEvent('entry', { detail: entry }));
     if (level === 'error') console.error(`[${tag}]`, msg, data ?? '');
@@ -89,45 +89,22 @@ export class Logger extends EventTarget {
     this.dispatchEvent(new CustomEvent('cleared'));
   }
 
-  // ---------------------------------------------------------------- folder --
+  // ----------------------------------------------------------------- files --
 
-  static get canPickFolder() {
-    return typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function';
+  /**
+   * The file destination (files.js) the log is appended to as it happens:
+   * <root>/<logs>/YYYY-MM-DD.log. Lines queue up while nothing is writable and
+   * are flushed when a destination becomes ready.
+   */
+  setWriter(writer) {
+    this.writer = writer || null;
+    if (writer?.addEventListener) writer.addEventListener('change', () => {
+      if (writer.ready && this.pending.length) this._scheduleFlush();
+    });
   }
 
-  /** Must be called from a user gesture. */
-  async pickFolder() {
-    if (!Logger.canPickFolder) throw new Error('This browser cannot open a folder picker; use Chrome or Edge, or download the log instead.');
-    const handle = await window.showDirectoryPicker({ mode: 'readwrite', id: 'portal-met-bridge', startIn: 'documents' });
-    await this.useFolder(handle);
-    return handle;
-  }
-
-  /** Adopt a (possibly restored) handle and check its permission. */
-  async useFolder(handle, { request = false } = {}) {
-    this.folder = handle || null;
-    if (!handle) {
-      this.folderState = 'none';
-      return 'none';
-    }
-    try {
-      let p = await handle.queryPermission({ mode: 'readwrite' });
-      if (p === 'prompt' && request) p = await handle.requestPermission({ mode: 'readwrite' });
-      this.folderState = p === 'granted' ? 'granted' : p === 'prompt' ? 'prompt' : 'denied';
-    } catch (err) {
-      this.folderState = 'error';
-      this.lastFlushError = err?.message || String(err);
-    }
-    this.dispatchEvent(new CustomEvent('folder', { detail: { state: this.folderState, name: handle?.name } }));
-    if (this.folderState === 'granted') this.info('log', `log folder: ${handle.name}`, null, true);
-    return this.folderState;
-  }
-
-  forgetFolder() {
-    this.folder = null;
-    this.folderState = 'none';
-    this.pending = [];
-    this.dispatchEvent(new CustomEvent('folder', { detail: { state: 'none' } }));
+  get writing() {
+    return !!this.writer?.ready;
   }
 
   _scheduleFlush() {
@@ -138,60 +115,27 @@ export class Logger extends EventTarget {
     }, 3000);
   }
 
-  /** Append pending lines to <folder>/portal-met-bridge/logs/YYYY-MM-DD.log */
+  /** Append pending lines to the day's log file at the destination. */
   async flush() {
-    if (!this.folder || this.folderState !== 'granted' || !this.pending.length) return;
+    if (!this.writer?.ready || !this.pending.length) return;
     const lines = this.pending.splice(0);
     try {
-      const dir = await this._subdir('logs');
       const name = new Date().toISOString().slice(0, 10) + '.log';
       const text = lines.join('\n') + '\n';
-      await appendToFile(dir, name, text);
+      await this.writer.write('logs', name, text, { append: true, type: 'text/plain' });
       this.bytesWritten += text.length;
       this.lastFlushError = null;
     } catch (err) {
       this.lastFlushError = err?.message || String(err);
-      if (/NotAllowed|SecurityError/i.test(this.lastFlushError)) this.folderState = 'prompt';
-      this.dispatchEvent(new CustomEvent('folder', { detail: { state: this.folderState, name: this.folder?.name, error: this.lastFlushError } }));
+      if (this.pending.length < 2000) this.pending.unshift(...lines); // keep them for the next try
     }
   }
 
-  /** Write any file into <folder>/portal-met-bridge/<sub>/<name>. Returns the path written. */
-  async saveFile(sub, name, blobOrText) {
-    if (!this.folder || this.folderState !== 'granted') throw new Error('No writable folder is configured.');
-    const dir = await this._subdir(sub);
-    const fh = await dir.getFileHandle(name, { create: true });
-    const w = await fh.createWritable();
-    await w.write(blobOrText);
-    await w.close();
-    return `${this.folder.name}/portal-met-bridge/${sub}/${name}`;
-  }
-
-  async _subdir(sub) {
-    const root = await this.folder.getDirectoryHandle('portal-met-bridge', { create: true });
-    return root.getDirectoryHandle(sub, { create: true });
-  }
-
-  /**
-   * Remove everything this app wrote in the chosen folder — only the
-   * `portal-met-bridge/` subfolder, never anything else — and stop using the
-   * folder so nothing is recreated. Returns true when the subfolder was removed.
-   */
-  async eraseFolderContents() {
-    if (!this.folder || this.folderState !== 'granted') return false;
+  /** Drop queued lines (the destination is being erased or forgotten). */
+  dropPending() {
     if (this.flushTimer) clearTimeout(this.flushTimer);
     this.flushTimer = null;
     this.pending = [];
-    let removed = false;
-    try {
-      await this.folder.getDirectoryHandle('portal-met-bridge'); // throws if absent
-      await this.folder.removeEntry('portal-met-bridge', { recursive: true });
-      removed = true;
-    } catch (err) {
-      if (err?.name !== 'NotFoundError') throw err;
-    }
-    this.forgetFolder();
-    return removed;
   }
 
   _installGlobalHandlers() {
@@ -199,15 +143,6 @@ export class Logger extends EventTarget {
     window.addEventListener('error', (e) => this.error('window', e.message, { file: e.filename, line: e.lineno }));
     window.addEventListener('unhandledrejection', (e) => this.error('promise', e.reason?.message || String(e.reason)));
   }
-}
-
-async function appendToFile(dir, name, text) {
-  const fh = await dir.getFileHandle(name, { create: true });
-  const file = await fh.getFile();
-  const w = await fh.createWritable({ keepExistingData: true });
-  await w.seek(file.size);
-  await w.write(text);
-  await w.close();
 }
 
 export function formatLine(e) {

@@ -51,6 +51,15 @@ function tx(db, store, mode, fn) {
 export class Store {
   constructor() {
     this.dbp = openDb();
+    this.onChange = null; // (kind) => void, called after anything a backup would contain changed
+  }
+
+  _changed(kind) {
+    try {
+      if (this.onChange) this.onChange(kind);
+    } catch {
+      /* a listener must not break a write */
+    }
   }
 
   // ----------------------------------------------------------------- shots --
@@ -60,6 +69,7 @@ export class Store {
     shot.coffeeKey = coffeeKey(shot.context?.beanName);
     shot.roasterKey = coffeeKey(shot.context?.roaster);
     await tx(db, 'shots', 'readwrite', (s) => s.put(shot));
+    this._changed('shot');
     return shot;
   }
 
@@ -71,6 +81,7 @@ export class Store {
   async deleteShot(id) {
     const db = await this.dbp;
     await tx(db, 'shots', 'readwrite', (s) => s.delete(id));
+    this._changed('shot');
   }
 
   /** Newest first. */
@@ -113,6 +124,7 @@ export class Store {
       uses: (prev.uses || 0) + 1,
     };
     await tx(db, 'beans', 'readwrite', (s) => s.put(rec));
+    this._changed('bean');
     return rec;
   }
 
@@ -143,6 +155,7 @@ export class Store {
   async deleteBean(name) {
     const db = await this.dbp;
     await tx(db, 'beans', 'readwrite', (s) => s.delete(coffeeKey(name)));
+    this._changed('list');
   }
 
   // ------------------------------------------------------------ pick-lists --
@@ -156,6 +169,7 @@ export class Store {
     const prev = (await tx(db, 'lists', 'readonly', (s) => s.get(key))) || { key, kind, createdAt: Date.now(), uses: 0 };
     const rec = { ...prev, value: v, uses: (prev.uses || 0) + 1, lastUsed: Date.now() };
     await tx(db, 'lists', 'readwrite', (s) => s.put(rec));
+    this._changed('list');
     return rec;
   }
 
@@ -180,6 +194,7 @@ export class Store {
   async forgetValue(kind, value) {
     const db = await this.dbp;
     await tx(db, 'lists', 'readwrite', (s) => s.delete(`${kind}:${coffeeKey(value)}`));
+    this._changed('list');
   }
 
   /** One-time: fill the pick-lists from what beans and shots already know. */
@@ -233,6 +248,7 @@ export class Store {
   async putReview(review) {
     const db = await this.dbp;
     await tx(db, 'reviews', 'readwrite', (s) => s.put(review));
+    this._changed('review');
     return review;
   }
 
@@ -244,6 +260,7 @@ export class Store {
   async deleteReview(id) {
     const db = await this.dbp;
     await tx(db, 'reviews', 'readwrite', (s) => s.delete(id));
+    this._changed('review');
   }
 
   /** Newest first. */
@@ -302,6 +319,7 @@ export class Store {
     if (Array.isArray(json.reviews)) {
       for (const r of json.reviews) if (r && r.id && typeof r.markdown === 'string') await tx(db, 'reviews', 'readwrite', (s) => s.put(r));
     }
+    this._changed('import');
     return n;
   }
 }

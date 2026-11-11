@@ -1,0 +1,145 @@
+# Build the macOS app and attach it to a GitHub Release.
+#
+# Runs when a version tag is pushed (v0.14.0 …) or by hand from the Actions tab.
+# What it produces, as release assets:
+#   portal-met-bridge-<version>-macos.zip   "Portal Met Bridge.app" with Node bundled for Apple silicon and Intel
+#   portal-met-bridge-<version>-macos.dmg   the same app on a disk image with an Applications shortcut
+#   portal-met-bridge-<version>-source.zip  the repository at that tag (run start.command or `node serve.mjs`)
+#
+# Signing and notarization are optional: add the five secrets named below and the
+# app opens without the right-click → Open dance. Without them the app is
+# unsigned and macOS asks once (docs/PACKAGING.md explains both paths).
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build (leave empty for the current commit, no release is created then)
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: node tests/run.mjs
+
+  macos:
+    name: macOS app
+    needs: test
+    runs-on: macos-latest
+    env:
+      HAVE_CERT: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Check the tag matches package.json
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          version="$(node -p "require('./package.json').version")"
+          if [ "v$version" != "$tag" ]; then echo "tag $tag but package.json says $version — run: node tools/bump-version.mjs ${tag#v}"; exit 1; fi
+
+      - name: Build the app (bundling Node for arm64 and x64)
+        run: tools/package-macos.sh --download-node --out dist --no-zip
+
+      # ---- optional: Developer ID signing + notarization -------------------
+      # Secrets: MACOS_CERTIFICATE_P12 (base64 of the .p12), MACOS_CERTIFICATE_PASSWORD,
+      #          APPLE_ID, APPLE_TEAM_ID, APPLE_APP_PASSWORD (an app-specific password).
+      - name: Import the signing certificate
+        if: env.HAVE_CERT == 'true'
+        env:
+          P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          P12_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "$P12" | base64 --decode > cert.p12
+          security create-keychain -p ci build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p ci build.keychain
+          security import cert.p12 -k build.keychain -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci build.keychain
+          rm cert.p12
+      - name: Sign and notarize
+        if: env.HAVE_CERT == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          identity="$(security find-identity -v -p codesigning build.keychain | awk -F'"' '/Developer ID Application/ {print $2; exit}')"
+          app="dist/Portal Met Bridge.app"
+          # inside-out: the bundled node binaries first, then the bundle
+          find "$app/Contents/Resources/node" -type f -name node -exec codesign --force --options runtime --timestamp --sign "$identity" {} \; || true
+          codesign --force --deep --options runtime --timestamp --sign "$identity" "$app"
+          codesign --verify --strict --verbose=2 "$app"
+          ditto -c -k --sequesterRsrc --keepParent "$app" notarize.zip
+          xcrun notarytool submit notarize.zip --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+          xcrun stapler staple "$app"
+          rm notarize.zip
+
+      - name: Zip and disk image
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          cd dist
+          ditto -c -k --sequesterRsrc --keepParent "Portal Met Bridge.app" "portal-met-bridge-$version-macos.zip"
+          mkdir dmg && cp -R "Portal Met Bridge.app" dmg/ && ln -s /Applications dmg/Applications
+          hdiutil create -quiet -volname "Portal Met Bridge" -srcfolder dmg -ov -format UDZO "portal-met-bridge-$version-macos.dmg"
+          rm -rf dmg .node
+          ls -la
+
+      - name: Source archive
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          git archive --format=zip --prefix="portal-met-bridge-$version/" -o "dist/portal-met-bridge-$version-source.zip" HEAD
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos
+          path: |
+            dist/*.zip
+            dist/*.dmg
+
+      - name: Release notes from the README's prompt history
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          {
+            echo "portal-met-bridge v$version"
+            echo
+            echo "**Portal Met Bridge.app** (zip or dmg): unzip, move to Applications, open. On first launch macOS may ask you to confirm an app from an unidentified developer: right-click → Open, or System Settings → Privacy & Security → Open Anyway. Node is bundled; Chrome or Edge is needed for the Portal's Bluetooth link."
+            echo
+            echo "**Home Assistant (Raspberry Pi 5)**: Settings → Apps → Install app → ⋮ → Repositories → add \`https://github.com/${{ github.repository }}\`. See docs/PACKAGING.md."
+            echo
+            echo "**Source**: unzip and run \`start.command\` (macOS) or \`node serve.mjs\`."
+            echo
+            echo "Changes are listed in README.md (Prompt history) and docs/NOTES.md."
+          } > notes.md
+
+      - uses: softprops/action-gh-release@v3
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          name: portal-met-bridge ${{ inputs.tag || github.ref_name }}
+          body_path: notes.md
+          draft: true
+          files: |
+            dist/*.zip
+            dist/*.dmg

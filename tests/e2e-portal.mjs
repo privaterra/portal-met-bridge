@@ -16,7 +16,8 @@
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { readFileSync, existsSync, statSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..');
@@ -53,9 +54,12 @@ try {
 
 const APP_PORT = 8797;
 const MOCK_PORT = 8098;
-const server = spawn('node', [join(root, 'serve.mjs')], { env: { ...process.env, PORT: String(APP_PORT) }, stdio: 'ignore' });
+const DATA_DIR = mkdtempSync(join(tmpdir(), 'pmb-e2e-data-')); // the server's data folder (Settings → Files and folders → server)
+const server = spawn('node', [join(root, 'serve.mjs')], { env: { ...process.env, PORT: String(APP_PORT), DATA_DIR }, stdio: 'ignore' });
+const onDisk = (dir = DATA_DIR, pre = '') => (existsSync(dir) ? readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? onDisk(join(dir, e.name), `${pre}${e.name}/`) : [`${pre}${e.name}`])) : []);
 const mock = spawn('node', [join(here, 'mock-meticulous.mjs')], { env: { ...process.env, PORT: String(MOCK_PORT) }, stdio: ['ignore', 'pipe', 'pipe'] });
 mock.stderr.on('data', (d) => process.stderr.write('[mock] ' + d));
+process.env.PMB_E2E_DATA = DATA_DIR;
 await new Promise((r) => setTimeout(r, 1200));
 
 let failures = 0;
@@ -144,11 +148,13 @@ try {
   // Turn the debug log on and point it at a (fake) folder
   await page.check('#log-enabled');
   await page.dispatchEvent('#log-enabled', 'change');
-  await page.click('#log-pick-folder');
+  const beforePick = await page.evaluate(() => ({ eff: window.__pb.files.effective, server: window.__pb.files.server?.dataDir, status: document.querySelector('#files-status').textContent }));
+  check('the server advertises its data folder and "whatever is available" picks it while no folder is chosen', beforePick.eff === 'server' && beforePick.server === process.env.PMB_E2E_DATA && /Files are written to/.test(beforePick.status), JSON.stringify(beforePick));
+  await page.click('#files-pick-folder');
   await page.waitForTimeout(300);
-  check('log folder chosen and writable', /writable/.test(await page.textContent('#log-folder')), (await page.textContent('#log-folder')).trim());
-  await page.check('#log-save-exports');
-  await page.dispatchEvent('#log-save-exports', 'change');
+  check('a folder picked in Chrome is writable and wins over the server\'s data folder', /writable/.test(await page.textContent('#files-folder')) && (await page.evaluate(() => window.__pb.files.effective)) === 'folder', (await page.textContent('#files-folder')).trim());
+  const layoutRows = await page.evaluate(() => [...document.querySelectorAll('#files-layout tr')].map((r) => r.children[1].textContent));
+  check('the layout table shows one subfolder per kind under the chosen folder', layoutRows.length === 6 && layoutRows.every((t) => /^FakeFolder\/portal-met-bridge\/(shots|exports|reports|reviews|backups|logs)\/$/.test(t)), layoutRows.join(' | '));
   // Pick-list management: a second roaster, then remove it via its chip
   await page.click('.view-tab[data-view="shots"]');
   await page.fill('#ctx-roaster', 'Typo Roasters');
@@ -346,6 +352,45 @@ try {
   folderFiles = await page.evaluate(() => Object.keys(window.__fakeFolderFiles || {}));
   check('log file written to the folder (dated .log) and the download copy', folderFiles.some((f) => /logs\/\d{4}-\d{2}-\d{2}\.log$/.test(f)) && folderFiles.some((f) => /logs\/portal-met-bridge-log-.*\.txt$/.test(f)), folderFiles.filter((f) => f.includes('logs')).join(', '));
   const logText = await page.evaluate(() => { const k = Object.keys(window.__fakeFolderFiles).find((f) => /\.log$/.test(f)); return window.__fakeFolderFiles[k]; });
+
+  // ---- the server's data folder as the destination (v0.14): files land on the disk of the machine that serves the app
+  await page.selectOption('#set-file-destination', 'server');
+  await page.waitForTimeout(300);
+  const srvState = await page.evaluate(() => ({ eff: window.__pb.files.effective, ready: window.__pb.files.ready, where: window.__pb.files.whereOf('exports') }));
+  check('switching to the server\'s data folder takes effect at once', srvState.eff === 'server' && srvState.ready && srvState.where === `${process.env.PMB_E2E_DATA}/portal-met-bridge/exports/`, JSON.stringify(srvState));
+  await page.click('.view-tab[data-view="shots"]');
+  await page.click('#dl-csv');
+  await page.waitForTimeout(800);
+  let disk = onDisk();
+  check('a CSV export is written into <data folder>/portal-met-bridge/exports/ on the server', disk.some((f) => /^portal-met-bridge\/exports\/shot-.*\.csv$/.test(f)), disk.join(', '));
+  await page.click('.view-tab[data-view="settings"]');
+  await page.fill('#set-dir-root', 'espresso/pmb');
+  await page.fill('#set-dir-exports', ' ../CSV: out ');
+  await page.click('#settings-save');
+  await page.waitForTimeout(300);
+  const cleaned = await page.evaluate(() => ({ root: window.__pb.settings.fileRoot, exports: window.__pb.settings.dirExports, input: document.querySelector('#set-dir-exports').value, where: window.__pb.files.whereOf('exports') }));
+  check('folder names are cleaned (no .., no colon) and the layout follows them', cleaned.root === 'espresso/pmb' && cleaned.exports === 'CSV out' && cleaned.input === 'CSV out' && /\/espresso\/pmb\/CSV out\/$/.test(cleaned.where), JSON.stringify(cleaned));
+  await page.click('.view-tab[data-view="shots"]');
+  await page.click('#dl-csv');
+  await page.waitForTimeout(800);
+  await page.click('.view-tab[data-view="settings"]');
+  await page.click('#log-download');
+  await page.waitForTimeout(600);
+  await page.click('#files-backup-now');
+  await page.waitForFunction(() => /Backup written/.test(document.querySelector('#toast').textContent), null, { timeout: 10000 });
+  disk = onDisk();
+  check('after the rename, exports, the log and a backup land under the new root and names', disk.some((f) => /^espresso\/pmb\/CSV out\/shot-.*\.csv$/.test(f)) && disk.some((f) => /^espresso\/pmb\/logs\/portal-met-bridge-log-.*\.txt$/.test(f)) && disk.some((f) => /^espresso\/pmb\/logs\/\d{4}-\d{2}-\d{2}\.log$/.test(f)) && disk.includes('espresso/pmb/backups/portal-met-bridge-latest.json') && disk.some((f) => /^espresso\/pmb\/backups\/portal-met-bridge-\d{4}-\d{2}-\d{2}\.json$/.test(f)), disk.join(', '));
+  const backupDoc = JSON.parse(readFileSync(join(process.env.PMB_E2E_DATA, 'espresso/pmb/backups/portal-met-bridge-latest.json'), 'utf8'));
+  check('the automatic backup is a full export (shots with samples, restorable)', backupDoc.app === 'portal-met-bridge' && Array.isArray(backupDoc.shots) && backupDoc.shots.length >= 1 && Array.isArray(backupDoc.shots[0].machine), `${backupDoc.shots?.length} shots`);
+  const refused = await page.evaluate(async () => { const codes = []; for (const p of ['../x.txt', 'a/.hidden', 'a/..%2Fb', 'bad:name']) codes.push((await fetch(`api/files/${p}`, { method: 'PUT', body: 'x' })).status); return codes; });
+  check('the server refuses paths that leave the data folder or hide files', refused.every((c) => c === 400 || c === 404), refused.join(','));
+  await page.fill('#set-dir-root', 'portal-met-bridge');
+  await page.fill('#set-dir-exports', 'exports');
+  await page.click('#settings-save');
+  await page.waitForTimeout(200);
+  await page.selectOption('#set-file-destination', 'folder');
+  await page.waitForTimeout(300);
+  check('back to the chosen folder', (await page.evaluate(() => window.__pb.files.effective)) === 'folder');
   check('log contains Portal GATT steps and recorder transitions', /\[portal\] state connected/.test(logText) && /\[recorder\] → recording/.test(logText) && /\[recorder\] saved shot/.test(logText), logText.split('\n').slice(0, 3).join(' | '));
   // ---- Final weight typed after each brew (Settings → Recording → Final weight: manual)
   await page.selectOption('#set-beverage-default', 'manual');
@@ -381,7 +426,7 @@ try {
   await page.fill('#set-ai-base-openai', `http://127.0.0.1:${MOCK_PORT}`);
   await page.click('#savebar .btn.primary');
   await page.waitForTimeout(300);
-  check('AI settings save with the Save button and the key is shown masked', /Saved [345] settings/.test(await page.textContent('#savebar-status')) && /OpenAI · mock-gpt-2 · 127\.0\.0\.1:\d+ · key sk-tes…-123/.test(await page.textContent('#set-ai-note')), `${(await page.textContent('#savebar-status')).trim()} | ${await page.textContent('#set-ai-note')}`);
+  check('AI settings save with the Save button and the key is shown masked', /Saved \d+ settings \([^)]*OpenAI key[^)]*\)/.test(await page.textContent('#savebar-status')) && /OpenAI · mock-gpt-2 · 127\.0\.0\.1:\d+ · key sk-tes…-123/.test(await page.textContent('#set-ai-note')), `${(await page.textContent('#savebar-status')).trim()} | ${await page.textContent('#set-ai-note')}`);
   await page.click('#set-ai-models');
   await page.waitForFunction(() => /models/.test(document.querySelector('#set-ai-test-result').textContent), null, { timeout: 5000 });
   const modelOpts = await page.evaluate(() => [...document.querySelectorAll('#ai-models-openai option')].map((o) => o.value));
@@ -525,8 +570,9 @@ try {
   check('Load sends the profile to the machine; the actions reached the API in order', dialState.loadedProfile === 'Blooming Espresso' && dialState.actions.join(',') === 'start,abort' && /Loaded "Blooming Espresso"/.test(await page.textContent('#toast')), JSON.stringify({ loaded: dialState.loadedProfile, actions: dialState.actions }));
   await page.click('.view-tab[data-view="settings"]');
   // Back to browser downloads for the rest
-  await page.uncheck('#log-save-exports');
-  await page.dispatchEvent('#log-save-exports', 'change');
+  await page.selectOption('#set-file-destination', 'downloads');
+  await page.waitForTimeout(200);
+  check('downloads chosen: nothing is written on its own', (await page.evaluate(() => ({ eff: window.__pb.files.effective, ready: window.__pb.files.ready }))).ready === false);
   await page.click('.view-tab[data-view="shots"]');
 
   // Exports: JPEG, PDF, summary CSV, zip
@@ -557,7 +603,8 @@ try {
 
   // Start over: typed confirmation, folder wipe, database gone, reload into defaults
   await page.click('.view-tab[data-view="settings"]');
-  await page.click('#log-pick-folder'); // re-attach the fake folder so there is something to wipe
+  await page.selectOption('#set-file-destination', 'folder');
+  await page.click('#files-pick-folder'); // re-attach the fake folder so there is something to wipe
   await page.waitForTimeout(200);
   await page.click('#log-download');
   await page.waitForTimeout(500);
@@ -611,7 +658,7 @@ try {
   await page.click('.view-tab[data-view="analysis"]');
   await page.waitForTimeout(300);
   check('a saved review survives a restart and is listed with its title', (await page.evaluate(() => [...document.querySelectorAll('#an-saved-rows tr')].map((tr) => tr.textContent))).some((t) => /Shot review: restart test/.test(t)) && (await page.textContent('#analysis-tab-count')) === '(1)');
-  const unexpected = errors.filter((e) => !/bad-model|404 \(Not Found\)/.test(e)); // the deliberate wrong-model request above logs a 404
+  const unexpected = errors.filter((e) => !/bad-model|404 \(Not Found\)|400 \(Bad Request\)/.test(e)); // the deliberate wrong-model request logs a 404, the refused file paths 400s
   check('no page errors', unexpected.length === 0, unexpected.join(' | ').slice(0, 300));
 
   if (headed) await page.waitForTimeout(5000);
@@ -622,6 +669,7 @@ try {
 } finally {
   server.kill();
   mock.kill();
+  rmSync(DATA_DIR, { recursive: true, force: true });
 }
 console.log(failures ? `\n${failures} check(s) failed.` : '\nAll checks passed.');
 process.exit(failures ? 1 : 0);

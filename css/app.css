@@ -472,3 +472,15 @@ table.reviews small { color: var(--ink-3); }
 .modal.narrow { width: min(92vw, 420px); }
 table.hist button.weigh { color: var(--warn); font-weight: 600; padding: 0; }
 table.reviews td.actions select.fmt, #an-format { font-size: 12px; padding: 3px 4px; margin-left: 6px; border: 1px solid var(--rule); border-radius: 3px; background: #fff; vertical-align: middle; }
+
+/* v0.14: Files and folders */
+.dir-names { flex-wrap: wrap; gap: 6px 14px; }
+.dir-names .field.narrow { flex: 1 1 150px; min-width: 150px; max-width: 220px; }
+.dir-names .field.narrow:first-child { flex-basis: 100%; max-width: 320px; }
+table.files-layout { border-collapse: collapse; width: 100%; margin: 6px 0 2px; font-size: 12.5px; }
+table.files-layout th { text-align: left; font-weight: 600; color: var(--ink-2); padding: 4px 8px 4px 0; border-bottom: 1px solid var(--rule); }
+table.files-layout td { padding: 3px 8px 3px 0; vertical-align: top; border-bottom: 1px solid var(--rule); color: var(--ink-2); }
+table.files-layout td:first-child { white-space: nowrap; color: var(--ink); }
+table.files-layout code { word-break: break-all; }
+#files-status[data-level='warn'] { color: var(--warn); }
+#files-status[data-level='ok'] { color: var(--ok); }

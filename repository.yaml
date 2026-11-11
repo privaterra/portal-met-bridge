@@ -1,0 +1,7 @@
+# This repository doubles as a Home Assistant app repository: add
+# https://github.com/privaterra/portal-met-bridge under Settings → Apps → Install app →
+# ⋮ → Repositories, and "Portal Met Bridge" appears in the store. The app itself is in
+# homeassistant/portal_met_bridge/. See docs/PACKAGING.md.
+name: portal-met-bridge
+url: https://github.com/privaterra/portal-met-bridge
+maintainer: Robert Guerra

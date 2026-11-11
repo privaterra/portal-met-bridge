@@ -3,7 +3,7 @@
 // PDF (jsPDF, with a small rich-text layout). All three are written from the
 // same block structure that parseMarkdown() produces, so they agree.
 
-import { parseMarkdown } from './review.js?v=0.16.0';
+import { parseMarkdown } from './review.js?v=0.17.0';
 import { zipSync, strToU8 } from '../vendor/fflate.esm.js';
 
 export const REVIEW_FORMATS = {
@@ -179,25 +179,30 @@ export function pdfSafe(text) {
     .replace(/[^\u0000-\u00ff\u0152\u0153\u0160\u0161\u0178\u017d\u017e\u0192\u02c6\u02dc\u2013\u2014\u2018\u2019\u201a\u201c\u201d\u201e\u2020\u2021\u2022\u2026\u2030\u2039\u203a\u20ac\u2122]/g, '?');
 }
 
-export function reviewToPdf(rev, jsPDF) {
-  const doc = new jsPDF({ unit: 'pt', format: 'letter' });
-  const h = reviewHeader(rev);
+/**
+ * A small rich-text layout engine on a jsPDF document: wrapped runs with their
+ * own fonts, headings, lists, tables, quotes, code — everything parseMarkdown
+ * produces. Shared by the review PDF and the shot report (which appends a
+ * saved review). `y` is the writer's cursor; `bottom` the lowest baseline.
+ */
+export function pdfWriter(doc, { margin = 64, bottom = null, y = margin, footer = null } = {}) {
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
-  const margin = 64;
   const maxW = pageW - margin * 2;
-  let y = margin;
+  const limit = bottom ?? pageH - margin;
   const BODY = 10.5;
   const LINE = 1.38;
+  const w = { y };
 
   const font = (r = {}, size = BODY) => {
     doc.setFont(r.code ? 'courier' : 'helvetica', r.bold && r.italic ? 'bolditalic' : r.bold ? 'bold' : r.italic ? 'italic' : 'normal');
     doc.setFontSize(r.code ? size - 1 : size);
   };
   const ensure = (need) => {
-    if (y + need > pageH - margin) {
+    if (w.y + need > limit) {
       doc.addPage();
-      y = margin;
+      w.y = margin;
+      footer?.();
     }
   };
   /** Lay out inline runs word by word with their own fonts; returns the height used. */
@@ -210,17 +215,17 @@ export function reviewToPdf(rev, jsPDF) {
       for (const p of parts) if (p) words.push({ text: p, style: r, space: /^\s+$/.test(p) });
     }
     const lines = [[]];
-    let w = 0;
+    let lw = 0;
     for (const word of words) {
       font(word.style, size);
       const ww = doc.getTextWidth(word.text);
-      if (w + ww > width && lines[lines.length - 1].length && !word.space) {
+      if (lw + ww > width && lines[lines.length - 1].length && !word.space) {
         lines.push([]);
-        w = 0;
+        lw = 0;
       }
-      if (word.space && w === 0) continue; // no leading spaces on a wrapped line
+      if (word.space && lw === 0) continue; // no leading spaces on a wrapped line
       lines[lines.length - 1].push({ ...word, w: ww });
-      w += ww;
+      lw += ww;
     }
     doc.setTextColor(...color);
     for (const line of lines) {
@@ -228,16 +233,16 @@ export function reviewToPdf(rev, jsPDF) {
       let cx = x;
       for (const word of line) {
         font(word.style, size);
-        doc.text(word.text, cx, y + size);
+        doc.text(word.text, cx, w.y + size);
         cx += word.w;
       }
-      y += lineH;
+      w.y += lineH;
     }
     return lines.length * lineH;
   };
   const plain = (text, x, width, size = BODY, style = {}, color) => richText([{ text, ...style }], x, width, size, color);
   const gap = (pt) => {
-    y += pt;
+    w.y += pt;
   };
 
   const blocks = (list, indent = 0) => {
@@ -250,7 +255,7 @@ export function reviewToPdf(rev, jsPDF) {
           richText(b.inlines.map((r) => ({ ...r, bold: true })), margin + indent, maxW - indent, size);
           if (b.level <= 2) {
             doc.setDrawColor(187);
-            doc.line(margin, y - 2, pageW - margin, y - 2);
+            doc.line(margin, w.y - 2, pageW - margin, w.y - 2);
           }
           gap(4);
           break;
@@ -266,22 +271,22 @@ export function reviewToPdf(rev, jsPDF) {
         case 'quote':
           doc.setDrawColor(187);
           {
-            const y0 = y;
+            const y0 = w.y;
             blocks(b.blocks, indent + 14);
-            doc.line(margin + indent + 4, y0 + 2, margin + indent + 4, y - 4);
+            doc.line(margin + indent + 4, y0 + 2, margin + indent + 4, w.y - 4);
           }
           break;
         case 'hr':
           gap(4);
           doc.setDrawColor(187);
-          doc.line(margin, y, pageW - margin, y);
+          doc.line(margin, w.y, pageW - margin, w.y);
           gap(8);
           break;
         case 'list':
           b.items.forEach((it, n) => {
             const marker = b.ordered ? `${n + 1}.` : '•';
             ensure(BODY * LINE);
-            const yStart = y;
+            const yStart = w.y;
             richText(it.inlines, margin + indent + 18, maxW - indent - 18);
             font({}, BODY);
             doc.setTextColor(28, 36, 48);
@@ -295,16 +300,16 @@ export function reviewToPdf(rev, jsPDF) {
           const cols = b.head.length;
           const text = (runs) => pdfSafe(runs.map((r) => r.text).join(''));
           const weights = b.head.map((hd, c) => Math.max(5, ...[hd, ...b.rows.map((r) => r[c] || [])].map((cell) => Math.min(60, text(cell).length))));
-          const sum = weights.reduce((a, w) => a + w, 0);
-          const widths = weights.map((w) => Math.max(48, ((maxW - indent) * w) / sum));
-          const scale = (maxW - indent) / widths.reduce((a, w) => a + w, 0);
+          const sum = weights.reduce((a, x) => a + x, 0);
+          const widths = weights.map((x) => Math.max(48, ((maxW - indent) * x) / sum));
+          const scale = (maxW - indent) / widths.reduce((a, x) => a + x, 0);
           for (let c = 0; c < cols; c++) widths[c] *= scale;
           const pad = 4;
           const size = 9.5;
           const lineH = size * 1.3;
           const drawRow = (cells, head) => {
             font({ bold: head }, size);
-            const wrapped = widths.map((w, c) => doc.splitTextToSize(text(cells[c] || []), w - pad * 2));
+            const wrapped = widths.map((cw, c) => doc.splitTextToSize(text(cells[c] || []), cw - pad * 2));
             const rowH = Math.max(...wrapped.map((ls) => ls.length)) * lineH + pad * 2;
             ensure(rowH);
             let x = margin + indent;
@@ -312,13 +317,13 @@ export function reviewToPdf(rev, jsPDF) {
             for (let c = 0; c < cols; c++) {
               if (head) {
                 doc.setFillColor(238, 238, 238);
-                doc.rect(x, y, widths[c], rowH, 'FD');
-              } else doc.rect(x, y, widths[c], rowH);
+                doc.rect(x, w.y, widths[c], rowH, 'FD');
+              } else doc.rect(x, w.y, widths[c], rowH);
               doc.setTextColor(28, 36, 48);
-              wrapped[c].forEach((ln, i) => doc.text(ln, x + pad, y + pad + size + i * lineH - 1));
+              wrapped[c].forEach((ln, i) => doc.text(ln, x + pad, w.y + pad + size + i * lineH - 1));
               x += widths[c];
             }
-            y += rowH;
+            w.y += rowH;
           };
           gap(2);
           drawRow(b.head, true);
@@ -332,28 +337,60 @@ export function reviewToPdf(rev, jsPDF) {
     }
   };
 
-  // header
-  plain(h.title, margin, maxW, 18, { bold: true });
-  gap(2);
-  plain(h.meta, margin, maxW, 9.5, {}, [107, 114, 128]);
-  gap(6);
-  plain('Shots', margin, maxW, BODY, { bold: true });
-  for (const l of h.shots) plain(`•  ${l}`, margin + 6, maxW - 6, BODY);
-  if (h.taste) richText([{ text: 'Taste: ', bold: true }, { text: h.taste }], margin, maxW);
-  if (h.question) richText([{ text: 'Question: ', bold: true }, { text: h.question }], margin, maxW);
-  gap(6);
-  blocks(parseMarkdown(rev.markdown));
-  gap(10);
-  plain(h.footer, margin, maxW, 9, { italic: true }, [107, 114, 128]);
+  return {
+    get y() {
+      return w.y;
+    },
+    set y(v) {
+      w.y = v;
+    },
+    margin,
+    maxW,
+    pageW,
+    pageH,
+    BODY,
+    font,
+    ensure,
+    richText,
+    plain,
+    gap,
+    blocks,
+    /** The review's header lines and body, from the cursor on. */
+    review(rev, { heading = null } = {}) {
+      const h = reviewHeader(rev);
+      if (heading) {
+        plain(heading, margin, maxW, 14, { bold: true });
+        gap(2);
+      }
+      plain(h.title, margin, maxW, heading ? 12 : 18, { bold: true });
+      gap(2);
+      plain(h.meta, margin, maxW, 9.5, {}, [107, 114, 128]);
+      gap(6);
+      plain('Shots', margin, maxW, BODY, { bold: true });
+      for (const l of h.shots) plain(`•  ${l}`, margin + 6, maxW - 6, BODY);
+      if (h.taste) richText([{ text: 'Taste: ', bold: true }, { text: h.taste }], margin, maxW);
+      if (h.question) richText([{ text: 'Question: ', bold: true }, { text: h.question }], margin, maxW);
+      gap(6);
+      blocks(parseMarkdown(rev.markdown || ''));
+      gap(10);
+      plain(h.footer, margin, maxW, 9, { italic: true }, [107, 114, 128]);
+    },
+  };
+}
 
+export function reviewToPdf(rev, jsPDF) {
+  const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+  const h = reviewHeader(rev);
+  const writer = pdfWriter(doc, { margin: 64 });
+  writer.review(rev);
   // page numbers
   const n = doc.getNumberOfPages();
   for (let p = 1; p <= n; p++) {
     doc.setPage(p);
-    font({}, 8.5);
+    writer.font({}, 8.5);
     doc.setTextColor(150);
-    doc.text(`portal-met-bridge · ${h.title}`, margin, pageH - 28);
-    doc.text(`${p} / ${n}`, pageW - margin, pageH - 28, { align: 'right' });
+    doc.text(`portal-met-bridge · ${h.title}`, writer.margin, writer.pageH - 28);
+    doc.text(`${p} / ${n}`, writer.pageW - writer.margin, writer.pageH - 28, { align: 'right' });
   }
   return doc.output('arraybuffer');
 }

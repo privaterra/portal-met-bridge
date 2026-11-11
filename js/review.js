@@ -6,7 +6,7 @@
 //   buildReviewMessages(...)         → { system, user } for any provider
 //   renderMarkdown(md)               → safe HTML for the report pane
 
-import { beverageOf, beverageSource, profileTargetOf, profileFinalWeight, measuredEy, grindMicrons } from './analysis.js?v=0.16.0';
+import { beverageOf, beverageSource, profileTargetOf, profileFinalWeight, measuredEy, grindMicrons } from './analysis.js?v=0.17.0';
 
 const r1 = (v) => (Number.isFinite(v) ? Math.round(v * 10) / 10 : null);
 const r2 = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
@@ -129,6 +129,8 @@ export function buildShotDigest(shot, analysis, { profileTargetG, profile = revi
     ratio: dose && beverage > 0 ? r2(beverage / dose) : null,
     durationSec: r1(shot.durationSec),
     note: c.note || null,
+    rating: ratingOf(shot),
+    comment: typeof shot.comment === 'string' && shot.comment.trim() ? shot.comment.trim() : null,
     refractometerTdsPct: Number(shot.refractometer?.tdsPct) > 0 ? shot.refractometer.tdsPct : null,
     measuredEyPct: r2(measuredEy(shot)),
     machineRecordAttached: !!shot.machineShotId,
@@ -264,6 +266,12 @@ export function buildShotDigest(shot, analysis, { profileTargetG, profile = revi
 }
 
 /** One sentence that says which weight is the cup and which is only the profile's aim — the model must not confuse them. */
+/** The user's 1–5 star rating of a shot, or null when it has none. */
+export function ratingOf(shot) {
+  const r = Number(shot?.rating);
+  return Number.isInteger(r) && r >= 1 && r <= 5 ? r : null;
+}
+
 export function beverageNoteFor(shot, beverage, target) {
   const src = beverageSource(shot);
   const scale = Number.isFinite(shot?.finalWeightG) && shot.finalWeightG > 0 ? `${r1(shot.finalWeightG)} g` : 'nothing';
@@ -321,7 +329,7 @@ A table: Stage | Time | Water in | Cup | What happened — one row per stage, pl
 A numbered list (1., 2., 3. — consecutive, never "1." on every item) of the findings that matter, most important first (stopped short / ran long, pressure, bloom behaviour, temperature drift, data inconsistencies). Use sub-bullets for checks the user should make and for hypotheses, labelled "Unconfirmed:" when they are.
 
 ## Suggested changes
-Start with "Change one thing per shot, in this order." then a numbered list (1., 2., 3. — consecutive). Each item names the exact variable or stage parameter (use the profile's own keys when they are given, e.g. bloom_time, extraction_flow, saturation_pressure, the final weight, the temperature setpoint) and the value to set, or the grind move in whole steps of the grinder's step size, and says what to look for in the next trace. Respect how the user drinks the coffee (ratio targets differ for milk drinks and straight espresso).
+First a sub-heading "### Stage by stage" with one bullet per stage of the profile, in the order the machine ran them (the digest's stages list; every stage, none skipped): "**<stage name>** (<start>–<end> s): what happened — <verdict> — <what to change, or keep>". "What happened" quotes the stage's own numbers (duration, pressure or flow, weight gained, EC where the Portal covered it, temperature when recorded); the verdict is exactly one of "worked well", "acceptable" or "needs work"; the last part names the parameter and value to change in that stage, or says "keep as is". Then a sub-heading "### One change per shot", starting with "Change one thing per shot, in this order." and a numbered list (1., 2., 3. — consecutive). Each item names the exact variable or stage parameter (use the profile's own keys when they are given, e.g. bloom_time, extraction_flow, saturation_pressure, the final weight, the temperature setpoint) and the value to set, or the grind move in whole steps of the grinder's step size, and says what to look for in the next trace. Respect how the user drinks the coffee (ratio targets differ for milk drinks and straight espresso).
 
 ## Open questions
 Bullets: what you need to know to go further (taste, a second-scale weight, a refractometer reading, which profile version is loaded).
@@ -330,7 +338,8 @@ Bullets: what you need to know to go further (taste, a second-scale weight, a re
 Bullets listing only the data you were given: the shot ids/dates, the profile name and version, the coffee as recorded. Do not invent URLs or literature.
 
 Rules: use the numbers from the digest and do not recompute or round them differently; never invent values that are not there — say "not recorded" instead; keep the tone plain and specific; write for the person who pulled the shot; do not describe the chart (the app shows it); do not add a title, preamble or closing remarks.
-Weights: meta.beverageG is the cup — the yield to use for ratio and EY — and meta.beverageNote says where it came from (weighed by hand, the profile's target, or the scale). meta.profileTargetG is only what the profile aimed to stop at and meta.scaleFinalG only what the machine's scale read; quote them as such and never present either as the measured yield when a hand-weighed value exists. When the three disagree, say so and by how much.`;
+Weights: meta.beverageG is the cup — the yield to use for ratio and EY — and meta.beverageNote says where it came from (weighed by hand, the profile's target, or the scale). meta.profileTargetG is only what the profile aimed to stop at and meta.scaleFinalG only what the machine's scale read; quote them as such and never present either as the measured yield when a hand-weighed value exists. When the three disagree, say so and by how much.
+Rating: meta.rating is the user's own 1–5 star rating of the shot in the cup (5 best; null when not rated) and meta.comment their comment on it; treat both as the taste verdict for that shot, weigh the trace against them, and say so when the numbers and the rating disagree.`;
 
 /** The report outline when several shots are reviewed together: every section compares. */
 export const REVIEW_TEMPLATE_SERIES = `Write the report in Markdown with exactly these sections, in this order (use "##" headings; no top-level title, the app adds it). Several shots are given, in brewing order, and every section must compare them — never review only the last one.
@@ -351,7 +360,7 @@ A numbered list (1., 2., 3. — consecutive, never "1." on every item), in brewi
 Two short bullet lists — "Keep:" the changes the series shows helped, and "Revert or stop:" the ones that did not — each with the shot numbers as evidence; write "undecided" when one shot is not enough to tell.
 
 ## Suggested changes
-Start with "Change one thing per shot, in this order." then a numbered list (1., 2., 3. — consecutive) of single changes for the next shots, meant to improve on the latest shot and built on what the series showed. Each item names the exact variable or stage parameter (the profile's own keys when given, e.g. bloom_time, extraction_flow, saturation_pressure, the final weight, the temperature setpoint) and the value to set, or the grind move in whole steps of the grinder's step size; says why the series points to it (which shots showed what); and says what to look for in the next trace. Respect how the user drinks the coffee (ratio targets differ for milk drinks and straight espresso).
+First a sub-heading "### Stage by stage" with one bullet per stage of the profile, in the order the machine ran them (every stage that appears in the digests, none skipped): "**<stage name>**: what happened across the shots — <verdict> — <what to change, or keep>". "What happened" quotes the stage's numbers from the shots (duration, pressure or flow, weight gained, EC where the Portal covered it) and how they moved from shot to shot; the verdict is exactly one of "worked well", "acceptable" or "needs work" for the latest shot; the last part names the parameter and value to change in that stage, or says "keep as is". Then a sub-heading "### One change per shot", starting with "Change one thing per shot, in this order." and a numbered list (1., 2., 3. — consecutive) of single changes for the next shots, meant to improve on the latest shot and built on what the series showed. Each item names the exact variable or stage parameter (the profile's own keys when given, e.g. bloom_time, extraction_flow, saturation_pressure, the final weight, the temperature setpoint) and the value to set, or the grind move in whole steps of the grinder's step size; says why the series points to it (which shots showed what); and says what to look for in the next trace. Respect how the user drinks the coffee (ratio targets differ for milk drinks and straight espresso).
 
 ## Open questions
 Bullets: what you need to know to go further (taste of each shot, a second-scale weight, a refractometer reading, which profile version was loaded for which shot).
@@ -360,9 +369,10 @@ Bullets: what you need to know to go further (taste of each shot, a second-scale
 Bullets listing only the data you were given: the shot ids/dates in order, the profile name(s) and version, the coffee as recorded. Do not invent URLs or literature.
 
 Rules: use the numbers from the digests and the app's comparison and do not recompute or round them differently; never invent values that are not there — say "not recorded" instead; keep the tone plain and specific; write for the person who pulled the shots; do not describe the charts (the app shows them); do not add a title, preamble or closing remarks.
-Weights: meta.beverageG is the cup — the yield to use for ratio and EY — and meta.beverageNote says where it came from (weighed by hand, the profile's target, or the scale). meta.profileTargetG is only what the profile aimed to stop at and meta.scaleFinalG only what the machine's scale read; quote them as such and never present either as the measured yield when a hand-weighed value exists. When the three disagree, say so and by how much.`;
+Weights: meta.beverageG is the cup — the yield to use for ratio and EY — and meta.beverageNote says where it came from (weighed by hand, the profile's target, or the scale). meta.profileTargetG is only what the profile aimed to stop at and meta.scaleFinalG only what the machine's scale read; quote them as such and never present either as the measured yield when a hand-weighed value exists. When the three disagree, say so and by how much.
+Rating: meta.rating is the user's own 1–5 star rating of the shot in the cup (5 best; null when not rated) and meta.comment their comment on it; treat both as the taste verdict for that shot, weigh the trace against them, and say so when the numbers and the rating disagree.`;
 
-const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
+const num = (v) => (v === null || v === undefined || v === '' ? null : Number.isFinite(Number(v)) ? Number(v) : null); // null stays null (never 0)
 const delta = (a, b, digits = 2) => (a === null || b === null ? null : Math.round((b - a) * 10 ** digits) / 10 ** digits);
 
 /**
@@ -406,10 +416,12 @@ export function buildSeriesComparison(digests) {
     tailLast5gRatioToPeakPct: num(d.ec?.tailLast5g?.ratioToPeakPct),
     refractometerTdsPct: num(d.meta?.refractometerTdsPct),
     measuredEyPct: num(d.meta?.measuredEyPct),
+    rating: num(d.meta?.rating),
+    comment: d.meta?.comment ?? null,
     portalData: !!d.ec && d.ec.meanEcPerG != null,
     stageNames: (d.stages || []).map((st) => st.name),
   }));
-  const numericKeys = ['grindUm', 'doseG', 'beverageG', 'ratio', 'durationSec', 'firstDropSec', 'pumpStopSec', 'dripsAfterPumpG', 'totalWaterMl', 'peakPressureBar', 'waterTempStartC', 'waterTempEndC', 'meanEcPerG', 'integralEcG', 'peakEc', 'peakAtCupG', 'tailLast5gRatioToPeakPct', 'refractometerTdsPct', 'measuredEyPct', 'profileTargetG', 'temperatureSetpointC'];
+  const numericKeys = ['grindUm', 'doseG', 'beverageG', 'ratio', 'durationSec', 'firstDropSec', 'pumpStopSec', 'dripsAfterPumpG', 'totalWaterMl', 'peakPressureBar', 'waterTempStartC', 'waterTempEndC', 'meanEcPerG', 'integralEcG', 'peakEc', 'peakAtCupG', 'tailLast5gRatioToPeakPct', 'refractometerTdsPct', 'measuredEyPct', 'profileTargetG', 'temperatureSetpointC', 'rating'];
   const steps = shots.slice(1).map((b, i) => {
     const a = shots[i];
     const changes = {};
@@ -455,7 +467,7 @@ export function buildSeriesComparison(digests) {
     shots,
     steps,
     stages,
-    trends: { durationSec: trend('durationSec', 1), ratio: trend('ratio'), peakPressureBar: trend('peakPressureBar'), meanEcPerG: trend('meanEcPerG', 3), beverageG: trend('beverageG', 1), grindUm: trend('grindUm', 0) },
+    trends: { durationSec: trend('durationSec', 1), ratio: trend('ratio'), peakPressureBar: trend('peakPressureBar'), meanEcPerG: trend('meanEcPerG', 3), beverageG: trend('beverageG', 1), grindUm: trend('grindUm', 0), rating: trend('rating', 0) },
     notes,
   };
 }

@@ -235,6 +235,21 @@ try {
   const autoJson = await page.evaluate(() => { const k = Object.keys(window.__fakeFolderFiles).find((f) => /shots\/.*\.json$/.test(f)); return JSON.parse(window.__fakeFolderFiles[k]); });
   check('auto-written JSON carries the machine record and the Portal samples', autoJson?.shot?.machineShotId && autoJson.shot.portal.length > 150 && autoJson.analysis?.meanEcPerG > 0, `machineShotId=${autoJson?.shot?.machineShotId} portal=${autoJson?.shot?.portal?.length}`);
 
+  // ---- Rating and comment (v0.17): the app asks once the shot is saved; stars under the title re-rate in place
+  await page.waitForSelector('#rating-dialog[open]', { timeout: 5000 });
+  check('a rating dialog opens after the shot is saved, naming the shot', /^How was it\? — .*E2E coffee/.test(await page.textContent('#r-title')) && /Blooming Espresso/.test(await page.textContent('#r-sub')), `${(await page.textContent('#r-title')).trim()} | ${(await page.textContent('#r-sub')).trim()}`);
+  await page.keyboard.press('4');
+  check('pressing 4 lights four stars and offers "clear"', (await page.evaluate(() => document.querySelectorAll('#r-stars button.star.on').length)) === 4 && (await page.isVisible('#r-stars .star-clear')));
+  await page.fill('#r-comment', 'sweet, a bit short');
+  await page.click('#r-save');
+  await page.waitForTimeout(400);
+  const rated = await page.evaluate(() => ({ open: document.querySelector('#rating-dialog').open, rating: window.__pb.state.selected?.rating, comment: window.__pb.state.selected?.comment, header: document.querySelector('#shot-rating').textContent.replace(/\s+/g, ' ').trim(), on: document.querySelectorAll('#shot-rating button.star.on').length }));
+  check('the rating and comment are saved with the shot and shown under its title', !rated.open && rated.rating === 4 && rated.comment === 'sweet, a bit short' && rated.on === 4 && /sweet, a bit short/.test(rated.header) && /Edit comment/.test(rated.header), JSON.stringify(rated));
+  await page.click('#shot-rating button.star[data-star="5"]');
+  await page.waitForTimeout(500);
+  const rerated = await page.evaluate(() => { const k = Object.keys(window.__fakeFolderFiles).find((f) => /shots\/.*\.json$/.test(f)); return { rating: window.__pb.state.selected?.rating, on: document.querySelectorAll('#shot-rating button.star.on').length, json: JSON.parse(window.__fakeFolderFiles[k]).shot.rating, comment: JSON.parse(window.__fakeFolderFiles[k]).shot.comment }; });
+  check('clicking a star under the shot title re-rates it in place and the auto-written JSON follows', rerated.rating === 5 && rerated.on === 5 && rerated.json === 5 && rerated.comment === 'sweet, a bit short', JSON.stringify(rerated));
+
   // History tab: list, search, filter, open, edit, delete
   await page.click('.view-tab[data-view="history"]');
   const histRows = await page.evaluate(() => [...document.querySelectorAll('#hist-rows tr')].map((tr) => tr.textContent.replace(/\s+/g, ' ').trim()));
@@ -243,6 +258,18 @@ try {
   check('History In → out shows the profile target with the ◎ mark and the ratio from it', /→ 38\.0 g◎\s*1 : 2\.11/.test(histRows[0]), histRows[0].slice(0, 160));
   const grindTh = await page.evaluate(() => [...document.querySelectorAll('#hist-table th')].map((th) => th.textContent.trim()));
   check('Grind header sits between Profile and In → out', grindTh.indexOf('Grind') === grindTh.indexOf('Profile') + 1 && grindTh.indexOf('In → out') === grindTh.indexOf('Grind') + 1, grindTh.join(' | '));
+  check('History has a ★ column after TDS showing the rating and a comment mark', grindTh.indexOf('★') === grindTh.indexOf('TDS') + 1 && /★5💬/.test(histRows[0]) && /sweet, a bit short/.test(await page.getAttribute('#hist-rows tr td.rating button', 'title')), histRows[0].slice(0, 200));
+  await page.click('#hist-table th[data-sort="rating"]');
+  check('the ★ column is sortable', (await page.getAttribute('#hist-table th[data-sort="rating"]', 'aria-sort')) !== 'none');
+  await page.click('#hist-table th[data-sort="startedAt"]');
+  await page.fill('#hist-search', 'a bit short');
+  check('History search matches the comment', (await page.evaluate(() => document.querySelectorAll('#hist-rows tr').length)) === 1);
+  await page.fill('#hist-search', '');
+  await page.click('#hist-rows tr td.rating button[data-act="rate"]');
+  await page.waitForSelector('#rating-dialog[open]');
+  check('the ★ cell opens the rating dialog with the current rating and comment', /^Your rating/.test(await page.textContent('#r-title')) && (await page.evaluate(() => document.querySelectorAll('#r-stars button.star.on').length)) === 5 && (await page.inputValue('#r-comment')) === 'sweet, a bit short');
+  await page.click('#r-later');
+  await page.waitForTimeout(200);
   await page.click('#hist-table th[data-sort="grind"]');
   check('Grind column is sortable', (await page.getAttribute('#hist-table th[data-sort="grind"]', 'aria-sort')) !== 'none');
   await page.click('#hist-table th[data-sort="startedAt"]');
@@ -259,6 +286,9 @@ try {
   await page.selectOption('#hist-filter', 'all');
   await page.click('#hist-rows tr button[data-act="edit"]');
   await page.waitForSelector('#shot-dialog[open]');
+  check('the edit dialog shows the rating and comment', (await page.evaluate(() => document.querySelectorAll('#e-stars button.star.on').length)) === 5 && (await page.inputValue('#e-comment')) === 'sweet, a bit short');
+  await page.click('#e-stars button.star[data-star="3"]');
+  await page.fill('#e-comment', 'sweet, a bit short; edited later');
   await page.fill('#e-bean', 'E2E coffee (edited)');
   await page.fill('#e-dose', '18.5');
   await page.fill('#e-tds', '9.1');
@@ -267,6 +297,7 @@ try {
   await page.waitForTimeout(400);
   const edited = await page.evaluate(() => ({ row: document.querySelector('#hist-rows tr')?.textContent.replace(/\s+/g, ' '), sel: window.__pb.state.selected?.context?.beanName, tds: window.__pb.state.selected?.refractometer?.tdsPct, dose: window.__pb.state.selected?.context?.doseG, open: document.querySelector('#shot-dialog').open, bev: window.__pb.state.selected?.beverageG, ey: window.__pb.state.selected?.refractometer?.eyPct, machineW: window.__pb.state.selected?.finalWeightG, sub: document.querySelector('#shot-sub').textContent }));
   check('History → Edit updates coffee, dose and reading', /E2E coffee \(edited\)/.test(edited.row) && /18\.5 →/.test(edited.row) && edited.sel === 'E2E coffee (edited)' && edited.tds === 9.1 && edited.dose === 18.5 && !edited.open, JSON.stringify(edited).slice(0, 200));
+  check('History → Edit changes the rating and comment too', /★3💬/.test(edited.row) && (await page.evaluate(() => [window.__pb.state.selected?.rating, window.__pb.state.selected?.comment].join('|'))) === '3|sweet, a bit short; edited later', edited.row.slice(0, 200));
   check('beverage weighed is editable and replaces the machine weight for yield and EY', edited.bev === 41.5 && /→ 41\.5 g⚖/.test(edited.row) && Math.abs(edited.ey - (9.1 * 41.5) / 18.5) < 0.01 && /41\.5 g out \(weighed; machine/.test(edited.sub), JSON.stringify({ bev: edited.bev, ey: edited.ey, machineW: edited.machineW, sub: edited.sub }).slice(0, 220));
   // blanking the field returns to the machine's scale
   await page.click('#hist-rows tr button[data-act="edit"]');
@@ -509,6 +540,8 @@ try {
   await page.waitForFunction(() => !window.__pb.an.running && window.__pb.an.markdown.length > 100, null, { timeout: 20000 });
   const reviewed = await page.evaluate((id) => { const d = window.__pb.an.digests.find((x) => x.meta.id === id)?.meta; return d && { choice: d.profileChoice, target: d.profileTargetG, recorded: d.recordedProfile, vars: (d.profileVariables || []).map((v) => v.key).join(','), cup: d.beverageG }; }, e2eShotId);
   check('the digest sent for the re-profiled shot names the choice, the 43 g target, its variables and the record it replaced', reviewed && reviewed.choice === 'chosen by the user for this review' && reviewed.target === 43 && reviewed.recorded?.finalWeightG === 38 && reviewed.vars === 'bloom_time,extraction_flow' && reviewed.cup === 43.4, JSON.stringify(reviewed));
+  const ratedDigest = await page.evaluate((id) => { const d = window.__pb.an.digests.find((x) => x.meta.id === id)?.meta; const other = window.__pb.an.digests.find((x) => x.meta.id === 'second-portal')?.meta; return { rating: d?.rating, comment: d?.comment, otherRating: other?.rating, head: document.querySelector(`#an-digest .an-shot:last-child .hint`)?.textContent || '', sysHasStages: /Stage by stage/.test(window.__pb.an.request?.system || ''), sysHasRating: /meta\.rating/.test(window.__pb.an.request?.system || '') }; }, e2eShotId);
+  check('the digest carries the rating and comment (null for an unrated shot), the digest card shows them, and the prompt asks for a stage-by-stage verdict', ratedDigest.rating === 3 && /edited later/.test(ratedDigest.comment || '') && ratedDigest.otherRating === null && /rated 3\/5/.test(ratedDigest.head) && /edited later/.test(ratedDigest.head) && ratedDigest.sysHasStages && ratedDigest.sysHasRating, JSON.stringify(ratedDigest).slice(0, 300));
   const review = await page.evaluate(() => ({ md: window.__pb.an.markdown, h3: [...document.querySelectorAll('#an-report h3')].map((h) => h.textContent), table: !!document.querySelector('#an-report table'), status: document.querySelector('#an-status').textContent, title: document.querySelector('#an-report-title').textContent, saveDisabled: document.querySelector('#an-save').disabled }));
   check('the review streams in, rendered as sections and a table, with the prompt facts the mock echoes back', /mock review of 3 shots, one without Portal data/.test(review.md) && review.h3.join('|') === 'Verdict|Stages|What stands out|Suggested changes|Open questions|Sources' && review.table && /Done in/.test(review.status) && /^Shot review: 3 shots of E2E coffee.* on Blooming Espresso/.test(review.title) && !review.saveDisabled, JSON.stringify({ ...review, md: review.md.slice(0, 80) }));
   const sent = await page.evaluate(async (port) => (await (await fetch(`http://127.0.0.1:${port}/mock/dial`)).json()).lastAiRequest, MOCK_PORT);
@@ -538,6 +571,15 @@ try {
   await page.click('#an-run');
   await page.waitForFunction(() => !window.__pb.an.running, null, { timeout: 10000 });
   check('a provider error is shown in the report pane and Save stays off', /The request failed:.*HTTP 404.*bad-model.*List models/.test(await page.textContent('#an-report')) && (await page.isDisabled('#an-save')), (await page.textContent('#an-report')).slice(0, 160));
+  // a model that stops at its output limit: the app asks it to continue and the report comes out whole (v0.17)
+  await page.evaluate(() => { window.__pb.settings.aiModelOpenai = 'cut-model'; });
+  await page.click('#an-run');
+  await page.waitForFunction(() => !window.__pb.an.running && window.__pb.an.markdown.length > 100, null, { timeout: 20000 });
+  const cut = await page.evaluate(async (port) => ({ continued: window.__pb.an.continued, cutOff: window.__pb.an.cutOff, status: document.querySelector('#an-status').textContent, verdicts: (window.__pb.an.markdown.match(/## Verdict/g) || []).length, sources: /## Sources/.test(window.__pb.an.markdown), len: window.__pb.an.markdown.length, turns: (await (await fetch(`http://127.0.0.1:${port}/mock/dial`)).json()).lastAiRequest.turns, contHidden: document.querySelector('#an-continue').hidden, saveOn: !document.querySelector('#an-save').disabled, maxTok: window.__pb.an.request?.maxTokens }), MOCK_PORT);
+  const fullLen = await page.evaluate(() => window.__pb.an.markdown.length);
+  check('a report cut off at the length limit is continued automatically: one continuation turn (system, user, assistant, user), whole report, no repeat', cut.continued === 1 && cut.cutOff === false && /Done in \d+ s \(in 2 parts\)/.test(cut.status) && cut.verdicts === 1 && cut.sources && cut.turns === 4 && cut.contHidden && cut.saveOn && cut.maxTok === 16000, JSON.stringify(cut));
+  const mockFull = await page.evaluate(async (port) => (await (await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: 'POST', headers: { authorization: 'Bearer sk-test-123', 'content-type': 'application/json' }, body: JSON.stringify({ model: 'mock-gpt-2', messages: [{ role: 'system', content: 's' }, { role: 'user', content: 'Shots to review: 3\nNo Belka Portal data for this shot' }] }) })).json()).choices[0].message.content.length, MOCK_PORT);
+  check('the continued report is exactly the full report the model would have written in one go', fullLen === mockFull, `${fullLen} vs ${mockFull}`);
   await page.evaluate(() => { window.__pb.settings.aiModelOpenai = 'mock-gpt-2'; });
   // a fresh pick clears the report pane; Open brings a saved one back with its shots and questions
   await page.fill('#an-taste', '');
@@ -631,7 +673,7 @@ try {
     const [d] = await Promise.all([page.waitForEvent('download', { timeout: 30000 }), page.click(sel)]);
     const p = await d.path();
     if (keep) await d.saveAs(join(keep, d.suggestedFilename()));
-    return { name: d.suggestedFilename(), bytes: statSync(p).size };
+    return { name: d.suggestedFilename(), bytes: statSync(p).size, path: p };
   };
   const jpg = await dl('#dl-jpeg');
   check('JPEG export downloads', jpg.bytes > 10000 && /time\.jpg$/.test(jpg.name), `${jpg.name} ${jpg.bytes} B`);
@@ -639,6 +681,14 @@ try {
   check('second JPEG (EC vs mass) downloads', /ec-vs-mass\.jpg$/.test(jpg2.suggestedFilename()), jpg2.suggestedFilename());
   const pdf = await dl('#dl-pdf');
   check('PDF report downloads', pdf.bytes > 20000 && /report\.pdf$/.test(pdf.name), `${pdf.name} ${pdf.bytes} B`);
+  // with a saved AI review covering this shot, the report grows by the review's pages (v0.17)
+  await page.evaluate(async () => { const s = window.__pb.state.selected; await window.__pb.store.putReview({ id: 'rev-e2e', createdAt: Date.now(), provider: 'openai', model: 'mock-gpt-2', title: 'E2E saved review', shotIds: [s.id, 'second-portal'], shotLabels: ['a', 'b'], taste: '', question: '', durationMs: 1000, markdown: '## Verdict\n\nA saved review for the PDF test.\n\n## Suggested changes\n\n### Stage by stage\n\n- **Bloom**: 8 s — worked well — keep as is\n\n### One change per shot\n\nChange one thing per shot, in this order.\n\n1. Grind finer.\n\n## Sources\n\n- shot digests\n' + 'Padding paragraph. '.repeat(300), digests: [] }); });
+  const pdfTextBefore = readFileSync(pdf.path, 'latin1');
+  const pdfWithReview = await dl('#dl-pdf');
+  const pdfText = readFileSync(pdfWithReview.path, 'latin1');
+  const pdfPages = (pdfText.match(/\/Type\s*\/Page[^s]/g) || []).length;
+  check('the PDF report appends the newest saved AI review that covers the shot, on its own pages', pdfWithReview.bytes > pdf.bytes + 2000 && pdfPages >= 3 && pdfPages > (pdfTextBefore.match(/\/Type\s*\/Page[^s]/g) || []).length, `${pdf.bytes} → ${pdfWithReview.bytes} B, ${pdfPages} pages`);
+  await page.evaluate(() => window.__pb.store.deleteReview('rev-e2e'));
   await page.click('.view-tab[data-view="history"]');
   const csv = await dl('#dl-summary');
   check('summary CSV downloads (from History)', csv.bytes > 200 && /shots-.*\.csv$/.test(csv.name), `${csv.name} ${csv.bytes} B`);

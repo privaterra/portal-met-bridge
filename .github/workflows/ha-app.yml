@@ -85,7 +85,7 @@ jobs:
           labels: |
             io.hass.type=app
             io.hass.name=Portal Met Bridge
-            io.hass.description=Belka Portal conductivity logged against Meticulous espresso shots
+            io.hass.description=Meticulous & Belka Portal conductivity data visualization & analysis
             io.hass.url=https://github.com/${{ github.repository }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.licenses=MIT

@@ -4,15 +4,16 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>portal-met-bridge</title>
+  <meta name="description" content="Meticulous & Belka Portal conductivity data visualization & analysis: records, visualizes and analyzes the data produced by a Meticulous espresso machine and a Belka Portal conductivity sensor, shot by shot.">
   <link rel="stylesheet" href="vendor/uPlot.min.css" />
-  <link rel="stylesheet" href="css/app.css?v=0.16.0" />
+  <link rel="stylesheet" href="css/app.css?v=0.17.0" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M4 26 L10 8 L16 20 L22 6 L28 26' fill='none' stroke='%232447B8' stroke-width='3' stroke-linejoin='round'/%3E%3C/svg%3E" />
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
       <h1>portal-met-bridge</h1>
-      <p>Belka Portal conductivity, logged against your Meticulous shot</p>
+      <p>Meticulous &amp; Belka Portal conductivity data visualization &amp; analysis.</p>
     </div>
     <nav class="views" aria-label="Views">
       <button class="view-tab" data-view="shots" aria-selected="true">Shots</button>
@@ -255,6 +256,9 @@
             </select>
           </label>
           <p class="hint">The profile's <code>final_weight</code> is read from the machine's own record of the shot (so two profiles sharing a name cannot be mixed up); until the record is attached it comes from the loaded profile's id. The scale option misses nothing that happened after the pump stopped as long as the settle window covers the drips. With the typed option nothing stands in: a shot shows <em>? g</em> until you enter the weight (Enter final weight on the Shots tab, <em>? g</em> in History, or History → Edit). A weight you type always wins, whichever option is chosen; the choice applies to every shot, including earlier ones.</p>
+          <h3>Rating</h3>
+          <label class="check"><input type="checkbox" id="set-ask-rating" checked /> Ask for a 1–5 star rating and a comment after each shot (after the final weight, when that is asked too)</label>
+          <p class="hint">Ratings and comments are saved with the shot, shown in History (★ column, sortable) and under the shot's title, go into the AI review as your verdict on the cup, and are included in reports, the summary CSV and the Beanconqueror hand-off. <em>Later</em> skips; rate any time by clicking the stars under a shot's title or via History → Edit.</p>
           <h3>Saving</h3>
           <p class="hint">Every shot is written to this browser's database while it is being recorded (a checkpoint every two seconds) and finalised when the pump stops, so a closed tab or a crash loses at most the last two seconds. The machine's own record is attached afterwards, and any shot still missing it is completed the next time the machine connects. Where the files go is set under <em>Files and folders</em>, below.</p>
         </div>
@@ -454,7 +458,7 @@
 
       <section class="panel settings">
         <div class="panel-head"><h2>About</h2></div>
-        <p class="hint">portal-met-bridge <span id="about-version"></span> · MIT · <a href="https://github.com/privaterra/portal-met-bridge" target="_blank" rel="noopener">github.com/privaterra/portal-met-bridge</a> · vibe-coded with Claude; see the README for how. Nothing leaves this computer except requests to the machine on your LAN, the Portal over Bluetooth and — only when you press <em>Review with AI</em> — the shot digest sent to the AI provider you configured.</p>
+        <p class="hint"><strong>Meticulous &amp; Belka Portal conductivity data visualization &amp; analysis.</strong> This app visualizes and analyzes the data produced by a Meticulous espresso machine and a Belka Portal conductivity sensor — each shot's pressure, flow, weight and temperature next to the Portal's EC, with strength estimates, AI reviews, reports and exports. portal-met-bridge <span id="about-version"></span> · MIT · <a href="https://github.com/privaterra/portal-met-bridge" target="_blank" rel="noopener">github.com/privaterra/portal-met-bridge</a> · vibe-coded with Claude; see the README for how. Nothing leaves this computer except requests to the machine on your LAN, the Portal over Bluetooth and — only when you press <em>Review with AI</em> — the shot digest sent to the AI provider you configured.</p>
       </section>
     </main>
 
@@ -480,6 +484,7 @@
             <div class="row">
               <button id="an-run" class="btn primary" disabled>Review with AI</button>
               <button id="an-stop" class="btn" hidden>Stop</button>
+              <button id="an-continue" class="btn" hidden title="The model stopped at its output limit; ask it to carry on from where it stopped">Continue the review</button>
               <span class="inline-note" id="an-status"></span>
             </div>
             <p class="hint" id="an-run-hint"></p>
@@ -651,6 +656,7 @@
                 <th data-sort="durationSec" class="num">Time</th>
                 <th data-sort="meanEc" class="num" title="mean EC per gram of beverage">EC/g</th>
                 <th data-sort="tds" class="num" title="refractometer reading, or the estimate in italics">TDS</th>
+                <th data-sort="rating" class="rating" title="your 1–5 star rating; 💬 marks a comment">★</th>
                 <th>Data</th>
                 <th class="actions"></th>
               </tr>
@@ -719,6 +725,7 @@
           </div>
         </div>
         <p class="panel-sub" id="shot-sub"></p>
+        <div class="shot-rating" id="shot-rating"></div>
         <div class="chart" id="chart-time"></div>
       </section>
 
@@ -851,6 +858,8 @@
       </div>
       <p class="hint" id="e-bev-hint"></p>
       <label class="field"><span>Note</span><textarea id="e-note" rows="2"></textarea></label>
+      <div class="field"><span>Your rating</span><span class="stars" id="e-stars" role="radiogroup" aria-label="Rating" data-value="0"><button type="button" class="star" data-star="1" role="radio" aria-checked="false" title="1 — poor" aria-label="1 star">★</button><button type="button" class="star" data-star="2" role="radio" aria-checked="false" title="2 — meh" aria-label="2 stars">★</button><button type="button" class="star" data-star="3" role="radio" aria-checked="false" title="3 — fine" aria-label="3 stars">★</button><button type="button" class="star" data-star="4" role="radio" aria-checked="false" title="4 — good" aria-label="4 stars">★</button><button type="button" class="star" data-star="5" role="radio" aria-checked="false" title="5 — great" aria-label="5 stars">★</button><button type="button" class="star-clear hidden" data-star="0" title="Remove the rating">clear</button></span></div>
+      <label class="field"><span>Comment on the cup</span><textarea id="e-comment" rows="2" placeholder="e.g. sweet, round, a little short on the finish"></textarea></label>
       <p class="hint">The beverage you weighed replaces the default (the profile's target weight or the machine's scale, as chosen under Settings → Recording) for yield, EY, the summary and the Beanconqueror hand-off; the recorded samples and times stay as measured. Blank it to go back to the default.</p>
       <div class="row end">
         <button type="button" id="shot-dialog-cancel" class="btn">Cancel</button>
@@ -871,6 +880,19 @@
     </form>
   </dialog>
 
+  <dialog id="rating-dialog" class="modal narrow">
+    <form method="dialog">
+      <h2 id="r-title">How was it?</h2>
+      <p class="hint" id="r-sub"></p>
+      <div class="field"><span>Rating (press 1–5)</span><span class="stars big" id="r-stars" role="radiogroup" aria-label="Rating" data-value="0"><button type="button" class="star" data-star="1" role="radio" aria-checked="false" title="1 — poor" aria-label="1 star">★</button><button type="button" class="star" data-star="2" role="radio" aria-checked="false" title="2 — meh" aria-label="2 stars">★</button><button type="button" class="star" data-star="3" role="radio" aria-checked="false" title="3 — fine" aria-label="3 stars">★</button><button type="button" class="star" data-star="4" role="radio" aria-checked="false" title="4 — good" aria-label="4 stars">★</button><button type="button" class="star" data-star="5" role="radio" aria-checked="false" title="5 — great" aria-label="5 stars">★</button><button type="button" class="star-clear hidden" data-star="0" title="Remove the rating">clear</button></span></div>
+      <label class="field"><span>Comment (optional)</span><textarea id="r-comment" rows="3" placeholder="How it tasted, what you would change — this goes to the AI review, the reports and Beanconqueror"></textarea></label>
+      <div class="row end">
+        <button type="button" id="r-later" class="btn">Later</button>
+        <button type="button" id="r-save" class="btn primary">Save rating</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="confirm-dialog" class="modal">
     <form method="dialog">
       <h2 id="confirm-title">Are you sure?</h2>
@@ -883,6 +905,6 @@
   </dialog>
 
   <div class="toast" id="toast" hidden></div>
-  <script type="module" src="js/main.js?v=0.16.0"></script>
+  <script type="module" src="js/main.js?v=0.17.0"></script>
 </body>
 </html>

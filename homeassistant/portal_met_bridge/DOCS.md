@@ -1,6 +1,6 @@
 # Portal Met Bridge
 
-Logs a Belka Portal's conductivity stream next to each Meticulous espresso shot, estimates strength from your own refractometer readings, and reviews shots with an AI model of your choice. This app runs the small web server on your Home Assistant machine (a Raspberry Pi 5, say) so the page is always up on your LAN and the files it writes stay on the Pi.
+Meticulous & Belka Portal conductivity data visualization & analysis: the page records each Meticulous espresso shot next to the Belka Portal's conductivity stream, visualizes and analyzes the two together, estimates strength from your own refractometer readings, and reviews shots with an AI model of your choice. This app runs the small web server on your Home Assistant machine (a Raspberry Pi 5, say) so the page is always up on your LAN and the files it writes stay on the Pi.
 
 ## How it fits together
 

@@ -324,10 +324,10 @@ await test('recorder: checkpoint recovery finalises an interrupted shot, drops a
 
 import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, splitStages, cumulativeWater } from '../js/review.js';
 import { profileFinalWeight, BEVERAGE_PREFERENCES } from '../js/analysis.js';
-import { parseMarkdown, parseInline, markdownToText, beverageNoteFor, reviewProfileOf, REVIEW_TEMPLATE, buildSeriesComparison } from '../js/review.js';
+import { parseMarkdown, parseInline, markdownToText, beverageNoteFor, reviewProfileOf, REVIEW_TEMPLATE, REVIEW_TEMPLATE_SERIES, buildSeriesComparison, ratingOf } from '../js/review.js';
 import { reviewToDocx, reviewMarkdownFile, reviewFileName, reviewFile, REVIEW_FORMATS, pdfSafe } from '../js/review-export.js';
 import { unzipSync, strFromU8 } from '../vendor/fflate.esm.js';
-import { PROVIDERS, buildRequest, deltaFromEvent, makeSseParser, normalizeModelList, textFromResponse, maskKey, baseUrlFor, isParamRejection, stripOptionalParams, streamCompletion } from '../js/ai.js';
+import { PROVIDERS, buildRequest, deltaFromEvent, makeSseParser, normalizeModelList, textFromResponse, maskKey, baseUrlFor, isParamRejection, stripOptionalParams, streamCompletion, maxTokensFor, finishFromEvent, finishFromResponse } from '../js/ai.js';
 
 await test('review digest: stages, water, cup, EC shares; works without Portal data', () => {
   const demo = makeDemoShot({ seed: 3 });
@@ -859,6 +859,74 @@ await test('https (v0.16): serve.mjs with TLS_* answers on the secure port and h
     srv.kill();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+await test('long reviews (v0.17): the output budget grows with the shots, a cut-off is detected per provider, and a continuation carries the text so far', async () => {
+  assert.equal(maxTokensFor(1), 8000);
+  assert.equal(maxTokensFor(2), 12000);
+  assert.equal(maxTokensFor(3), 16000);
+  assert.equal(maxTokensFor(8), 16000, 'capped under every current model\'s output limit');
+  assert.equal(finishFromEvent('openai', JSON.stringify({ choices: [{ delta: {}, finish_reason: 'length' }] })), 'length');
+  assert.equal(finishFromEvent('openai', JSON.stringify({ choices: [{ delta: { content: 'x' }, finish_reason: null }] })), null);
+  assert.equal(finishFromEvent('anthropic', JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'max_tokens' } })), 'length');
+  assert.equal(finishFromEvent('anthropic', JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'end_turn' } })), 'stop');
+  assert.equal(finishFromEvent('google', JSON.stringify({ candidates: [{ finishReason: 'MAX_TOKENS' }] })), 'length');
+  assert.equal(finishFromResponse('openai', { choices: [{ message: { content: 'x' }, finish_reason: 'stop' }] }), 'stop');
+  const history = [{ role: 'assistant', content: 'first half' }, { role: 'user', content: 'continue' }];
+  const oa = buildRequest('openai', { model: 'm', key: 'k', system: 's', user: 'u', history, maxTokens: 12000 });
+  assert.deepEqual(oa.body.messages.map((m) => m.role), ['system', 'user', 'assistant', 'user']);
+  assert.equal(oa.body.messages[2].content, 'first half');
+  assert.equal(oa.body.max_completion_tokens, 12000);
+  const an = buildRequest('anthropic', { model: 'm', key: 'k', system: 's', user: 'u', history, maxTokens: 12000 });
+  assert.deepEqual(an.body.messages.map((m) => m.role), ['user', 'assistant', 'user']);
+  assert.equal(an.body.max_tokens, 12000);
+  const g = buildRequest('google', { model: 'm', key: 'k', system: 's', user: 'u', history, maxTokens: 12000 });
+  assert.deepEqual(g.body.contents.map((c) => c.role), ['user', 'model', 'user']);
+  assert.equal(g.body.generationConfig.maxOutputTokens, 12000);
+  assert.ok(isParamRejection(400, "Unsupported parameter: 'max_completion_tokens' is not supported") && !('max_completion_tokens' in stripOptionalParams(oa.body)), 'an endpoint that refuses the token limit gets the request without it');
+  // the streamed finish reason reaches onFinish
+  const sse = (events) => new Response(new ReadableStream({ start(c) { for (const e of events) c.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(e)}\n\n`)); c.enqueue(new TextEncoder().encode('data: [DONE]\n\n')); c.close(); } }), { headers: { 'content-type': 'text/event-stream' } });
+  let finish = null;
+  const text = await streamCompletion('openai', { model: 'm', key: 'k', system: 's', user: 'u' }, { fetchImpl: async () => sse([{ choices: [{ delta: { content: 'ab' }, finish_reason: null }] }, { choices: [{ delta: {}, finish_reason: 'length' }] }]), onFinish: (f) => (finish = f) });
+  assert.equal(text, 'ab');
+  assert.equal(finish, 'length');
+  finish = null;
+  await streamCompletion('openai', { model: 'm', key: 'k', system: 's', user: 'u' }, { fetchImpl: async () => sse([{ choices: [{ delta: { content: 'ab' }, finish_reason: null }] }, { choices: [{ delta: {}, finish_reason: 'stop' }] }]), onFinish: (f) => (finish = f) });
+  assert.equal(finish, 'stop');
+});
+
+await test('rating and comment (v0.17): 1–5 stars travel in the digest, the series comparison, the CSV and the templates', () => {
+  assert.equal(ratingOf({ rating: 4 }), 4);
+  assert.equal(ratingOf({ rating: 0 }), null);
+  assert.equal(ratingOf({ rating: 6 }), null);
+  assert.equal(ratingOf({ rating: '3' }), 3);
+  assert.equal(ratingOf({}), null);
+  const d = makeDemoShot({ seed: 21 });
+  const shot = { ...d, id: 'r1', rating: 4, comment: 'sweet, round', context: { doseG: 18, beanName: 'Geishify' } };
+  const digest = buildShotDigest(shot, analyzeShot(shot.portal, shot.machine.map((m) => ({ t: m.t, w: m.w })), { doseG: 18, stopTimeSec: shot.durationSec }));
+  assert.equal(digest.meta.rating, 4);
+  assert.equal(digest.meta.comment, 'sweet, round');
+  const plain = buildShotDigest({ ...shot, rating: undefined, comment: '  ' }, analyzeShot(shot.portal, shot.machine.map((m) => ({ t: m.t, w: m.w })), { doseG: 18, stopTimeSec: shot.durationSec }));
+  assert.equal(plain.meta.rating, null);
+  assert.equal(plain.meta.comment, null);
+  const cmp = buildSeriesComparison([plain, digest]);
+  assert.deepEqual(cmp.shots.map((x) => x.rating), [null, 4]);
+  assert.equal(cmp.shots[1].comment, 'sweet, round');
+  assert.equal(cmp.trends.rating, null, 'one rated shot is not a trend');
+  const third = buildShotDigest({ ...shot, id: 'r3', rating: 5 }, analyzeShot(shot.portal, shot.machine.map((m) => ({ t: m.t, w: m.w })), { doseG: 18, stopTimeSec: shot.durationSec }));
+  const cmp3 = buildSeriesComparison([digest, third]);
+  assert.deepEqual(cmp3.steps[0].changes.rating, { from: 4, to: 5, delta: 1 });
+  assert.equal(cmp3.trends.rating.direction, 'rising');
+  const row = summaryRow(shot, null, null);
+  assert.equal(row[SUMMARY_COLUMNS.indexOf('rating')], 4);
+  assert.equal(row[SUMMARY_COLUMNS.indexOf('comment')], 'sweet, round');
+  assert.equal(summaryRow({ ...shot, rating: undefined, comment: undefined }, null, null)[SUMMARY_COLUMNS.indexOf('rating')], '');
+  for (const t of [REVIEW_TEMPLATE, REVIEW_TEMPLATE_SERIES]) {
+    assert.ok(t.includes('### Stage by stage') && t.includes('### One change per shot') && t.includes('"worked well", "acceptable" or "needs work"'), 'Suggested changes starts with a verdict per stage');
+    assert.ok(t.includes('meta.rating') && t.includes('meta.comment'), 'the model is told what the rating means');
+  }
+  const md = parseMarkdown('## Suggested changes\n\n### Stage by stage\n\n- **Bloom**: 8 s — worked well — keep as is\n\n### One change per shot\n\n1. Grind finer.\n');
+  assert.deepEqual(md.filter((b) => b.type === 'heading').map((b) => b.level), [2, 3, 3]);
 });
 
 await test('release: every version stamp agrees with package.json (tools/bump-version.mjs keeps them in step)', () => {

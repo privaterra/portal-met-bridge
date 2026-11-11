@@ -1,21 +1,21 @@
 // main.js — wires the devices, the recorder, storage, charts and export together.
 
-import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.16.0';
-import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, machineBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.16.0';
-import { MachinePanel } from './machine-panel.js?v=0.16.0';
-import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.16.0';
-import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.16.0';
-import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.16.0';
-import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, profileFinalWeight, setBeveragePreference, grindMicrons, measuredEy, DEFAULTS } from './analysis.js?v=0.16.0';
-import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, approxTokens, reviewProfileOf } from './review.js?v=0.16.0';
-import { PROVIDERS, streamCompletion, listModels, testKey, maskKey } from './ai.js?v=0.16.0';
-import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.16.0';
-import { makeDemoShot } from './demo.js?v=0.16.0';
-import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug, loadJsPdf } from './export.js?v=0.16.0';
-import { REVIEW_FORMATS, reviewFile, reviewMarkdownFile } from './review-export.js?v=0.16.0';
-import { log, formatLine } from './log.js?v=0.16.0';
-import { files, Files, FILE_KINDS, DEFAULT_ROOT, cleanDirName } from './files.js?v=0.16.0';
-import { HeatMonitor, HEAT_RULES, HEAT_SENSORS, sensorTemp } from './heat.js?v=0.16.0';
+import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.17.0';
+import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, machineBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.17.0';
+import { MachinePanel } from './machine-panel.js?v=0.17.0';
+import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.17.0';
+import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.17.0';
+import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.17.0';
+import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, profileFinalWeight, setBeveragePreference, grindMicrons, measuredEy, DEFAULTS } from './analysis.js?v=0.17.0';
+import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, approxTokens, reviewProfileOf, ratingOf } from './review.js?v=0.17.0';
+import { PROVIDERS, streamCompletion, listModels, testKey, maskKey, maxTokensFor } from './ai.js?v=0.17.0';
+import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.17.0';
+import { makeDemoShot } from './demo.js?v=0.17.0';
+import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug, loadJsPdf } from './export.js?v=0.17.0';
+import { REVIEW_FORMATS, reviewFile, reviewMarkdownFile } from './review-export.js?v=0.17.0';
+import { log, formatLine } from './log.js?v=0.17.0';
+import { files, Files, FILE_KINDS, DEFAULT_ROOT, cleanDirName } from './files.js?v=0.17.0';
+import { HeatMonitor, HEAT_RULES, HEAT_SENSORS, sensorTemp } from './heat.js?v=0.17.0';
 import qrcode from '../vendor/qrcode.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -87,6 +87,7 @@ const SETTINGS = {
   minShotSec: { def: 5, el: 'set-min-shot', num: true, min: 0, max: 60 },
   autoGraph: { def: true, el: 'portal-auto-graph', bool: true },
   beverageDefault: { def: 'profile', el: 'set-beverage-default' },
+  askRating: { def: true, el: 'set-ask-rating', bool: true },
   fileDestination: { def: 'auto', el: 'set-file-destination' },
   fileRoot: { def: DEFAULT_ROOT, el: 'set-dir-root', dir: '' },
   dirShots: { def: FILE_KINDS.shots.def, el: 'set-dir-shots', dir: FILE_KINDS.shots.def },
@@ -297,7 +298,7 @@ async function resetSettings() {
 // Human-readable names for the save bar.
 const SETTING_LABELS = {
   meticulousHost: 'machine address', autoConnectMeticulous: 'connect on open', autoAttach: 'attach machine record', attachDelaySec: 'attach delay',
-  autoRecord: 'auto-record', machineVia: 'machine reached via', heatRule: 'ready-to-brew rule', heatSensor: 'temperature reading', heatToleranceC: 'temperature tolerance', heatHoldSec: 'hold time', heatSettleC: 'settled threshold', settleSec: 'settle window', lagSec: 'Portal lag', minShotSec: 'minimum shot length', autoGraph: 'Portal screen', autoSaveFiles: 'write shot files', beverageDefault: 'final weight',
+  autoRecord: 'auto-record', machineVia: 'machine reached via', heatRule: 'ready-to-brew rule', heatSensor: 'temperature reading', heatToleranceC: 'temperature tolerance', heatHoldSec: 'hold time', heatSettleC: 'settled threshold', settleSec: 'settle window', lagSec: 'Portal lag', minShotSec: 'minimum shot length', autoGraph: 'Portal screen', autoSaveFiles: 'write shot files', beverageDefault: 'final weight', askRating: 'ask for a rating',
   minCalibrationShots: 'reference shots', estimatePool: 'estimate pool', logEnabled: 'logging', logLevel: 'log detail', logPackets: 'packet logging',
   logShowTail: 'live tail', fileDestination: 'where files go', fileRoot: 'root folder', dirShots: 'shot files folder', dirExports: 'exports folder', dirReports: 'reports folder',
   dirReviews: 'reviews folder', dirBackups: 'backups folder', dirLogs: 'logs folder', autoBackup: 'automatic backup',
@@ -409,8 +410,8 @@ async function init() {
   await probeAppServer().catch(() => {});
   renderMachineVia();
   renderLogStatus();
-  $('about-version').textContent = 'v0.16.0';
-  log.info('app', `portal-met-bridge v0.16.0 started · ${navigator.userAgent}`);
+  $('about-version').textContent = 'v0.17.0';
+  log.info('app', `portal-met-bridge v0.17.0 started · ${navigator.userAgent}`);
 
   const env = await environmentCheck();
   renderPortalSteps({ secure: env.secure, api: env.api, adapter: env.adapter });
@@ -841,7 +842,10 @@ recorder.addEventListener('shot', async (e) => {
   selectShot(shot.id);
   log.info('recorder', `saved shot ${shot.id}: ${fmt(shot.finalWeightG, 1)} g in ${fmt(shot.durationSec, 1)} s, ${shot.machine.length} machine + ${shot.portal.length} Portal samples`);
   toast(`Saved shot — ${fmt(shot.finalWeightG, 1)} g in ${fmt(shot.durationSec, 1)} s`);
-  if (settings.beverageDefault === 'manual') setTimeout(() => openWeightDialog(shot.id), 400); // the final weight is yours to type
+  if (settings.beverageDefault === 'manual') {
+    if (settings.askRating) pendingRating = shot.id; // the rating dialog follows the weight dialog
+    setTimeout(() => openWeightDialog(shot.id), 400); // the final weight is yours to type
+  } else if (settings.askRating) setTimeout(() => openRatingDialog(shot.id), 400);
   if (settings.autoSaveFiles) autosaveShotFiles(shot).catch(() => {});
   if (settings.autoAttach && meticulous?.connected && !shot.manual) setTimeout(() => refreshFromMachine(shot.id, true), settings.attachDelaySec * 1000);
 });
@@ -1045,6 +1049,109 @@ $('weight-dialog').addEventListener('keydown', (e) => {
   }
 });
 $('shot-weigh').addEventListener('click', () => state.selected && openWeightDialog(state.selected.id));
+let pendingRating = null; // a shot whose rating dialog waits for the weight dialog to close
+$('weight-dialog').addEventListener('close', () => {
+  if (!pendingRating) return;
+  const id = pendingRating;
+  pendingRating = null;
+  setTimeout(() => openRatingDialog(id), 150);
+});
+
+// ---- rating and comment: 1–5 stars and a few words on the cup, editable any time
+
+const STAR_WORDS = ['', 'poor', 'meh', 'fine', 'good', 'great'];
+
+/** Five star buttons; `name` scopes the radio group so several pickers can be on the page. */
+function starPickerHtml(name, value = 0) {
+  return `<span class="stars" role="radiogroup" aria-label="Rating">${[1, 2, 3, 4, 5].map((n) => `<button type="button" class="star${n <= value ? ' on' : ''}" data-star="${n}" role="radio" aria-checked="${n === value}" title="${n} — ${STAR_WORDS[n]}" aria-label="${n} star${n > 1 ? 's' : ''}">★</button>`).join('')}<button type="button" class="star-clear${value ? '' : ' hidden'}" data-star="0" title="Remove the rating">clear</button></span>`;
+}
+/** Read-only stars for lists; empty string when unrated. */
+function starsHtml(rating, { comment = '', compact = false } = {}) {
+  const r = ratingOf({ rating });
+  if (!r) return '';
+  const t = `${r}/5${STAR_WORDS[r] ? ` — ${STAR_WORDS[r]}` : ''}${comment ? `\n${comment}` : ''}`;
+  return `<span class="stars ro" title="${esc(t)}" aria-label="rated ${r} of 5">${compact ? `★${r}` : '★'.repeat(r) + '<span class="dim">' + '★'.repeat(5 - r) + '</span>'}</span>`;
+}
+/** Wire a star picker: clicking a star sets the value; data-value on the group holds it. */
+function bindStarPicker(group, onChange) {
+  group.addEventListener('click', (ev) => {
+    const b = ev.target.closest('button[data-star]');
+    if (!b) return;
+    ev.preventDefault();
+    const v = Number(b.dataset.star);
+    setStarPicker(group, v);
+    onChange?.(v);
+  });
+}
+function setStarPicker(group, v) {
+  group.dataset.value = String(v || 0);
+  group.querySelectorAll('button.star').forEach((x) => {
+    const n = Number(x.dataset.star);
+    x.classList.toggle('on', n <= v && v > 0);
+    x.setAttribute('aria-checked', String(n === v));
+  });
+  group.querySelector('.star-clear')?.classList.toggle('hidden', !v);
+}
+const starPickerValue = (group) => ratingOf({ rating: Number(group?.dataset.value) }) || 0;
+
+async function openRatingDialog(id) {
+  const shot = await store.getShot(id);
+  if (!shot) return;
+  const dlg = $('rating-dialog');
+  dlg.dataset.id = id;
+  $('r-title').textContent = `${ratingOf(shot) ? 'Your rating' : 'How was it?'} — ${fmtDate(shot.startedAt)}${shot.context?.beanName ? ` · ${shot.context.beanName}` : ''}`;
+  $('r-sub').textContent = [shot.profileName, shot.context?.doseG ? `${shot.context.doseG} g → ${fmt(beverageOf(shot), 1)} g` : null, `${fmt(shot.durationSec, 1)} s`].filter(Boolean).join(' · ');
+  setStarPicker($('r-stars'), ratingOf(shot) || 0);
+  $('r-comment').value = shot.comment || '';
+  if (!dlg.open) dlg.showModal();
+  ($('r-stars').querySelector('button.star.on:last-of-type') || $('r-stars').querySelector('button.star')).focus();
+}
+async function saveRatingDialog() {
+  const dlg = $('rating-dialog');
+  const shot = await store.getShot(dlg.dataset.id);
+  if (!shot) return dlg.close();
+  await setShotRating(shot, starPickerValue($('r-stars')), $('r-comment').value);
+  dlg.close();
+  toast(ratingOf(shot) ? `Rated ${ratingOf(shot)}/5${shot.comment ? ' with a comment' : ''}.` : shot.comment ? 'Comment saved.' : 'Rating cleared.');
+}
+/** Store a rating (1–5, 0 clears) and comment on a shot, then refresh every place that shows them. */
+async function setShotRating(shot, rating, comment) {
+  const r = ratingOf({ rating });
+  if (r) shot.rating = r;
+  else delete shot.rating;
+  const text = String(comment ?? '').trim();
+  if (text) shot.comment = text.slice(0, 2000);
+  else delete shot.comment;
+  await store.putShot(shot);
+  if (shot.files && settings.autoSaveFiles) autosaveShotFiles(shot).catch(() => {});
+  await refreshShotList();
+  if (state.selected?.id === shot.id) {
+    state.selected = shot;
+    renderShotRating(shot);
+  }
+  renderHistory();
+  if (!$('view-analysis').hidden) renderAnalysis();
+  log.info('shots', `rating for ${shot.id}: ${shot.rating ?? 'none'}${shot.comment ? ' + comment' : ''}`);
+}
+/** The stars and comment under the shot title: click a star to rate, the pencil to write. */
+function renderShotRating(shot) {
+  const box = $('shot-rating');
+  if (!shot) { box.innerHTML = ''; return; }
+  const r = ratingOf(shot) || 0;
+  box.innerHTML = `${starPickerHtml('shot', r)}<button type="button" class="linkish" id="shot-rate-edit" title="Rate this shot and write a comment">${shot.comment ? 'Edit comment' : r ? 'Add a comment' : 'Rate this shot'}</button>${shot.comment ? `<span class="comment">${esc(shot.comment)}</span>` : ''}`;
+  const picker = box.querySelector('.stars');
+  setStarPicker(picker, r);
+  bindStarPicker(picker, (v) => setShotRating(shot, v, shot.comment));
+  $('shot-rate-edit').addEventListener('click', () => openRatingDialog(shot.id));
+}
+$('r-save').addEventListener('click', saveRatingDialog);
+$('r-later').addEventListener('click', () => $('rating-dialog').close());
+bindStarPicker($('r-stars'));
+bindStarPicker($('e-stars'));
+$('rating-dialog').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.target.id !== 'r-comment') { e.preventDefault(); saveRatingDialog(); }
+  if (/^[1-5]$/.test(e.key) && e.target.id !== 'r-comment') { e.preventDefault(); setStarPicker($('r-stars'), Number(e.key)); }
+});
 
 /** Short words for where a shot's beverage weight comes from. */
 const BEVERAGE_SOURCE_LABEL = { weighed: 'weighed by hand', reading: 'weighed with the reading', profile: 'profile target', scale: "machine's scale" };
@@ -1070,7 +1177,7 @@ function histMatches(shot) {
   const q = hist.search.trim().toLowerCase();
   if (q) {
     const c = shot.context || {};
-    const hay = [c.beanName, c.roaster, c.origin, c.grinderName, c.grindSize, c.note, c.roastLevel, c.process, shot.profileName, fmtDate(shot.startedAt)].join(' ').toLowerCase();
+    const hay = [c.beanName, c.roaster, c.origin, c.grinderName, c.grindSize, c.note, c.roastLevel, c.process, shot.profileName, fmtDate(shot.startedAt), shot.comment].join(' ').toLowerCase();
     if (!hay.includes(q)) return false;
   }
   switch (hist.filter) {
@@ -1092,6 +1199,7 @@ function histSortValue(shot, key) {
     case 'finalWeightG': return beverageOf(shot) ?? -1;
     case 'ratio': return ratioOf(shot) ?? -1;
     case 'grind': return grindMicrons(shot.context) ?? -1;
+    case 'rating': return ratingOf(shot) ?? -1;
     default: return shot[key] ?? -1;
   }
 }
@@ -1144,6 +1252,7 @@ function renderHistory() {
       `<td class="num">${fmt(s.durationSec, 0)} s</td>` +
       `<td class="num ec">${Number.isFinite(a?.meanEcPerG) ? a.meanEcPerG.toFixed(2) : '–'}</td>` +
       `<td class="num tds">${Number.isFinite(tds.v) ? (tds.measured ? `<b>${tds.v.toFixed(2)}</b>` : `<i>~${tds.v.toFixed(2)}</i>`) : '–'}</td>` +
+      `<td class="rating">${s.inProgress ? '' : ratingOf(s) ? `<button class="linkish rate" data-act="rate" title="${esc(`${ratingOf(s)}/5 — ${STAR_WORDS[ratingOf(s)]}${s.comment ? `\n${s.comment}` : ''}`)}">${starsHtml(s.rating, { compact: true })}${s.comment ? '<span class="has-comment" aria-label="has a comment">💬</span>' : ''}</button>` : `<button class="linkish rate unrated" data-act="rate" title="${s.comment ? esc(s.comment) + '\n' : ''}Not rated yet — rate it">${s.comment ? '💬' : '☆'}</button>`}</td>` +
       `<td class="data">${data}</td>` +
       `<td class="actions">${s.inProgress ? '' : '<button class="btn small" data-act="open">Open</button><button class="btn small" data-act="edit">Edit</button><button class="btn small danger" data-act="delete">Delete</button>'}</td>`;
     tbody.appendChild(tr);
@@ -1182,6 +1291,7 @@ async function onHistoryClick(ev) {
   const act = ev.target.closest('button[data-act]')?.dataset.act;
   if (act === 'open') return selectShot(id, { show: true });
   if (act === 'weigh') return openWeightDialog(id);
+  if (act === 'rate') return openRatingDialog(id);
   if (act === 'edit') return openShotDialog(await store.getShot(id));
   if (act === 'delete') return deleteShots([id]);
   selectShot(id);
@@ -1365,6 +1475,8 @@ function openShotDialog(shot) {
   $('e-dose').value = c.doseG || '';
   $('e-grind').value = (c.grindSize || '').replace(/\s*µm$/, '');
   $('e-note').value = c.note || '';
+  setStarPicker($('e-stars'), ratingOf(shot) || 0);
+  $('e-comment').value = shot.comment || '';
   $('e-tds').value = shot.refractometer?.tdsPct ?? '';
   // Beverage weighed is a field of the shot in its own right: editable with or without a reading.
   $('e-bev').value = Number.isFinite(shot.beverageG) && shot.beverageG > 0 ? shot.beverageG : '';
@@ -1394,6 +1506,12 @@ async function saveShotDialog() {
   const weighed = Number($('e-bev').value);
   if (weighed > 0 && weighed < 5000) shot.beverageG = Math.round(weighed * 10) / 10;
   else delete shot.beverageG; // blank → back to the profile target or the machine's scale
+  const rating = starPickerValue($('e-stars'));
+  if (rating) shot.rating = rating;
+  else delete shot.rating;
+  const comment = $('e-comment').value.trim();
+  if (comment) shot.comment = comment.slice(0, 2000);
+  else delete shot.comment;
   const tds = Number($('e-tds').value);
   if (tds > 0 && tds < 30) {
     // EY is recomputed wherever it is shown (measuredEy), so the beverage setting can change later; the value here is a snapshot for exports.
@@ -1429,6 +1547,7 @@ function renderShot() {
     shot.recovered ? 'recovered from a checkpoint' : null,
     (() => { $('shot-weigh').hidden = !(settings.beverageDefault === 'manual' && !(shot.beverageG > 0)); return null; })(),
   ].filter(Boolean).join(' · ');
+  renderShotRating(shot);
   $('shot-files-note').textContent = shot.files?.json ? `This shot's JSON and CSV were written to ${shot.files.json.replace(/[^/]+$/, '')} at ${new Date(shot.files.at).toLocaleTimeString()}.` : '';
   $('shot-delete').disabled = false;
   $('shot-edit').disabled = false;
@@ -1720,7 +1839,7 @@ async function renderExport() {
 
 async function fullLink() {
   const shot = state.selected;
-  const env = buildEnvelope(shot, state.analysis, state.estimate, shot.context || {});
+  const env = buildEnvelope(shot, state.analysis, state.estimate, { ...(shot.context || {}), rating: ratingOf(shot) ?? undefined, comment: shot.comment || '' });
   return { env, ...(await encodeHandoff(env)) };
 }
 
@@ -1810,7 +1929,20 @@ async function downloadJpegs() {
   }
 }
 
-function reportFor(shot, analysis, estimate, fit, images) {
+/**
+ * The newest saved AI review that covers this shot (alone or as part of a
+ * series), with the heading the PDF report gives it; null when none is saved.
+ * `reviews` is store.listReviews()'s list, newest first.
+ */
+function reviewForShot(shotId, reviews) {
+  const rev = (reviews || []).find((r) => Array.isArray(r.shotIds) && r.shotIds.includes(shotId) && r.markdown);
+  if (!rev) return null;
+  const n = rev.shotIds.length;
+  const when = `${fmtDate(rev.createdAt)} · ${PROVIDERS[rev.provider]?.label || rev.provider || 'AI'} · ${rev.model || ''}`.replace(/ · $/, '');
+  return { review: rev, heading: n > 1 ? `AI review of ${n} shots including this one (${when})` : `AI review of this shot (${when})` };
+}
+
+function reportFor(shot, analysis, estimate, fit, images, review = null) {
   const c = shot.context || {};
   const a = analysis || {};
   const metrics = [
@@ -1824,7 +1956,9 @@ function reportFor(shot, analysis, estimate, fit, images) {
     ['Profile target', profileTargetOf(shot) > 0 ? `${fmt(profileTargetOf(shot), 1)} g` : '–'],
     ['Extraction', `${fmt(shot.durationSec, 1)} s`],
     ['Samples', `${shot.machine?.length ?? 0} machine · ${shot.portal?.length ?? 0} Portal`],
+    ['Your rating', ratingOf(shot) ? `${'★'.repeat(ratingOf(shot))}${'☆'.repeat(5 - ratingOf(shot))} ${ratingOf(shot)}/5` : 'not rated'],
     ['Analysis', a.status || '–'],
+    ['AI review', review ? `${review.review.shotIds.length > 1 ? `${review.review.shotIds.length} shots` : 'this shot'} · ${fmtDate(review.review.createdAt)} (appended)` : 'none saved'],
     ['Mean EC per g', `${fmt(a.meanEcPerG, 3)} mS/cm`],
     ['∫EC dm', `${fmt(a.integralEcG, 1)} mS·g/cm`],
     ['Peak EC', `${fmt(a.mainPeakEc, 3)} at ${fmt(a.mainPeakMassG, 1)} g`],
@@ -1843,6 +1977,7 @@ function reportFor(shot, analysis, estimate, fit, images) {
     ['k (proportional)', fit?.proportional ? `${fit.proportional.k.toFixed(3)} ± ${isFinite(fit.proportional.loocvRmse) ? fit.proportional.loocvRmse.toFixed(2) : '–'} % TDS` : '–'],
   ];
   const notes = [...(estimate?.flags || [])];
+  if (shot.comment) notes.push(`Your comment: ${shot.comment}`);
   if (c.note) notes.push(c.note);
   notes.push('EC is a conductivity proxy; TDS/EY here are estimates from refractometer calibration unless a refractometer reading is shown.');
   const imgs = [];
@@ -1855,6 +1990,8 @@ function reportFor(shot, analysis, estimate, fit, images) {
     metrics,
     estimate: est,
     notes,
+    review: review?.review || null,
+    reviewHeading: review?.heading || null,
   };
 }
 
@@ -1864,7 +2001,8 @@ async function downloadPdf() {
   toast('Building the PDF…');
   try {
     const images = await chartImages(shot, state.analysis);
-    const blob = await shotReportPdf(reportFor(shot, state.analysis, state.estimate, state.fit, images));
+    const review = reviewForShot(shot.id, await store.listReviews({ limit: 100000 }));
+    const blob = await shotReportPdf(reportFor(shot, state.analysis, state.estimate, state.fit, images, review));
     deliver(`${fileBase(shot)}-report.pdf`, blob, 'application/pdf', 'reports');
   } catch (err) {
     toast('PDF failed: ' + (err.message || err), 'error');
@@ -1901,8 +2039,9 @@ async function downloadZip() {
   const files = {};
   files['shots-summary.csv'] = rowsToCsv([SUMMARY_COLUMNS, ...all.map(({ shot, analysis, estimate }) => summaryRow(shot, analysis, estimate))]);
   files['backup.json'] = JSON.stringify(await store.exportAll());
-  files['README.txt'] = `portal-met-bridge export — ${new Date().toString()}\n\nshots-summary.csv   one row per shot (EC metrics, refractometer reading, estimate)\nbackup.json         full backup; restore it with the Restore button\nshots/<shot>/       samples.csv, shot.json, time.jpg, ec-vs-mass.jpg, report.pdf per shot\n\nEC is a conductivity proxy; TDS/EY are estimates from refractometer calibration unless a refractometer reading is present.\n`;
+  files['README.txt'] = `portal-met-bridge export — ${new Date().toString()}\n\nshots-summary.csv   one row per shot (EC metrics, refractometer reading, estimate)\nbackup.json         full backup; restore it with the Restore button\nshots/<shot>/       samples.csv, shot.json, time.jpg, ec-vs-mass.jpg, report.pdf per shot (the report ends with the newest saved AI review that covers the shot, when there is one)\n\nEC is a conductivity proxy; TDS/EY are estimates from refractometer calibration unless a refractometer reading is present.\n`;
   const selectedId = state.selected?.id;
+  const reviews = await store.listReviews({ limit: 100000 });
   let i = 0;
   for (const { shot, analysis, estimate, fit } of all) {
     i++;
@@ -1918,7 +2057,7 @@ async function downloadZip() {
       const images = await chartImages(shot, analysis);
       files[`${dir}/time.jpg`] = images.time.blob;
       if (images.mass) files[`${dir}/ec-vs-mass.jpg`] = images.mass.blob;
-      files[`${dir}/report.pdf`] = await shotReportPdf(reportFor(shot, analysis, estimate, fit, images));
+      files[`${dir}/report.pdf`] = await shotReportPdf(reportFor(shot, analysis, estimate, fit, images, reviewForShot(shot.id, reviews)));
     } catch (err) {
       files[`${dir}/ERROR.txt`] = String(err?.message || err);
     }
@@ -2971,7 +3110,7 @@ $('brew-load').addEventListener('click', async () => {
 // -------------------------------------------------------------- AI review --
 
 const REVIEW_MAX = 8;
-const an = { ids: [], search: '', running: false, failed: false, abort: null, markdown: '', digests: [], shots: [], meta: null, savedId: null, chartShotId: null, chart: null, confirmed: new Set(), pending: new Map() };
+const an = { ids: [], search: '', running: false, failed: false, abort: null, markdown: '', digests: [], shots: [], meta: null, savedId: null, chartShotId: null, chart: null, confirmed: new Set(), pending: new Map(), request: null, cutOff: false, continued: 0 };
 
 /** Provider, key and model currently chosen in Settings. */
 function aiConfig() {
@@ -3080,7 +3219,7 @@ function renderAnalysisList() {
       const on = an.ids.includes(s.id);
       const c = s.context || {};
       const tags = [s.portal?.length ? `P ${s.portal.length}` : 'no Portal', s.machineShotId ? 'record' : 'live', c.grindSize ? `${esc(c.grindSize)}` : ''].filter(Boolean);
-      return `<li class="${on ? 'on' : ''}"><label><input type="checkbox" data-id="${esc(s.id)}" ${on ? 'checked' : ''} /> <span class="when">${esc(fmtDate(s.startedAt))}</span> <span class="what">${esc(c.beanName || 'unnamed coffee')} <small>${esc(s.profileName || '')}</small></span> <span class="tags">${tags.map((t) => `<span class="tag">${t}</span>`).join('')}</span></label></li>`;
+      return `<li class="${on ? 'on' : ''}"><label><input type="checkbox" data-id="${esc(s.id)}" ${on ? 'checked' : ''} /> <span class="when">${esc(fmtDate(s.startedAt))}</span> <span class="what">${esc(c.beanName || 'unnamed coffee')} <small>${esc(s.profileName || '')}</small></span> ${starsHtml(s.rating, { comment: s.comment, compact: true })}<span class="tags">${tags.map((t) => `<span class="tag">${t}</span>`).join('')}</span></label></li>`;
     })
     .join('');
   if (!shown.length) ul.innerHTML = `<li class="empty">${state.shots.length ? 'No shot matches.' : 'No shots recorded yet.'}</li>`;
@@ -3376,7 +3515,7 @@ function renderAnalysisDigest() {
   $('an-digest').innerHTML = items
     .map(({ shot, digest }) => {
       const m = digest.meta;
-      const head = `<h3>${esc(shotLabel(shot))}</h3><p class="hint">${[m.profile ? `${m.profile}${shot.reviewProfile ? ' (profile chosen for this review)' : m.recordedProfile === undefined && !shot.machineSource?.profile ? ' (name only)' : ''}` : 'profile unknown', m.grindUm ? `${fmt(m.grindUm, 0)} µm` : 'no grind recorded', m.doseG ? `${fmt(m.doseG, 1)} g in` : 'no dose', `${fmt(m.beverageG, 1)} g out (${m.beverageSource === 'profile' ? 'profile target' : m.beverageSource === 'weighed' ? 'weighed' : 'scale'})`, m.ratio ? `1 : ${fmt(m.ratio, 2)}` : null, `${fmt(m.durationSec, 1)} s`, m.profileTargetG ? `target ${fmt(m.profileTargetG, 1)} g` : null, m.profileTemperatureC ? `setpoint ${fmt(m.profileTemperatureC, 0)} °C` : null, digest.ec ? `mean EC/g ${fmt(digest.ec.meanEcPerG, 3)}` : null].filter(Boolean).join(' · ')}</p>`;
+      const head = `<h3>${esc(shotLabel(shot))}</h3><p class="hint">${[m.profile ? `${m.profile}${shot.reviewProfile ? ' (profile chosen for this review)' : m.recordedProfile === undefined && !shot.machineSource?.profile ? ' (name only)' : ''}` : 'profile unknown', m.grindUm ? `${fmt(m.grindUm, 0)} µm` : 'no grind recorded', m.doseG ? `${fmt(m.doseG, 1)} g in` : 'no dose', `${fmt(m.beverageG, 1)} g out (${m.beverageSource === 'profile' ? 'profile target' : m.beverageSource === 'weighed' ? 'weighed' : 'scale'})`, m.ratio ? `1 : ${fmt(m.ratio, 2)}` : null, `${fmt(m.durationSec, 1)} s`, m.profileTargetG ? `target ${fmt(m.profileTargetG, 1)} g` : null, m.profileTemperatureC ? `setpoint ${fmt(m.profileTemperatureC, 0)} °C` : null, digest.ec ? `mean EC/g ${fmt(digest.ec.meanEcPerG, 3)}` : null, m.rating ? `rated ${m.rating}/5` : 'not rated'].filter(Boolean).join(' · ')}${m.comment ? `<br><em>“${esc(m.comment)}”</em>` : ''}</p>`;
       const gaps = digest.gaps.length ? `<ul class="gaps">${digest.gaps.map((g) => `<li>${esc(g)}</li>`).join('')}</ul>` : '';
       return `<div class="an-shot">${head}${gaps}${stageTable(digest)}</div>`;
     })
@@ -3412,6 +3551,7 @@ function renderReport() {
   $('an-report-title').textContent = m?.title || 'Review';
   $('an-report-meta').textContent = m ? `${fmtDate(m.createdAt)} · ${PROVIDERS[m.provider]?.label || m.provider} · ${m.model}${m.durationMs ? ` · ${(m.durationMs / 1000).toFixed(0)} s` : ''}${an.savedId ? ' · saved' : ''}` : '';
   const done = !!an.markdown && !an.running;
+  $('an-continue').hidden = !(done && an.cutOff && an.request);
   $('an-save').disabled = !done || !!an.savedId || an.failed;
   $('an-save').textContent = an.savedId ? 'Saved' : 'Save review';
   $('an-download').disabled = !done;
@@ -3438,26 +3578,26 @@ async function runReview() {
   $('an-run').disabled = true;
   const status = $('an-status');
   const t0 = performance.now();
-  const tick = setInterval(() => (status.textContent = `${PROVIDERS[provider].label} is writing… ${((performance.now() - t0) / 1000).toFixed(0)} s`), 500);
+  const tick = setInterval(() => (status.textContent = `${PROVIDERS[provider].label} is ${an.continued ? `continuing after the length limit (part ${an.continued + 1})` : 'writing'}… ${((performance.now() - t0) / 1000).toFixed(0)} s`), 500);
   status.textContent = `Sending ${approxTokens(system + user).toLocaleString()} tokens to ${PROVIDERS[provider].label}…`;
   renderReport();
-  log.info('ai', `review started: ${provider}/${model}, ${items.length} shot(s)`);
+  const maxTokens = maxTokensFor(items.length);
+  an.request = { provider, key, model, baseUrl, system, user, maxTokens };
+  an.cutOff = false;
+  an.continued = 0;
+  log.info('ai', `review started: ${provider}/${model}, ${items.length} shot(s), up to ${maxTokens} output tokens`);
   try {
-    await streamCompletion(
-      provider,
-      { key, model, baseUrl, system, user },
-      {
-        signal: ctrl.signal,
-        onRetry: (err) => log.warn('ai', `${model} refused a sampling parameter (${err.detail || err.message}); retrying without it`),
-        onDelta: (d) => {
-          an.markdown += d;
-          if (!reportRenderTimer) reportRenderTimer = setTimeout(() => { reportRenderTimer = null; renderReport(); }, 150);
-        },
-      },
-    );
+    let finish = await streamReviewPart(an.request, ctrl.signal);
+    // A series review can run past the model's output limit; ask for the rest, picking up where it stopped.
+    while (finish === 'length' && an.continued < 2) {
+      an.continued++;
+      log.info('ai', `review cut off at ${an.markdown.length} chars; continuing (${an.continued})`);
+      finish = await streamReviewPart(an.request, ctrl.signal, an.markdown);
+    }
+    an.cutOff = finish === 'length';
     an.meta.durationMs = performance.now() - t0;
-    status.textContent = `Done in ${(an.meta.durationMs / 1000).toFixed(0)} s.`;
-    log.info('ai', `review finished: ${an.markdown.length} chars in ${(an.meta.durationMs / 1000).toFixed(1)} s`);
+    status.textContent = an.cutOff ? `Stopped at the model's length limit after ${(an.meta.durationMs / 1000).toFixed(0)} s — the report is cut off; press Continue for the rest.` : `Done in ${(an.meta.durationMs / 1000).toFixed(0)} s${an.continued ? ` (in ${an.continued + 1} parts)` : ''}.`;
+    log.info('ai', `review finished: ${an.markdown.length} chars in ${(an.meta.durationMs / 1000).toFixed(1)} s${an.cutOff ? ' (cut off)' : ''}`);
   } catch (err) {
     if (err?.name === 'AbortError') {
       status.textContent = 'Stopped.';
@@ -3480,6 +3620,63 @@ async function runReview() {
 }
 $('an-run').addEventListener('click', runReview);
 $('an-stop').addEventListener('click', () => an.abort?.abort());
+
+/**
+ * One streamed answer appended to an.markdown. With `sofar` the request
+ * continues the conversation: the text so far as the assistant's turn, then
+ * "continue where you stopped". Returns the finish reason ('stop' | 'length').
+ */
+async function streamReviewPart(req, signal, sofar = '') {
+  let finish = 'stop';
+  const history = sofar ? [{ role: 'assistant', content: sofar }, { role: 'user', content: 'Your report was cut off by the output limit. Continue it exactly where it stopped — do not repeat anything already written, do not restart a section or add a preamble, begin mid-sentence if that is where it stopped, and keep the same section outline through to Sources.' }] : [];
+  await streamCompletion(
+    req.provider,
+    { key: req.key, model: req.model, baseUrl: req.baseUrl, system: req.system, user: req.user, history, maxTokens: req.maxTokens },
+    {
+      signal,
+      onRetry: (err) => log.warn('ai', `${req.model} refused a sampling parameter (${err.detail || err.message}); retrying without it`),
+      onFinish: (f) => (finish = f || 'stop'),
+      onDelta: (d) => {
+        an.markdown += d;
+        if (!reportRenderTimer) reportRenderTimer = setTimeout(() => { reportRenderTimer = null; renderReport(); }, 150);
+      },
+    },
+  );
+  return finish;
+}
+
+/** Continue a report the model cut off (manual, after the automatic attempts). */
+async function continueReview() {
+  if (an.running || !an.cutOff || !an.request) return;
+  an.running = true;
+  const ctrl = new AbortController();
+  an.abort = ctrl;
+  $('an-stop').hidden = false;
+  $('an-continue').hidden = true;
+  const status = $('an-status');
+  const t0 = performance.now();
+  status.textContent = `${PROVIDERS[an.request.provider].label} is continuing…`;
+  try {
+    an.continued++;
+    const finish = await streamReviewPart(an.request, ctrl.signal, an.markdown);
+    an.cutOff = finish === 'length';
+    an.meta.durationMs += performance.now() - t0;
+    status.textContent = an.cutOff ? 'Still cut off at the length limit — press Continue again.' : `Done (in ${an.continued + 1} parts).`;
+  } catch (err) {
+    if (err?.name === 'AbortError') status.textContent = 'Stopped.';
+    else {
+      status.textContent = '';
+      toast(err?.message || String(err), 'error');
+    }
+  } finally {
+    an.running = false;
+    an.abort = null;
+    $('an-stop').hidden = true;
+    renderAiSettings();
+    renderReport();
+  }
+}
+$('an-continue').addEventListener('click', continueReview);
 
 /** Write a review in the chosen format (md / docx / pdf) to the save folder or the downloads. */
 async function downloadReview(rev, fmt = settings.reviewFormat || 'md') {
@@ -3541,6 +3738,9 @@ $('an-saved-rows').addEventListener('click', async (e) => {
     an.pending = new Map();
     an.markdown = rev.markdown;
     an.failed = false;
+    an.request = null;
+    an.cutOff = false;
+    an.continued = 0;
     an.meta = { createdAt: rev.createdAt, provider: rev.provider, model: rev.model, title: rev.title, shotIds: rev.shotIds, shotLabels: rev.shotLabels, taste: rev.taste, question: rev.question, durationMs: rev.durationMs };
     an.savedId = rev.id;
     $('an-taste').value = rev.taste || '';
@@ -3561,7 +3761,7 @@ $('an-saved-rows').addEventListener('click', async (e) => {
   }
 });
 
-window.__pb = { state, store, portal, recorder, timeChart, massChart, calChart, compareChart, compare, machinePanel, settings, log, files, heat, hist, an, runAutoBackup, stopEverything, openStopDialog, openShotDialog, openWeightDialog, openCompare, openAnalysis, runReview, refreshShotList, recoverUnfinishedShots, backfillMachineRecords, autosaveShotFiles, refreshProfileTargets, get meticulous() { return meticulous; } };
+window.__pb = { state, store, portal, recorder, timeChart, massChart, calChart, compareChart, compare, machinePanel, settings, log, files, heat, hist, an, runAutoBackup, stopEverything, openStopDialog, openShotDialog, openWeightDialog, openRatingDialog, openCompare, openAnalysis, runReview, refreshShotList, recoverUnfinishedShots, backfillMachineRecords, autosaveShotFiles, refreshProfileTargets, get meticulous() { return meticulous; } };
 
 init().catch((err) => {
   console.error(err);

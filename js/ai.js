@@ -49,12 +49,14 @@ export function baseUrlFor(provider, override) {
  * not need it. Pass `temperature` explicitly to send one, e.g. for an older
  * model behind a compatible endpoint.
  */
-export function buildRequest(provider, { model, key, system, user, maxTokens = 8000, temperature, stream = true, baseUrl } = {}) {
+export function buildRequest(provider, { model, key, system, user, history = [], maxTokens = 8000, temperature, stream = true, baseUrl } = {}) {
   const base = baseUrlFor(provider, baseUrl);
   if (!PROVIDERS[provider]) throw new Error(`Unknown provider "${provider}"`);
   if (!model) throw new Error('No model chosen');
   if (!key) throw new Error('No API key');
   const sampling = Number.isFinite(temperature) ? { temperature } : {};
+  // `history` continues a conversation: [{ role: 'assistant' | 'user', content }] after the first user turn
+  const turns = [{ role: 'user', content: user }, ...history.filter((h) => h && h.content).map((h) => ({ role: h.role === 'assistant' ? 'assistant' : 'user', content: String(h.content) }))];
   if (provider === 'anthropic') {
     return {
       url: `${base}/v1/messages`,
@@ -64,14 +66,14 @@ export function buildRequest(provider, { model, key, system, user, maxTokens = 8
         'anthropic-version': '2023-06-01',
         'anthropic-dangerous-direct-browser-access': 'true', // required for a page to call the API directly
       },
-      body: { model, max_tokens: maxTokens, ...sampling, system, messages: [{ role: 'user', content: user }], stream },
+      body: { model, max_tokens: maxTokens, ...sampling, system, messages: turns, stream },
     };
   }
   if (provider === 'openai') {
     return {
       url: `${base}/v1/chat/completions`,
       headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
-      body: { model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], ...sampling, stream },
+      body: { model, messages: [{ role: 'system', content: system }, ...turns], ...sampling, max_completion_tokens: maxTokens, stream },
     };
   }
   // google
@@ -81,15 +83,57 @@ export function buildRequest(provider, { model, key, system, user, maxTokens = 8
     headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
     body: {
       system_instruction: { parts: [{ text: system }] },
-      contents: [{ role: 'user', parts: [{ text: user }] }],
+      contents: turns.map((t) => ({ role: t.role === 'assistant' ? 'model' : 'user', parts: [{ text: t.content }] })),
       generationConfig: { ...sampling, maxOutputTokens: maxTokens },
     },
   };
 }
 
+/**
+ * How many output tokens to allow for a review of `shots` shots. A series
+ * report (a column per shot in the stage table, one item per step) grows with
+ * the count; the cap keeps under every current model's output limit, and a
+ * review that still hits it is continued (see streamCompletion's finish).
+ */
+export function maxTokensFor(shots = 1) {
+  return Math.min(16000, 8000 + 4000 * Math.max(0, shots - 1));
+}
+
+/**
+ * Why the model stopped, from a stream event: 'length' when it hit the output
+ * limit (the text is cut off), 'stop' when it finished, null when the event
+ * says nothing about it.
+ */
+export function finishFromEvent(provider, data) {
+  if (data == null) return null;
+  let j;
+  try {
+    j = JSON.parse(String(data).trim());
+  } catch {
+    return null;
+  }
+  if (provider === 'anthropic') {
+    const r = j.type === 'message_delta' ? j.delta?.stop_reason : j.type === 'message' ? j.stop_reason : null;
+    return r === 'max_tokens' ? 'length' : r ? 'stop' : null;
+  }
+  if (provider === 'openai') {
+    const r = j.choices?.[0]?.finish_reason;
+    return r === 'length' ? 'length' : r ? 'stop' : null;
+  }
+  const r = j.candidates?.[0]?.finishReason;
+  return r === 'MAX_TOKENS' ? 'length' : r ? 'stop' : null;
+}
+
+/** The finish reason of a non-streamed response body. */
+export function finishFromResponse(provider, j) {
+  if (provider === 'anthropic') return j.stop_reason === 'max_tokens' ? 'length' : 'stop';
+  if (provider === 'openai') return j.choices?.[0]?.finish_reason === 'length' ? 'length' : 'stop';
+  return j.candidates?.[0]?.finishReason === 'MAX_TOKENS' ? 'length' : 'stop';
+}
+
 /** Optional body fields a model may refuse; dropped on a retry after an HTTP 400 that names one of them. */
-const OPTIONAL_PARAMS = ['temperature', 'top_p', 'top_k'];
-const PARAM_REJECTED = /temperature|top_p|top_k|unsupported parameter|not supported with this model|deprecated for this model|unknown parameter|unrecognized request argument/i;
+const OPTIONAL_PARAMS = ['temperature', 'top_p', 'top_k', 'max_completion_tokens'];
+const PARAM_REJECTED = /temperature|top_p|top_k|max_completion_tokens|max_tokens|unsupported parameter|not supported with this model|deprecated for this model|unknown parameter|unrecognized request argument/i;
 
 /** True when a 400 says the model refused an optional sampling parameter (not a bad key, model or body). */
 export function isParamRejection(status, message) {
@@ -214,7 +258,7 @@ function hintFor(status) {
  * the full text. `signal` aborts. Falls back to a non-streamed request when the
  * response is not an event stream (some proxies).
  */
-export async function streamCompletion(provider, opts, { onDelta, signal, fetchImpl = fetch, onRetry } = {}) {
+export async function streamCompletion(provider, opts, { onDelta, signal, fetchImpl = fetch, onRetry, onFinish } = {}) {
   const req = buildRequest(provider, { ...opts, stream: true });
   const send = async (body) => {
     try {
@@ -239,14 +283,17 @@ export async function streamCompletion(provider, opts, { onDelta, signal, fetchI
     const j = JSON.parse(await r.text());
     const text = textFromResponse(provider, j);
     onDelta?.(text);
+    onFinish?.(finishFromResponse(provider, j));
     return text;
   }
   const reader = r.body.getReader();
   const decoder = new TextDecoder();
   const parser = makeSseParser();
   let full = '';
+  let finish = null;
   const handle = (events) => {
     for (const ev of events) {
+      finish = finishFromEvent(provider, ev) || finish;
       const d = deltaFromEvent(provider, ev);
       if (d === null) return true;
       if (d) {
@@ -262,6 +309,7 @@ export async function streamCompletion(provider, opts, { onDelta, signal, fetchI
     if (handle(parser.push(decoder.decode(value, { stream: true })))) break;
   }
   handle(parser.flush());
+  onFinish?.(finish || 'stop');
   return full;
 }
 

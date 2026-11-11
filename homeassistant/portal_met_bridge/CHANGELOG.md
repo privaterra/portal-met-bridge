@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.17.0
+
+- Matches portal-met-bridge v0.17.0: the PDF report ends with the shot's saved AI review; reviews of several shots are continued automatically when the model stops at its output limit; *Suggested changes* comments on every stage; a 1–5 star rating and a comment after each shot (History ★ column, the review reads them); the new tagline.
+
 ## 0.16.0
 
 - The page is also served over **https on port 8788** (`ssl: self-signed` makes a certificate on first start, `ssl: home-assistant` uses Home Assistant's own from `/ssl`, `off` disables it) — the way to get Web Bluetooth for the Portal on a LAN address; the plain-http page links to the certificate and explains the trust step, and the Chrome flag route still works. On the https page the machine is reached through the app's `/machine/` relay.

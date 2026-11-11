@@ -5,7 +5,7 @@
 //   payload = base64url(gzip(JSON envelope)), unpadded, split into 400-char chunks.
 // Works in the browser and in Node ≥ 18 (CompressionStream is global in both).
 
-import { downsample, beverageOf } from './analysis.js?v=0.16.0';
+import { downsample, beverageOf } from './analysis.js?v=0.17.0';
 
 export const CHUNK = 400;
 export const MAX_SINGLE_INFLATED = 524_288;
@@ -21,7 +21,7 @@ const dg = (g) => Math.round(g * 10); // grams → decigrams, integer
  * @param {object} shot      recorded shot (see recorder.js for the shape)
  * @param {object} analysis  result of analyzeShot()
  * @param {object} estimate  result of estimateForShot() (may have null tds)
- * @param {object} ctx       { beanName, roaster, grinderName, grindSize, doseG, note, rating }
+ * @param {object} ctx       { beanName, roaster, grinderName, grindSize, doseG, note, rating (1–5 stars), comment }
  * @param {object} opts      { maxPoints, includeMetrics }
  */
 export function buildEnvelope(shot, analysis, estimate, ctx = {}, opts = {}) {
@@ -85,6 +85,7 @@ export function buildEnvelope(shot, analysis, estimate, ctx = {}, opts = {}) {
 
   const noteLines = [];
   if (ctx.note) noteLines.push(ctx.note.trim());
+  if (ctx.comment) noteLines.push(`Cup: ${String(ctx.comment).trim()}`);
   if (analysis && analysis.status !== 'no-portal-data') {
     noteLines.push(`Portal: mean EC ${fmt(analysis.meanEcPerG, 3)} mS/cm over ${fmt(analysis.coveredMassG, 1)} g (∫EC dm = ${fmt(analysis.integralEcG, 1)}), peak ${fmt(analysis.mainPeakEc, 3)}, last-5g ${fmt(analysis.tail?.last5g?.mean, 3)}.`);
   }
@@ -95,7 +96,7 @@ export function buildEnvelope(shot, analysis, estimate, ctx = {}, opts = {}) {
 
   const envelope = {
     v: 1,
-    app: { name: 'portal-met-bridge', version: '0.16.0' },
+    app: { name: 'portal-met-bridge', version: '0.17.0' },
     brew: {
       date: new Date(shot.startedAt ?? Date.now()).toISOString(),
       waterIn: { value: clamp(totalWaterMl || beverageG, 0, 100000), unit: 'ml' },

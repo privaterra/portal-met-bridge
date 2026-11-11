@@ -497,3 +497,25 @@ table.files-layout code { word-break: break-all; }
 .stopped { position: fixed; inset: 0; z-index: 50; background: rgba(28, 36, 48, 0.55); display: flex; align-items: center; justify-content: center; padding: 20px; }
 .stopped-card { background: #fff; border-radius: 6px; padding: 22px 26px; width: min(92vw, 520px); box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3); }
 .stopped-card h2 { font-size: 18px; margin-bottom: 8px; }
+
+/* ---- ratings: 1–5 stars and a comment on the cup */
+.stars { display: inline-flex; align-items: center; gap: 1px; vertical-align: middle; }
+.stars button.star { border: 0; background: none; padding: 0 1px; font-size: 20px; line-height: 1; color: #cfd5dc; cursor: pointer; transition: color 0.1s, transform 0.1s; }
+.stars button.star.on { color: var(--amber); }
+.stars button.star:hover, .stars button.star:focus-visible { transform: scale(1.15); color: var(--amber); outline: none; }
+.stars.big button.star { font-size: 30px; padding: 0 3px; }
+.stars .star-clear { margin-left: 8px; border: 0; background: none; padding: 0; font-size: 12px; color: var(--ink-3); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.stars .star-clear.hidden { display: none; }
+.stars.ro { color: var(--amber); font-size: 13px; letter-spacing: 1px; white-space: nowrap; }
+.stars.ro .dim { color: #d8dde3; }
+.shot-rating { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: -4px 0 8px; font-size: 13px; }
+.shot-rating:empty { display: none; }
+.shot-rating .comment { color: var(--ink-2); font-style: italic; }
+.shot-rating .comment::before { content: '“'; }
+.shot-rating .comment::after { content: '”'; }
+table.hist th.rating, table.hist td.rating { text-align: center; }
+table.hist td.rating .linkish.rate { text-decoration: none; color: var(--amber); font-weight: 600; }
+table.hist td.rating .linkish.rate.unrated { color: var(--ink-3); font-weight: 400; }
+table.hist td.rating .has-comment { font-size: 11px; margin-left: 2px; }
+.an-list .stars.ro { font-size: 11px; letter-spacing: 0; margin-right: 6px; }
+.field > .stars { margin-top: 2px; }

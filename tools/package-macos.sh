@@ -184,6 +184,7 @@ cat > "$contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>12.0</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>CFBundleGetInfoString</key><string>Meticulous &amp; Belka Portal conductivity data visualization &amp; analysis</string>
   <key>NSHumanReadableCopyright</key><string>MIT · github.com/privaterra/portal-met-bridge</string>
 </dict>
 </plist>

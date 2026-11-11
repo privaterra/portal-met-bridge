@@ -134,6 +134,16 @@ try {
   await page.waitForFunction(() => window.__pb.recorder.isRecording, null, { timeout: 20000 });
   // the shot ends, is saved, and ~4 s later gets the machine's record attached
   await page.waitForFunction(() => window.__pb.state.shots.some((x) => !x.inProgress && Date.now() - x.startedAt < 300000 && x.machineShotId), null, { timeout: 90000 });
+  // the after-shot rating dialog (v0.17): four stars and a comment, then saved so the stars show everywhere else
+  await page.waitForSelector('#rating-dialog[open]', { timeout: 5000 });
+  await page.keyboard.press('4');
+  await page.fill('#r-comment', 'Sweet and round, finish a little short — try a touch finer.');
+  await page.evaluate(() => { document.querySelector('#toast').hidden = true; document.activeElement?.blur(); });
+  await page.waitForTimeout(200);
+  const rbox = await page.evaluate(() => { const r = document.querySelector('#rating-dialog').getBoundingClientRect(); return { x: Math.max(0, r.x - 12), y: Math.max(0, r.y - 12), width: r.width + 24, height: r.height + 24 }; });
+  await shot(page, 'rating', { clip: rbox });
+  await page.click('#r-save');
+  await page.waitForTimeout(300);
   // The simulated Portal (tests/fake-bluetooth.js) emits a flat, tiny EC trace; give the recorded shot the
   // demo's realistic Portal samples instead, so the pictures show what a real shot looks like.
   const liveId = await page.evaluate(async (v) => {

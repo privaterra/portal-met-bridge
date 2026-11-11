@@ -1,8 +1,8 @@
 # Home Assistant app — https://contributors.home-assistant.io/apps/reference/configuration/
 name: Portal Met Bridge
-version: "0.16.0"
+version: "0.17.0"
 slug: portal_met_bridge
-description: Belka Portal conductivity logged against Meticulous espresso shots, served on your LAN; files kept in /share
+description: Meticulous & Belka Portal conductivity data visualization & analysis, served on your LAN; files kept in /share
 url: https://github.com/privaterra/portal-met-bridge
 arch:
   - aarch64

@@ -176,15 +176,25 @@ const server = http.createServer((req, res) => {
       const user = body.messages?.[1]?.content || '';
       const n = Number((user.match(/Shots to review: (\d+)/) || [])[1] || 0);
       const noPortal = /No Belka Portal data for this shot/.test(user);
-      const text = /Answer with the single word OK/.test(body.messages?.[0]?.content || '') ? 'OK' : AI_REPORT(n, noPortal);
-      if (!body.stream) return json(res, { id: 'chatcmpl-mock', object: 'chat.completion', choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }] });
+      let text = /Answer with the single word OK/.test(body.messages?.[0]?.content || '') ? 'OK' : AI_REPORT(n, noPortal);
+      // model "cut-model": the first answer stops at the output limit half way (finish_reason "length");
+      // a request that continues the conversation (an assistant turn, then "continue") gets the rest.
+      let finish = 'stop';
+      const prior = body.messages?.filter((m) => m.role === 'assistant').map((m) => m.content).join('') || '';
+      dial.lastAiRequest.turns = body.messages?.length || 0;
+      if (body.model === 'cut-model' && text !== 'OK') {
+        const half = Math.floor(text.length / 2);
+        if (prior) text = text.slice(prior.length); // the remainder, exactly where it stopped
+        else { text = text.slice(0, half); finish = 'length'; }
+      }
+      if (!body.stream) return json(res, { id: 'chatcmpl-mock', object: 'chat.completion', choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: finish }] });
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
       const chunks = text.match(/[^]{1,40}/g) || [];
       let i = 0;
       const timer = setInterval(() => {
         if (i < chunks.length) res.write(`data: ${JSON.stringify({ id: 'chatcmpl-mock', object: 'chat.completion.chunk', choices: [{ index: 0, delta: { content: chunks[i++] }, finish_reason: null }] })}\n\n`);
-        else { clearInterval(timer); res.write('data: [DONE]\n\n'); res.end(); }
+        else { clearInterval(timer); res.write(`data: ${JSON.stringify({ id: 'chatcmpl-mock', object: 'chat.completion.chunk', choices: [{ index: 0, delta: {}, finish_reason: finish }] })}\n\n`); res.write('data: [DONE]\n\n'); res.end(); }
       }, 15);
     });
   }

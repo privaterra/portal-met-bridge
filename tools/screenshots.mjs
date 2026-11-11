@@ -153,7 +153,14 @@ try {
   await page.mouse.move(5, 5);
   await page.waitForTimeout(300);
   await shot(page, 'shots');
-  await shot(page, 'brew', { clip: { x: 0, y: 60, width: 300, height: 400 } });
+  // the Brew block with the water at temperature: the mock heats for 1.5 s, the hold rule is shortened for the picture
+  await page.evaluate(async (port) => { await fetch(`http://127.0.0.1:${port}/mock/dial`, { method: 'POST', body: JSON.stringify({ heatMs: 1500, tempFrom: 70, brewMs: 0 }) }); window.__pb.heat.configure({ holdSec: 1 }); await window.__pb.meticulous.action('start'); }, MOCK_PORT);
+  await page.waitForFunction(() => document.querySelector('#brew-start').classList.contains('ready'), null, { timeout: 8000 });
+  await page.waitForTimeout(400);
+  await page.evaluate(() => { document.querySelector('#toast').hidden = true; });
+  await shot(page, 'brew', { clip: { x: 0, y: 60, width: 300, height: 470 } });
+  await page.evaluate(async () => { await window.__pb.meticulous.action('abort'); window.__pb.heat.configure({ holdSec: window.__pb.settings.heatHoldSec }); });
+  await page.waitForTimeout(300);
   // the after-brew prompt for the final weight (Settings → Recording → Final weight: typed)
   await page.evaluate(() => { window.__pb.settings.beverageDefault = 'manual'; });
   await page.evaluate((id) => window.__pb.openWeightDialog(id), liveId);

@@ -10,4 +10,4 @@ mkdir -p "${data_dir}"
 bashio::log.info "portal-met-bridge $(node -p "require('/opt/app/package.json').version") → http://$(bashio::info.hostname 2>/dev/null || hostname):8787 · files in ${data_dir}"
 bashio::log.info "Open it in Chrome on your computer; Bluetooth needs the chrome://flags exception for this address (see the Documentation tab)."
 cd /opt/app
-exec env HOST=0.0.0.0 PORT=8787 DATA_DIR="${data_dir}" node serve.mjs
+exec env HOST=0.0.0.0 PORT=8787 ALLOW_QUIT=0 DATA_DIR="${data_dir}" node serve.mjs

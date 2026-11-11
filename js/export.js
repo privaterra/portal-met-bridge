@@ -3,7 +3,7 @@
 // loaded lazily from vendor/ only when a PDF is asked for.
 
 import { zipSync, strToU8 } from '../vendor/fflate.esm.js';
-import { beverageOf, beverageSource, profileTargetOf, measuredEy } from './analysis.js?v=0.14.0';
+import { beverageOf, beverageSource, profileTargetOf, measuredEy } from './analysis.js?v=0.15.0';
 
 const APP = 'portal-met-bridge';
 
@@ -152,13 +152,13 @@ export async function shotReportPdf(r) {
   }
 
   const ensure = (h) => {
-    if (y + h > pageH - margin) {
+    if (y + h > pageH - 32) { // the footer sits at pageH - 20
       doc.addPage();
       y = margin;
     }
   };
 
-  const maxImgH = (pageH - margin * 2) * 0.3;
+  const maxImgH = (pageH - margin * 2) * 0.24; // two charts, the tables and the notes fit one page for a normal shot
   for (const img of r.images || []) {
     let w = contentW;
     let h = (img.height / img.width) * w;
@@ -168,46 +168,69 @@ export async function shotReportPdf(r) {
     }
     ensure(h + 16);
     doc.addImage(img.dataUrl, 'JPEG', margin, y, w, h, undefined, 'FAST');
-    y += h + 4;
+    y += h + 2;
     if (img.caption) {
       doc.setFontSize(9);
       doc.setTextColor(90);
       doc.text(pdfSafe(img.caption), margin, y + 8);
       doc.setTextColor(0);
-      y += 14;
+      y += 12;
     }
     y += 6;
   }
 
+  // Two columns of key/value pairs. Keys and values are wrapped to their own
+  // cell widths (a long value used to run across into the right-hand column),
+  // and a row is as tall as its tallest cell.
+  const LINE = 12;
   const table = (title, rows) => {
     if (!rows?.length) return;
-    ensure(20 + Math.ceil(rows.length / 2) * 13);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9.5);
+    const half = Math.ceil(rows.length / 2);
+    const colW = contentW / 2;
+    const gap = 12;
+    const keyW = colW * 0.46 - gap;
+    const valX = colW * 0.46;
+    const valW = colW * 0.54 - gap;
+    const cells = rows.map(([k, v]) => ({ k: doc.splitTextToSize(pdfSafe(String(k ?? '')), keyW), v: doc.splitTextToSize(pdfSafe(String(v ?? '')), valW) }));
+    const rowH = (r) => {
+      const a = cells[r];
+      const b = cells[r + half];
+      return LINE * Math.max(a.k.length, a.v.length, b?.k.length || 0, b?.v.length || 0) + 1;
+    };
+    ensure(16 + rowH(0) + (half > 1 ? rowH(1) : 0)); // keep the title with its first rows
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(11);
     doc.text(pdfSafe(title), margin, y);
     y += 14;
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9.5);
-    const half = Math.ceil(rows.length / 2);
-    const colW = contentW / 2;
-    rows.forEach(([k, v], i) => {
-      const col = i < half ? 0 : 1;
-      const row = i < half ? i : i - half;
-      const x = margin + col * colW;
-      const yy = y + row * 13;
-      doc.setTextColor(90);
-      doc.text(pdfSafe(k), x, yy);
-      doc.setTextColor(0);
-      doc.text(pdfSafe(v), x + colW * 0.52, yy);
-    });
-    y += half * 13 + 8;
+    for (let r = 0; r < half; r++) {
+      const h = rowH(r);
+      ensure(h);
+      for (const col of [0, 1]) {
+        const cell = cells[r + col * half];
+        if (!cell) continue;
+        const x = margin + col * colW;
+        doc.setTextColor(90);
+        cell.k.forEach((line, i) => doc.text(line, x, y + i * LINE));
+        doc.setTextColor(0);
+        cell.v.forEach((line, i) => doc.text(line, x + valX, y + i * LINE));
+      }
+      y += h;
+    }
+    y += 8;
   };
   table('Shot', r.metrics);
   table('Strength estimate', r.estimate);
   if (r.notes?.length) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9.5);
+    const first = doc.splitTextToSize('- ' + pdfSafe(r.notes[0]), contentW);
+    ensure(14 + first.length * 12 + 2); // the heading stays with its first note
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(11);
-    ensure(30);
     doc.text('Notes', margin, y);
     y += 14;
     doc.setFont('helvetica', 'normal');

@@ -6,7 +6,7 @@
 //   buildReviewMessages(...)         → { system, user } for any provider
 //   renderMarkdown(md)               → safe HTML for the report pane
 
-import { beverageOf, beverageSource, profileTargetOf, profileFinalWeight, measuredEy, grindMicrons } from './analysis.js?v=0.14.0';
+import { beverageOf, beverageSource, profileTargetOf, profileFinalWeight, measuredEy, grindMicrons } from './analysis.js?v=0.15.0';
 
 const r1 = (v) => (Number.isFinite(v) ? Math.round(v * 10) / 10 : null);
 const r2 = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
@@ -318,10 +318,10 @@ Two or three sentences: is the trace clean, and is this the shot the profile des
 A table: Stage | Time | Water in | Cup | What happened — one row per stage, plus a final "Drips" row from pump stop to the last sample. Below the table, one sentence on where the solubles came from (share of ∫EC dm by end of each stage and at cup-mass milestones) when Portal data is present, otherwise one sentence on how the cup filled by stage.
 
 ## What stands out
-A numbered list of the findings that matter, most important first (stopped short / ran long, pressure, bloom behaviour, temperature drift, data inconsistencies). Use sub-bullets for checks the user should make and for hypotheses, labelled "Unconfirmed:" when they are.
+A numbered list (1., 2., 3. — consecutive, never "1." on every item) of the findings that matter, most important first (stopped short / ran long, pressure, bloom behaviour, temperature drift, data inconsistencies). Use sub-bullets for checks the user should make and for hypotheses, labelled "Unconfirmed:" when they are.
 
 ## Suggested changes
-Start with "Change one thing per shot, in this order." then a numbered list. Each item names the exact variable or stage parameter (use the profile's own keys when they are given, e.g. bloom_time, extraction_flow, saturation_pressure, the final weight, the temperature setpoint) and the value to set, or the grind move in whole steps of the grinder's step size, and says what to look for in the next trace. Respect how the user drinks the coffee (ratio targets differ for milk drinks and straight espresso).
+Start with "Change one thing per shot, in this order." then a numbered list (1., 2., 3. — consecutive). Each item names the exact variable or stage parameter (use the profile's own keys when they are given, e.g. bloom_time, extraction_flow, saturation_pressure, the final weight, the temperature setpoint) and the value to set, or the grind move in whole steps of the grinder's step size, and says what to look for in the next trace. Respect how the user drinks the coffee (ratio targets differ for milk drinks and straight espresso).
 
 ## Open questions
 Bullets: what you need to know to go further (taste, a second-scale weight, a refractometer reading, which profile version is loaded).
@@ -510,6 +510,26 @@ export function parseMarkdown(md) {
           else cur.text += ' ' + lines[i].trim();
           i++;
           continue;
+        }
+        // A blank line does not end the list when what follows continues it: the next item at
+        // the same level (a "loose" list — models often write numbered items a line apart, and
+        // many write "1." on every item), or an indented block belonging to the current item.
+        // Otherwise every item became its own list, each numbered 1.
+        if (!lines[i].trim() && items.length) {
+          let j = i + 1;
+          while (j < lines.length && !lines[j].trim()) j++;
+          if (j >= lines.length) break;
+          const next = lines[j].match(/^(\s*)([-*+]|\d+[.)])\s+(.*)$/);
+          if (next && next[1].length === baseIndent && /\d/.test(next[2]) === ordered) {
+            i = j;
+            continue;
+          }
+          if ((next && next[1].length > baseIndent) || (!next && /^\s{2,}\S/.test(lines[j]))) {
+            const cur = items[items.length - 1];
+            if (cur.children.length) cur.children.push('');
+            i = j;
+            continue;
+          }
         }
         break;
       }

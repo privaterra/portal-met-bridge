@@ -324,7 +324,7 @@ await test('recorder: checkpoint recovery finalises an interrupted shot, drops a
 
 import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, splitStages, cumulativeWater } from '../js/review.js';
 import { profileFinalWeight, BEVERAGE_PREFERENCES } from '../js/analysis.js';
-import { parseMarkdown, parseInline, markdownToText, beverageNoteFor, reviewProfileOf } from '../js/review.js';
+import { parseMarkdown, parseInline, markdownToText, beverageNoteFor, reviewProfileOf, REVIEW_TEMPLATE } from '../js/review.js';
 import { reviewToDocx, reviewMarkdownFile, reviewFileName, reviewFile, REVIEW_FORMATS, pdfSafe } from '../js/review-export.js';
 import { unzipSync, strFromU8 } from '../vendor/fflate.esm.js';
 import { PROVIDERS, buildRequest, deltaFromEvent, makeSseParser, normalizeModelList, textFromResponse, maskKey, baseUrlFor, isParamRejection, stripOptionalParams, streamCompletion } from '../js/ai.js';
@@ -691,6 +691,98 @@ await test('files and folders (v0.14): folder names are cleaned, the destination
   assert.equal(safeDataPath(dir, 'portal-met-bridge/shots/a.json'), '/data/pmb/portal-met-bridge/shots/a.json');
   assert.equal(safeDataPath(dir, '/leading/slash.txt'), '/data/pmb/leading/slash.txt');
   for (const bad of ['', '..', '../x', 'a/../../x', 'a/.hidden', 'a/b:c', 'a\\b', 'a/\u0000', '.', 'x'.repeat(201)]) assert.equal(safeDataPath(dir, bad), null, `refuses ${JSON.stringify(bad)}`);
+});
+
+await test('ready to brew (v0.15): the temperature rules, the brew that disarms them, the sensor choice', async () => {
+  const { HeatMonitor, HEAT_RULES, sensorTemp } = await import('../js/heat.js');
+  assert.deepEqual(Object.keys(HEAT_RULES), ['machine', 'reach', 'hold', 'settled', 'both']);
+  const h = new HeatMonitor({ rule: 'hold', toleranceC: 1, holdSec: 2 });
+  h.setTarget(93);
+  let t = 0;
+  const feed = (temp, name = 'heating', extracting = false, n = 1) => { for (let i = 0; i < n; i++) { h.onStatus({ name, extracting, temp, at: t }); t += 100; } };
+  feed(60, 'heating', false, 10);
+  assert.equal(h.phase, 'heating');
+  assert.equal(h.ready, false);
+  assert.match(h.describe(), /heating · 60\.0 °C · target 93\.0 °C · not within/);
+  feed(92.4, 'heating', false, 15); // 1.5 s inside the band
+  assert.equal(h.ready, false, 'hold: 1.5 of 2 s is not enough');
+  assert.match(h.evaluate(t - 100).detail, /for 1 of 2 s/);
+  feed(92.6, 'heating', false, 10);
+  assert.equal(h.ready, true, 'hold: 2.5 s inside the band');
+  assert.equal(h.phase, 'ready');
+  assert.match(h.describe(), /^water ready \(held\)/);
+  feed(91.5, 'heating', false, 1); // dips out of the band
+  assert.equal(h.ready, false, 'leaving the band un-readies');
+  assert.equal(h.phase, 'heating');
+  feed(93, 'click to start', false, 25);
+  assert.equal(h.ready, true);
+  // a brew disarms it: still hot afterwards, but not green
+  feed(92, 'Extract', true, 20);
+  assert.equal(h.phase, 'brewing');
+  assert.equal(h.ready, false);
+  feed(92.9, 'idle', false, 40);
+  assert.equal(h.phase, 'done');
+  assert.equal(h.ready, false, 'after a brew the button stays plain though the water is at temperature');
+  assert.match(h.describe(), /brew done/);
+  feed(92.9, 'heating', false, 25); // the machine heats for the next one
+  assert.equal(h.ready, true, 're-armed by the machine heating again');
+  // or by the water cooling well below the band and coming back
+  feed(92, 'Extract', true, 5);
+  feed(80, 'idle', false, 5);
+  assert.equal(h.phase, 'heating', 'a reading 3 tolerances under the target re-arms');
+  feed(93, 'idle', false, 25);
+  assert.equal(h.ready, true);
+  // reach: the first reading inside the band
+  h.configure({ rule: 'reach' });
+  feed(85, 'heating', false, 3);
+  assert.equal(h.ready, false);
+  feed(92.2, 'heating', false, 1);
+  assert.equal(h.ready, true, 'reach needs no hold');
+  // settled: within the band and not moving
+  h.configure({ rule: 'settled', settleC: 0.3, holdSec: 2 });
+  for (let i = 0; i < 30; i++) feed(92.5 + 0.5 * Math.sin(i / 2), 'heating');
+  assert.equal(h.ready, false, 'oscillating by 1 °C is not settled');
+  feed(93.1, 'heating', false, 30);
+  assert.equal(h.ready, true);
+  assert.match(h.describe(), /settled/);
+  // machine, and both
+  h.configure({ rule: 'machine' });
+  feed(70, 'heating', false, 3);
+  assert.equal(h.ready, false);
+  feed(70, 'click to start', false, 1);
+  assert.equal(h.ready, true, 'machine: whatever the temperature');
+  h.configure({ rule: 'both', holdSec: 1 });
+  feed(93, 'heating', false, 15);
+  assert.equal(h.ready, false, 'both: held, but the machine has not said so');
+  feed(93, 'click to start', false, 1);
+  assert.equal(h.ready, true);
+  // no target: only the machine rule can decide
+  const g = new HeatMonitor({ rule: 'hold', holdSec: 0 });
+  g.onStatus({ name: 'click to start', temp: 93, at: 0 });
+  assert.equal(g.ready, false);
+  assert.match(g.describe(), /target unknown/);
+  g.configure({ rule: 'machine' });
+  g.onStatus({ name: 'click to start', temp: 93, at: 100 });
+  assert.equal(g.ready, true);
+  // the sensor choice
+  const sens = { t_ext_1: 102.9, t_ext_2: 103.4, t_bar_up: 84, t_bar_mu: 88, t_bar_md: 88, t_bar_down: 84, t_tube: 86.3 };
+  assert.equal(sensorTemp('status', { temp: 92.8 }, sens), 92.8);
+  assert.equal(sensorTemp('ext1', { temp: 92.8 }, sens), 102.9);
+  assert.equal(sensorTemp('tube', {}, sens), 86.3);
+  assert.equal(sensorTemp('bar', {}, sens), 86);
+  assert.ok(Number.isNaN(sensorTemp('ext2', {}, null)), 'no sensors packet yet → NaN');
+});
+
+await test('review markdown (v0.15): numbered items a blank line apart, or all written "1.", are one list numbered 1, 2, 3', () => {
+  const md = '## What stands out\n\n1. First finding.\n\n1. Second finding.\n   - Unconfirmed: a hypothesis\n\n1. Third finding.\n\nA paragraph after.\n\n## Suggested changes\nChange one thing per shot, in this order.\n\n1. Set bloom_time to 25 s.\n\n   Look for a later peak.\n\n2. Grind 2 steps finer.\n\n- a bullet after\n- another\n\n1. a new numbered list after bullets';
+  const types = parseMarkdown(md).map((b) => (b.type === 'list' ? `${b.ordered ? 'ol' : 'ul'}x${b.items.length}` : b.type));
+  assert.deepEqual(types, ['heading', 'olx3', 'paragraph', 'heading', 'paragraph', 'olx2', 'ulx2', 'olx1']);
+  const html = renderMarkdown(md);
+  assert.equal((html.match(/<ol>/g) || []).length, 3, 'three ordered lists in HTML (3 + 2 + 1 items), not one per item');
+  const text = markdownToText(md);
+  assert.ok(text.includes('1. First finding.\n2. Second finding.\n  • Unconfirmed: a hypothesis\n3. Third finding.'), text);
+  assert.ok(text.includes('1. Set bloom_time to 25 s. Look for a later peak.\n2. Grind 2 steps finer.'), 'an indented paragraph after a blank stays with its item');
+  assert.ok(/numbered list \(1\., 2\., 3\. — consecutive/.test(REVIEW_TEMPLATE), 'the template asks for consecutive numbers');
 });
 
 await test('release: every version stamp agrees with package.json (tools/bump-version.mjs keeps them in step)', () => {

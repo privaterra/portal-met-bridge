@@ -484,3 +484,16 @@ table.files-layout td:first-child { white-space: nowrap; color: var(--ink); }
 table.files-layout code { word-break: break-all; }
 #files-status[data-level='warn'] { color: var(--warn); }
 #files-status[data-level='ok'] { color: var(--ok); }
+
+/* v0.15: ready-to-brew colour, the Stop button, the stopped screen */
+.brew-heat { font-size: 12px; color: var(--ink-2); margin: -2px 0 6px; padding: 0 8px; }
+.brew-heat[data-ready='true'] { color: var(--ok); font-weight: 600; }
+#brew-start.ready { background: var(--ok); border-color: var(--ok); color: #fff; }
+#brew-start.ready:hover:not(:disabled) { background: #1f6b25; }
+.btn.stop { color: var(--bad); border-color: var(--bad); margin-left: 10px; }
+.btn.stop:hover:not(:disabled) { background: var(--bad); color: #fff; }
+#stop-list, #stopped-list { margin: 6px 0 10px 18px; font-size: 13px; line-height: 1.5; }
+.stopped[hidden] { display: none; }
+.stopped { position: fixed; inset: 0; z-index: 50; background: rgba(28, 36, 48, 0.55); display: flex; align-items: center; justify-content: center; padding: 20px; }
+.stopped-card { background: #fff; border-radius: 6px; padding: 22px 26px; width: min(92vw, 520px); box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3); }
+.stopped-card h2 { font-size: 18px; margin-bottom: 8px; }

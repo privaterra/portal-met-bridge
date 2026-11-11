@@ -1,20 +1,21 @@
 // main.js — wires the devices, the recorder, storage, charts and export together.
 
-import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.14.0';
-import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.14.0';
-import { MachinePanel } from './machine-panel.js?v=0.14.0';
-import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.14.0';
-import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.14.0';
-import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.14.0';
-import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, profileFinalWeight, setBeveragePreference, grindMicrons, measuredEy, DEFAULTS } from './analysis.js?v=0.14.0';
-import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, approxTokens, reviewProfileOf } from './review.js?v=0.14.0';
-import { PROVIDERS, streamCompletion, listModels, testKey, maskKey } from './ai.js?v=0.14.0';
-import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.14.0';
-import { makeDemoShot } from './demo.js?v=0.14.0';
-import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug, loadJsPdf } from './export.js?v=0.14.0';
-import { REVIEW_FORMATS, reviewFile, reviewMarkdownFile } from './review-export.js?v=0.14.0';
-import { log, formatLine } from './log.js?v=0.14.0';
-import { files, Files, FILE_KINDS, DEFAULT_ROOT, cleanDirName } from './files.js?v=0.14.0';
+import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.15.0';
+import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.15.0';
+import { MachinePanel } from './machine-panel.js?v=0.15.0';
+import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.15.0';
+import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.15.0';
+import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.15.0';
+import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, profileFinalWeight, setBeveragePreference, grindMicrons, measuredEy, DEFAULTS } from './analysis.js?v=0.15.0';
+import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, approxTokens, reviewProfileOf } from './review.js?v=0.15.0';
+import { PROVIDERS, streamCompletion, listModels, testKey, maskKey } from './ai.js?v=0.15.0';
+import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.15.0';
+import { makeDemoShot } from './demo.js?v=0.15.0';
+import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug, loadJsPdf } from './export.js?v=0.15.0';
+import { REVIEW_FORMATS, reviewFile, reviewMarkdownFile } from './review-export.js?v=0.15.0';
+import { log, formatLine } from './log.js?v=0.15.0';
+import { files, Files, FILE_KINDS, DEFAULT_ROOT, cleanDirName } from './files.js?v=0.15.0';
+import { HeatMonitor, HEAT_RULES, HEAT_SENSORS, sensorTemp } from './heat.js?v=0.15.0';
 import qrcode from '../vendor/qrcode.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -55,6 +56,7 @@ function showView(name) {
 }
 
 const state = {
+  stopped: false, // the Stop button was used; nothing runs any more
   shots: [],
   selected: null,
   analysis: null,
@@ -73,6 +75,11 @@ const SETTINGS = {
   autoConnectMeticulous: { def: false, el: 'set-autoconnect', bool: true },
   autoAttach: { def: true, el: 'set-autoattach', bool: true },
   attachDelaySec: { def: 4, el: 'set-attach-delay', num: true, min: 1, max: 60 },
+  heatRule: { def: 'hold', el: 'set-heat-rule' },
+  heatSensor: { def: 'status', el: 'set-heat-sensor' },
+  heatToleranceC: { def: 1, el: 'set-heat-tol', num: true, min: 0.2, max: 5 },
+  heatHoldSec: { def: 10, el: 'set-heat-hold', num: true, min: 0, max: 60 },
+  heatSettleC: { def: 0.3, el: 'set-heat-settle', num: true, min: 0.1, max: 2 },
   autoRecord: { def: true, el: 'set-autorecord', bool: true },
   settleSec: { def: 6, el: 'settle-sec', num: true, min: 0, max: 60 },
   lagSec: { def: 0, el: 'lag-sec', num: true, min: -2, max: 3 },
@@ -214,6 +221,13 @@ function applySetting(key, v) {
     case 'autoBackup':
       renderFiles();
       break;
+    case 'heatRule':
+    case 'heatSensor':
+    case 'heatToleranceC':
+    case 'heatHoldSec':
+    case 'heatSettleC':
+      applyHeatSettings();
+      break;
     case 'aiProvider':
     case 'aiKeyAnthropic':
     case 'aiKeyOpenai':
@@ -280,7 +294,7 @@ async function resetSettings() {
 // Human-readable names for the save bar.
 const SETTING_LABELS = {
   meticulousHost: 'machine address', autoConnectMeticulous: 'connect on open', autoAttach: 'attach machine record', attachDelaySec: 'attach delay',
-  autoRecord: 'auto-record', settleSec: 'settle window', lagSec: 'Portal lag', minShotSec: 'minimum shot length', autoGraph: 'Portal screen', autoSaveFiles: 'write shot files', beverageDefault: 'final weight',
+  autoRecord: 'auto-record', heatRule: 'ready-to-brew rule', heatSensor: 'temperature reading', heatToleranceC: 'temperature tolerance', heatHoldSec: 'hold time', heatSettleC: 'settled threshold', settleSec: 'settle window', lagSec: 'Portal lag', minShotSec: 'minimum shot length', autoGraph: 'Portal screen', autoSaveFiles: 'write shot files', beverageDefault: 'final weight',
   minCalibrationShots: 'reference shots', estimatePool: 'estimate pool', logEnabled: 'logging', logLevel: 'log detail', logPackets: 'packet logging',
   logShowTail: 'live tail', fileDestination: 'where files go', fileRoot: 'root folder', dirShots: 'shot files folder', dirExports: 'exports folder', dirReports: 'reports folder',
   dirReviews: 'reviews folder', dirBackups: 'backups folder', dirLogs: 'logs folder', autoBackup: 'automatic backup',
@@ -388,9 +402,11 @@ async function init() {
   await restoreFolder();
   applyFileSettings();
   store.onChange = (kind) => scheduleAutoBackup(kind);
+  applyHeatSettings();
+  probeAppServer().catch(() => {});
   renderLogStatus();
-  $('about-version').textContent = 'v0.14.0';
-  log.info('app', `portal-met-bridge v0.14.0 started · ${navigator.userAgent}`);
+  $('about-version').textContent = 'v0.15.0';
+  log.info('app', `portal-met-bridge v0.15.0 started · ${navigator.userAgent}`);
 
   const env = await environmentCheck();
   renderPortalSteps({ secure: env.secure, api: env.api, adapter: env.adapter });
@@ -445,7 +461,11 @@ function connectMeticulous() {
       setTimeout(() => backfillMachineRecords().catch(() => {}), 1500);
     }
     $('brew-controls').hidden = d.state !== 'connected';
-    if (d.state !== 'connected') $('brew-state').textContent = '—';
+    if (d.state !== 'connected') {
+      $('brew-state').textContent = '—';
+      heat.reset();
+      renderHeat(null);
+    }
   });
   meticulous.addEventListener('status', (e) => onStatus(e.detail));
   meticulous.connect();
@@ -507,7 +527,10 @@ function onStatus(s) {
   setText('ro-weight', fmt(s.w, 1));
   setText('ro-flow', fmt(s.f, 2));
   setText('ro-pressure', fmt(s.p, 1));
+  heat.setTarget(loadedProfileTemperature(s));
+  heat.onStatus({ name: s.name, extracting: s.extracting, temp: sensorTemp(settings.heatSensor, s, meticulous?.lastSensors), at: performance.now() });
   renderBrewState(s);
+  renderHeat(s);
   if (recorder.isRecording) {
     setText('ro-time', fmt((performance.now() - recorder.wallZero) / 1000, 1));
     setText('ro-stage', s.name || s.state || 'extracting');
@@ -1583,7 +1606,7 @@ async function fetchLastFromMachine() {
 }
 
 async function refreshFromMachine(id, quiet = false) {
-  if (!meticulous) return;
+  if (!meticulous || state.stopped) return;
   const shot = await store.getShot(id);
   if (!shot) return;
   try {
@@ -2266,7 +2289,7 @@ log.addEventListener('cleared', () => {
   renderLogTail();
 });
 log.addEventListener('folder', () => renderLogFolder());
-setInterval(renderLogTail, 700);
+const tailTimer = setInterval(renderLogTail, 700);
 window.addEventListener('beforeunload', () => {
   log.flush().catch(() => {});
 });
@@ -2287,6 +2310,155 @@ async function copyLogTail() {
 }
 
 // -------------------------------------------------------------- start over --
+
+// ------------------------------------------------------------------- stop --
+// The Stop button in the top bar: one confirmation, then everything this page
+// runs is stopped — a recording is finished and saved first, connections are
+// closed, timers cleared, pending files written — and, when the server was
+// started on this computer and allows it (GET api/server → quit: true), the
+// local server too (POST api/quit), so start.command / the macOS app exit.
+
+let appServer = null; // GET api/server: { version, pid, dataDir, quit, local } or null (python's http.server, a plain host)
+async function probeAppServer() {
+  try {
+    const res = await fetch('api/server', { cache: 'no-store' });
+    appServer = res.ok ? await res.json() : null;
+  } catch {
+    appServer = null;
+  }
+  return appServer;
+}
+
+function stopItems() {
+  const items = [];
+  if (recorder.isRecording) items.push('the recording in progress — it is finished and saved first');
+  if (portal.device || portal.connected) items.push(`the Bluetooth link to ${portal.device?.name || 'the Portal'}`);
+  if (meticulous) items.push(`the connection to the machine${meticulous.connected ? '' : ' (reconnecting)'}`);
+  if (an.running) items.push('the AI review being written');
+  if (state.liveTimer || replayTimer) items.push('the live chart updates');
+  items.push(`timers and background work (automatic backup, log writing, machine-record attach)${files.ready ? ' — pending files are written before stopping' : ''}`);
+  return items;
+}
+
+function openStopDialog() {
+  if (state.stopped) return;
+  $('stop-list').innerHTML = stopItems().map((t) => `<li>${esc(t)}</li>`).join('');
+  const brewing = !!meticulous?.lastStatus?.extracting;
+  $('stop-brew-row').hidden = !brewing;
+  $('stop-brew').checked = false;
+  const canQuit = !!appServer?.quit;
+  $('stop-server-row').hidden = !canQuit;
+  $('stop-server').checked = false;
+  if (canQuit) $('stop-server-label').textContent = `Also stop the local server (serve.mjs, pid ${appServer.pid}${appServer.dataDir ? `, files in ${appServer.dataDir}` : ''}) — start.command or the app will exit`;
+  $('stop-note').textContent = canQuit
+    ? 'Without the last box the server keeps serving the page; Start again reloads it. With it, start the app again before reloading.'
+    : appServer
+      ? 'This server is not on this computer (or was started with ALLOW_QUIT=0), so it keeps running; only this page stops.'
+      : 'Only this page stops; the server that serves it is not one this page can stop.';
+  $('stop-dialog').showModal();
+}
+
+async function stopEverything({ quitServer = false, abortBrew = false } = {}) {
+  if (state.stopped) return;
+  state.stopped = true;
+  const report = [];
+  const dlg = $('stop-dialog');
+  if (dlg.open) dlg.close();
+  $('app-stop').disabled = true;
+  log.info('app', `stop requested${quitServer ? ' (and the server)' : ''}${abortBrew ? ' (and the brew)' : ''}`);
+  // 1. The brew on the machine, if asked.
+  if (abortBrew && meticulous?.connected) {
+    try {
+      await meticulous.action('abort');
+      report.push('brew stopped on the machine');
+    } catch (err) {
+      report.push(`brew: the machine did not accept abort (${err?.message || err})`);
+    }
+  }
+  // 2. A recording in progress: finish and save it (the 'shot' handler persists it).
+  if (recorder.isRecording) {
+    const saved = new Promise((r) => {
+      const done = () => r(true);
+      recorder.addEventListener('shot', done, { once: true });
+      setTimeout(() => r(false), 4000);
+    });
+    recorder.stopManual();
+    report.push((await saved) ? 'recording finished and saved' : 'recording stopped');
+  }
+  // 3. The AI review, the live loops, the connections.
+  if (an.abort) {
+    an.abort.abort();
+    report.push('AI review cancelled');
+  }
+  stopLiveLoop();
+  if (replayTimer) {
+    clearInterval(replayTimer);
+    replayTimer = null;
+  }
+  try {
+    if (portal.device || portal.connected) {
+      await portal.disconnect();
+      report.push('Portal disconnected');
+    }
+  } catch (err) {
+    report.push(`Portal: ${err?.message || err}`);
+  }
+  if (meticulous) {
+    try {
+      machinePanel.detach();
+      meticulous.disconnect();
+    } catch {
+      /* ignore */
+    }
+    meticulous = null;
+    heat.reset();
+    report.push('machine disconnected');
+  }
+  // 4. Timers and pending work: settings, the backup, the log.
+  clearInterval(tailTimer);
+  if (backupTimer) {
+    clearTimeout(backupTimer);
+    backupTimer = null;
+    try {
+      if (await runAutoBackup('stop')) report.push('automatic backup written');
+    } catch (err) {
+      report.push(`backup: ${err?.message || err}`);
+    }
+  }
+  try {
+    await saveAllSettings({ quiet: true });
+  } catch {
+    /* nothing pending */
+  }
+  await log.flush().catch(() => {});
+  report.push('timers cleared, log flushed');
+  // 5. The server.
+  let serverStopped = false;
+  if (quitServer && appServer?.quit) {
+    try {
+      const res = await fetch('api/quit', { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      if (res.ok && body.stopping) {
+        serverStopped = true;
+        report.push(`server stopped (pid ${body.pid})`);
+      } else report.push(`server: ${body.error || res.status}`);
+    } catch (err) {
+      report.push(`server: ${err?.message || err}`);
+    }
+  }
+  // 6. Show it.
+  $('stopped-list').innerHTML = report.map((t) => `<li>${esc(t)}</li>`).join('');
+  $('stopped-note').textContent = serverStopped ? 'The server that served this page has exited. Start it again (start.command, the app, or node serve.mjs) and then open http://localhost:8787 — this page can no longer reload itself.' : 'Nothing saved was touched. Start again reloads the page; the machine and the Portal reconnect when you ask them to.';
+  $('stopped-again').disabled = serverStopped;
+  $('stopped').hidden = false;
+  document.title = 'portal-met-bridge — stopped';
+  return report;
+}
+
+$('app-stop').addEventListener('click', openStopDialog);
+$('stop-cancel').addEventListener('click', () => $('stop-dialog').close());
+$('stop-go').addEventListener('click', () => stopEverything({ quitServer: !$('stop-server-row').hidden && $('stop-server').checked, abortBrew: !$('stop-brew-row').hidden && $('stop-brew').checked }));
+$('stopped-again').addEventListener('click', () => location.reload());
 
 let erasing = false;
 
@@ -2456,7 +2628,7 @@ document.addEventListener('keydown', (e) => {
   }
 });
 window.addEventListener('beforeunload', (e) => {
-  if (erasing) return;
+  if (erasing || state.stopped) return;
   if (recorder.isRecording) checkpointLiveShot(true); // best effort; the periodic checkpoint is the real guarantee
   if ((!$('view-settings').hidden && dirtySettings().length) || recorder.isRecording) {
     e.preventDefault();
@@ -2610,6 +2782,60 @@ function renderBrewProfiles() {
   const match = list.find((p) => p.id === current) || list.find((p) => p.name === loaded) || list[0];
   if (match) sel.value = match.id;
   $('brew-load').disabled = !list.length;
+}
+
+// ------------------------------------------------------------ ready to brew --
+// heat.js watches the water temperature against the loaded profile's target with
+// the rule from Settings → Machine; Start brew is green while it says "ready".
+const heat = new HeatMonitor();
+
+function applyHeatSettings() {
+  heat.configure({ rule: settings.heatRule, sensor: settings.heatSensor, toleranceC: settings.heatToleranceC, holdSec: settings.heatHoldSec, settleC: settings.heatSettleC });
+  renderHeat(meticulous?.lastStatus || null);
+}
+
+/** The brew temperature of the profile the machine has loaded (by id, else by a unique name). */
+function loadedProfileTemperature(s) {
+  const list = state.profileList || [];
+  const byId = s?.profileId && list.find((p) => p.id === s.profileId);
+  if (byId?.temperatureC) return byId.temperatureC;
+  const full = s?.profileId && state.profileFull?.get?.(s.profileId);
+  if (Number(full?.temperature) > 0) return Number(full.temperature);
+  const named = s?.profile ? list.filter((p) => p.name === s.profile) : [];
+  return named.length === 1 ? named[0].temperatureC : null;
+}
+
+let heatText = '';
+let heatLiveText = '';
+function renderHeat(s) {
+  const line = $('brew-heat');
+  const btn = $('brew-start');
+  if (!s || $('brew-controls').hidden) {
+    line.hidden = true;
+    btn.classList.remove('ready');
+    heatText = '';
+  } else {
+    const ready = heat.ready && !s.extracting;
+    btn.classList.toggle('ready', ready);
+    const text = heat.describe();
+    if (text !== heatText) {
+      heatText = text;
+      line.textContent = text;
+      line.dataset.ready = String(ready);
+      line.hidden = false;
+    }
+  }
+  // Settings → Machine: the live readings, so the sensor choice can be made with eyes open.
+  if (!$('view-settings').hidden) {
+    const sens = meticulous?.lastSensors;
+    const live = s
+      ? `Now: status ${fmt(s.temp, 1)} °C · probe 1 ${fmt(sensorTemp('ext1', s, sens), 1)} · probe 2 ${fmt(sensorTemp('ext2', s, sens), 1)} · tube ${fmt(sensorTemp('tube', s, sens), 1)} · bar ${fmt(sensorTemp('bar', s, sens), 1)} — target ${heat.targetC !== null ? `${fmt(heat.targetC, 1)} °C (${s.profile || 'loaded profile'})` : 'unknown (the loaded profile has no temperature)'} — ${heat.describe()}`
+      : 'Connect the machine to see the readings here.';
+    if (live !== heatLiveText) {
+      heatLiveText = live;
+      $('heat-live').textContent = live;
+    }
+  }
 }
 
 let brewStateText = '';
@@ -3264,7 +3490,7 @@ $('an-saved-rows').addEventListener('click', async (e) => {
   }
 });
 
-window.__pb = { state, store, portal, recorder, timeChart, massChart, calChart, compareChart, compare, machinePanel, settings, log, files, hist, an, runAutoBackup, openShotDialog, openWeightDialog, openCompare, openAnalysis, runReview, refreshShotList, recoverUnfinishedShots, backfillMachineRecords, autosaveShotFiles, refreshProfileTargets, get meticulous() { return meticulous; } };
+window.__pb = { state, store, portal, recorder, timeChart, massChart, calChart, compareChart, compare, machinePanel, settings, log, files, heat, hist, an, runAutoBackup, stopEverything, openStopDialog, openShotDialog, openWeightDialog, openCompare, openAnalysis, runReview, refreshShotList, recoverUnfinishedShots, backfillMachineRecords, autosaveShotFiles, refreshProfileTargets, get meticulous() { return meticulous; } };
 
 init().catch((err) => {
   console.error(err);

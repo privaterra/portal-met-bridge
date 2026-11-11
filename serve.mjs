@@ -6,6 +6,10 @@
 //       → the app can write its shot files, exports, reports, reviews, backups and
 //         logs into that folder on this computer (Settings → Files and folders)
 //   HOST=0.0.0.0 node serve.mjs            → reachable from the LAN (the Home Assistant app does this)
+//   ALLOW_QUIT=0 node serve.mjs            → the page's Stop button may not stop this server
+//       (by default a page served to this same computer may: POST api/quit; the macOS app
+//        and start.command rely on it, the Home Assistant app sets ALLOW_QUIT=0 — s6 would
+//        only restart it)
 // Web Bluetooth only works from a secure origin, and http://localhost counts,
 // so the app must be served (not opened as a file) and opened as localhost — or,
 // when it is served from another machine, that origin must be allowed in
@@ -30,6 +34,14 @@ const dataDirArg = argOf('--data') || process.env.DATA_DIR || '';
 const dataDir = dataDirArg ? resolve(dataDirArg.replace(/^~(?=\/|$)/, process.env.HOME || '~')) : null;
 const dataDirShown = dataDirArg.startsWith('~') ? dataDirArg.replace(/\/+$/, '') : dataDir; // "~/Documents/…" reads better in the page than the full path
 const MAX_BODY = 512 * 1024 * 1024; // a backup with years of shots is tens of MB; leave room
+const allowQuit = process.env.ALLOW_QUIT !== '0';
+const version = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).version;
+let server = null;
+
+/** Requests from this computer itself (the page opened on localhost). */
+export function isLoopback(addr) {
+  return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1' || addr === 'localhost';
+}
 
 const types = {
   '.html': 'text/html; charset=utf-8',
@@ -114,11 +126,31 @@ async function handleFiles(req, res, path) {
   return json(res, 405, { error: 'GET, PUT or DELETE' });
 }
 
+/** What the page may ask of this server: GET api/server → who it is; POST api/quit → stop it (Stop button). */
+function handleServer(req, res, path) {
+  const local = isLoopback(req.socket.remoteAddress);
+  const mayQuit = allowQuit && (local || process.env.ALLOW_QUIT === '1');
+  if (path === '/api/server' && req.method === 'GET') return json(res, 200, { app: 'portal-met-bridge', version, pid: process.pid, host: hostname(), dataDir: dataDir ? dataDirShown : null, quit: mayQuit, local });
+  if (path === '/api/quit') {
+    if (req.method !== 'POST') return json(res, 405, { error: 'POST' });
+    if (!mayQuit) return json(res, 403, { error: local ? 'quitting is disabled (ALLOW_QUIT=0)' : 'only the computer running the server may stop it' });
+    console.log(`stop requested by ${req.socket.remoteAddress}; exiting`);
+    json(res, 200, { stopping: true, pid: process.pid });
+    setTimeout(() => {
+      server?.close();
+      process.exit(0);
+    }, 150);
+    return undefined;
+  }
+  return json(res, 404, { error: 'unknown' });
+}
+
 export function createServer() {
   return http.createServer(async (req, res) => {
     try {
       let path = decodeURIComponent(new URL(req.url, 'http://x').pathname);
       if (path === '/api/files' || path.startsWith('/api/files/')) return await handleFiles(req, res, path);
+      if (path === '/api/server' || path === '/api/quit') return handleServer(req, res, path);
       if (path === '/') path = '/index.html';
       const file = normalize(join(root, path));
       if (!file.startsWith(root)) throw Object.assign(new Error('forbidden'), { code: 'EACCES' });
@@ -139,7 +171,8 @@ const isApi = (req) => req.url.startsWith('/api/');
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   if (dataDir) await mkdir(dataDir, { recursive: true }).catch((e) => console.error(`data folder ${dataDir}: ${e.message}`));
-  createServer().listen(port, host, () => {
+  server = createServer();
+  server.listen(port, host, () => {
     const lines = [`portal-met-bridge → http://localhost:${port}`];
     if (host !== '127.0.0.1' && host !== 'localhost') {
       for (const list of Object.values(networkInterfaces())) for (const n of list || []) if (n.family === 'IPv4' && !n.internal) lines.push(`                    http://${n.address}:${port}  (LAN; Bluetooth needs the chrome://flags exception, see docs/PACKAGING.md)`);

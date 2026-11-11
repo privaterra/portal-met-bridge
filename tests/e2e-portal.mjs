@@ -559,15 +559,65 @@ try {
   check('Brew controls appear while the machine is connected, with its profiles', (await page.isVisible('#brew-controls')) && brewOpts.length === 4 && /Blooming Espresso · 43 g · 92 °C/.test(brewOpts[0]) && /Blooming Espresso · 38 g · 93 °C/.test(brewOpts[3]), brewOpts.join(' | '));
   await page.click('#brew-start');
   await page.waitForFunction(() => /click to start/i.test(document.querySelector('#brew-state').textContent), null, { timeout: 5000 });
-  check('Start brew sends the dial click; the rail shows the machine waiting at "click to start"', /Ready — click to start · 93\.4 °C/.test(await page.textContent('#brew-state')) && (await page.textContent('#brew-start')) === 'Start brew now' && !(await page.isDisabled('#brew-stop')), (await page.textContent('#brew-state')).trim());
+  check('Start brew sends the dial click; the rail shows the machine waiting at "click to start"', /Ready — click to start · 9[23]\.\d °C/.test(await page.textContent('#brew-state')) && (await page.textContent('#brew-start')) === 'Start brew now' && !(await page.isDisabled('#brew-stop')), (await page.textContent('#brew-state')).trim());
   await page.click('#brew-stop');
   await page.waitForFunction(() => /idle/i.test(document.querySelector('#brew-state').textContent), null, { timeout: 5000 });
   check('Stop aborts and the machine returns to idle', /idle/.test(await page.textContent('#brew-state')));
+
+  // ---- Ready to brew (v0.15): the water's temperature against the loaded profile's target
+  const dialCfg = async (cfg) => page.evaluate(async ([port, body]) => (await (await fetch(`http://127.0.0.1:${port}/mock/dial`, { method: 'POST', body: JSON.stringify(body) })).json()), [MOCK_PORT, cfg]);
+  await page.click('.view-tab[data-view="settings"]');
+  await page.uncheck('#set-autorecord'); // the mock's short brew below must not become a recording
+  await page.dispatchEvent('#set-autorecord', 'change');
+  await page.selectOption('#set-heat-rule', 'hold');
+  await page.fill('#set-heat-hold', '1');
+  await page.click('#settings-save');
+  await page.waitForTimeout(200);
+  check('the ready-to-brew rule and hold time save', (await page.evaluate(() => [window.__pb.settings.heatRule, window.__pb.settings.heatHoldSec, window.__pb.heat.rule, window.__pb.heat.holdSec])).join() === 'hold,1,hold,1');
+  await page.click('.view-tab[data-view="shots"]');
+  await dialCfg({ heatMs: 3200, tempFrom: 60, brewMs: 1500, temp: 60 });
+  await page.waitForTimeout(300);
+  check('idle and cold: Start brew is plain and the heat line explains why', !(await page.evaluate(() => document.querySelector('#brew-start').classList.contains('ready'))) && /60\.0 °C · target 93\.0 °C · not within/.test(await page.textContent('#brew-heat')), (await page.textContent('#brew-heat')).trim());
+  await page.click('#brew-start');
+  await page.waitForTimeout(1200);
+  const midHeat = await page.evaluate(() => ({ ready: document.querySelector('#brew-start').classList.contains('ready'), text: document.querySelector('#brew-heat').textContent, phase: window.__pb.heat.phase }));
+  check('while the machine heats the button stays plain and the line shows the climb', !midHeat.ready && midHeat.phase === 'heating' && /heating · [6-8]\d\.\d °C · target 93\.0 °C/.test(midHeat.text), JSON.stringify(midHeat));
+  await page.waitForFunction(() => document.querySelector('#brew-start').classList.contains('ready'), null, { timeout: 8000 });
+  const readyState = await page.evaluate(() => ({ text: document.querySelector('#brew-heat').textContent, green: getComputedStyle(document.querySelector('#brew-start')).backgroundColor, tare: getComputedStyle(document.querySelector('#brew-tare')).backgroundColor, phase: window.__pb.heat.phase }));
+  check('once the water has held the target for the hold time, Start brew turns green (Tare does not)', /^water ready \(held\) · 9[23]\.\d °C · target 93\.0 °C/.test(readyState.text) && readyState.green !== readyState.tare && readyState.phase === 'ready', JSON.stringify(readyState));
+  await page.waitForFunction(() => /click to start/i.test(document.querySelector('#brew-state').textContent), null, { timeout: 6000 });
+  await page.click('#brew-start'); // the mock runs its 1.5 s brew
+  await page.waitForFunction(() => window.__pb.heat.phase === 'brewing', null, { timeout: 4000 });
+  check('during the brew the button is plain again', !(await page.evaluate(() => document.querySelector('#brew-start').classList.contains('ready'))) && /^brewing/.test(await page.textContent('#brew-heat')));
+  await page.waitForFunction(() => window.__pb.heat.phase === 'done', null, { timeout: 6000 });
+  const afterBrew = await page.evaluate(() => ({ ready: document.querySelector('#brew-start').classList.contains('ready'), text: document.querySelector('#brew-heat').textContent, bg: getComputedStyle(document.querySelector('#brew-start')).backgroundColor, tare: getComputedStyle(document.querySelector('#brew-tare')).backgroundColor }));
+  check('after the brew the button is the same colour as Tare although the water is still hot', !afterBrew.ready && afterBrew.bg === afterBrew.tare && /brew done/.test(afterBrew.text), JSON.stringify(afterBrew));
+  // the machine's own word as the rule
+  await page.click('.view-tab[data-view="settings"]');
+  await page.selectOption('#set-heat-rule', 'machine');
+  await page.waitForTimeout(200);
+  check('Settings → Machine shows the live readings and the target while connected', /Now: status 9[0-3]\.\d °C · probe 1 10[0-9]\.\d · probe 2 10[0-9]\.\d · tube 86\.3 · bar 86\.\d — target 93\.0 °C/.test(await page.textContent('#heat-live')), (await page.textContent('#heat-live')).trim());
+  await page.click('.view-tab[data-view="shots"]');
+  await dialCfg({ heatMs: 2000, brewMs: 0 });
+  await page.click('#brew-start');
+  await page.waitForTimeout(900);
+  check('machine rule: not green while it heats, whatever the temperature', !(await page.evaluate(() => document.querySelector('#brew-start').classList.contains('ready'))));
+  await page.waitForFunction(() => document.querySelector('#brew-start').classList.contains('ready'), null, { timeout: 6000 });
+  check('machine rule: green when it reports "click to start"', /^water ready \(machine\)/.test(await page.textContent('#brew-heat')), (await page.textContent('#brew-heat')).trim());
+  await page.click('#brew-stop');
+  await page.waitForFunction(() => /idle/i.test(document.querySelector('#brew-state').textContent), null, { timeout: 5000 });
+  await dialCfg({ heatMs: 800, tempFrom: 25, brewMs: 0 });
+  await page.click('.view-tab[data-view="settings"]');
+  await page.check('#set-autorecord');
+  await page.dispatchEvent('#set-autorecord', 'change');
+  await page.selectOption('#set-heat-rule', 'hold');
+  await page.waitForTimeout(200);
+  await page.click('.view-tab[data-view="shots"]');
   await page.selectOption('#brew-profile', '80c5ea87');
   await page.click('#brew-load');
   await page.waitForTimeout(500);
   const dialState = await page.evaluate(async (port) => (await (await fetch(`http://127.0.0.1:${port}/mock/dial`)).json()), MOCK_PORT);
-  check('Load sends the profile to the machine; the actions reached the API in order', dialState.loadedProfile === 'Blooming Espresso' && dialState.actions.join(',') === 'start,abort' && /Loaded "Blooming Espresso"/.test(await page.textContent('#toast')), JSON.stringify({ loaded: dialState.loadedProfile, actions: dialState.actions }));
+  check('Load sends the profile to the machine; the actions reached the API in order', dialState.loadedProfile === 'Blooming Espresso' && dialState.actions.join(',') === 'start,abort,start,start,start,abort' && /Loaded "Blooming Espresso"/.test(await page.textContent('#toast')), JSON.stringify({ loaded: dialState.loadedProfile, actions: dialState.actions }));
   await page.click('.view-tab[data-view="settings"]');
   // Back to browser downloads for the rest
   await page.selectOption('#set-file-destination', 'downloads');
@@ -658,6 +708,38 @@ try {
   await page.click('.view-tab[data-view="analysis"]');
   await page.waitForTimeout(300);
   check('a saved review survives a restart and is listed with its title', (await page.evaluate(() => [...document.querySelectorAll('#an-saved-rows tr')].map((tr) => tr.textContent))).some((t) => /Shot review: restart test/.test(t)) && (await page.textContent('#analysis-tab-count')) === '(1)');
+  // ---- Stop (v0.15): one confirmation, then everything stops; the server only when asked
+  await page.click('.view-tab[data-view="settings"]'); // the wipe above reset the address to the default
+  await page.fill('#meticulous-host', `localhost:${MOCK_PORT}`);
+  await page.click('#settings-save');
+  await page.waitForTimeout(200);
+  await page.click('.view-tab[data-view="shots"]');
+  await page.click('#meticulous-connect');
+  await page.waitForFunction(() => window.__pb.meticulous?.connected, null, { timeout: 8000 });
+  await page.click('#portal-connect');
+  await page.waitForFunction(() => window.__pb.portal.connected, null, { timeout: 8000 });
+  const serverInfo = await page.evaluate(async () => (await (await fetch('api/server')).json()));
+  check('GET api/server names the server and allows a stop from this computer', serverInfo.app === 'portal-met-bridge' && serverInfo.quit === true && serverInfo.local === true && Number.isFinite(serverInfo.pid), JSON.stringify(serverInfo));
+  await page.click('#app-stop');
+  await page.waitForTimeout(200);
+  const stopDlg = await page.evaluate(() => ({ open: document.querySelector('#stop-dialog').open, items: [...document.querySelectorAll('#stop-list li')].map((li) => li.textContent), serverRow: !document.querySelector('#stop-server-row').hidden, serverChecked: document.querySelector('#stop-server').checked, label: document.querySelector('#stop-server-label').textContent }));
+  check('Stop asks first: the dialog lists the Portal link, the machine and the background work, and offers the server unticked', stopDlg.open && stopDlg.items.some((t) => /Bluetooth link/.test(t)) && stopDlg.items.some((t) => /connection to the machine/.test(t)) && stopDlg.items.some((t) => /timers and background work/.test(t)) && stopDlg.serverRow && !stopDlg.serverChecked && /pid \d+/.test(stopDlg.label), JSON.stringify(stopDlg));
+  await page.click('#stop-cancel');
+  check('Cancel keeps everything running', !(await page.evaluate(() => document.querySelector('#stop-dialog').open)) && (await page.evaluate(() => window.__pb.portal.connected && !!window.__pb.meticulous?.connected && !window.__pb.state.stopped)));
+  await page.click('#app-stop');
+  await page.click('#stop-go');
+  await page.waitForFunction(() => !document.querySelector('#stopped').hidden, null, { timeout: 8000 });
+  const stopped = await page.evaluate(() => ({ stopped: window.__pb.state.stopped, portal: window.__pb.portal.connected, machine: window.__pb.meticulous, items: [...document.querySelectorAll('#stopped-list li')].map((li) => li.textContent), again: document.querySelector('#stopped-again').disabled, note: document.querySelector('#stopped-note').textContent, title: document.title, portalDot: document.querySelector('#link-portal .dot').dataset.state }));
+  check('confirmed: the Portal and the machine are disconnected, timers cleared, the log flushed, and the page says so', stopped.stopped && !stopped.portal && stopped.machine === null && stopped.items.some((t) => /Portal disconnected/.test(t)) && stopped.items.some((t) => /machine disconnected/.test(t)) && stopped.items.some((t) => /timers cleared, log flushed/.test(t)) && !stopped.again && /Start again reloads/.test(stopped.note) && /stopped/.test(stopped.title) && stopped.portalDot !== 'connected', JSON.stringify(stopped));
+  check('the server was left running (the box was not ticked)', (await page.evaluate(async () => (await fetch('api/server')).ok)));
+  // the server part, against a second server so this one survives for the checks above
+  const { spawn: spawn2 } = await import('node:child_process');
+  const spare = spawn2('node', [join(root, 'serve.mjs')], { env: { ...process.env, PORT: '8799' }, stdio: 'ignore' });
+  const spareExit = new Promise((r) => spare.on('exit', (code) => r(code)));
+  await new Promise((r) => setTimeout(r, 700));
+  const quitRes = await fetch('http://127.0.0.1:8799/api/quit', { method: 'POST' }).then((r) => r.json());
+  const exitCode = await Promise.race([spareExit, new Promise((r) => setTimeout(() => r('timeout'), 4000))]);
+  check('POST api/quit stops the server process (what "Also stop the local server" does)', quitRes.stopping === true && exitCode === 0, JSON.stringify({ quitRes, exitCode }));
   const unexpected = errors.filter((e) => !/bad-model|404 \(Not Found\)|400 \(Bad Request\)/.test(e)); // the deliberate wrong-model request logs a 404, the refused file paths 400s
   check('no page errors', unexpected.length === 0, unexpected.join(' | ').slice(0, 300));
 

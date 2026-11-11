@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>portal-met-bridge</title>
   <link rel="stylesheet" href="vendor/uPlot.min.css" />
-  <link rel="stylesheet" href="css/app.css?v=0.14.0" />
+  <link rel="stylesheet" href="css/app.css?v=0.15.0" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M4 26 L10 8 L16 20 L22 6 L28 26' fill='none' stroke='%232447B8' stroke-width='3' stroke-linejoin='round'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -32,8 +32,33 @@
         <span class="link-name">Portal</span>
         <span class="link-detail" id="portal-detail">not connected</span>
       </span>
+      <button id="app-stop" class="btn small stop" title="Stop everything this app is doing: recording, connections, timers — and, if you choose, the local server">Stop</button>
     </div>
   </header>
+
+  <dialog id="stop-dialog" class="modal narrow">
+    <h2>Stop portal-met-bridge?</h2>
+    <p class="hint">This stops everything the app is running. Nothing saved is lost: shots stay in the database, and files already written stay where they are.</p>
+    <ul id="stop-list"></ul>
+    <label class="check" id="stop-brew-row" hidden><input type="checkbox" id="stop-brew" /> Also stop the brew running on the machine (the dial's abort)</label>
+    <label class="check" id="stop-server-row" hidden><input type="checkbox" id="stop-server" /> <span id="stop-server-label">Also stop the local server</span></label>
+    <p class="hint" id="stop-note"></p>
+    <div class="row">
+      <button id="stop-go" class="btn danger solid">Stop everything</button>
+      <button id="stop-cancel" class="btn">Cancel</button>
+    </div>
+  </dialog>
+
+  <div id="stopped" class="stopped" hidden>
+    <div class="stopped-card">
+      <h2>Stopped</h2>
+      <ul id="stopped-list"></ul>
+      <p class="hint" id="stopped-note"></p>
+      <div class="row">
+        <button id="stopped-again" class="btn primary">Start again</button>
+      </div>
+    </div>
+  </div>
 
   <div class="layout">
     <aside class="rail">
@@ -54,9 +79,10 @@
             </div>
           </label>
           <p class="brew-state" id="brew-state">—</p>
+          <p class="brew-heat" id="brew-heat" hidden></p>
           <div class="row">
             <button id="brew-preheat" class="btn small" title="Heat the group without starting a shot">Preheat</button>
-            <button id="brew-start" class="btn small primary" title="The dial click, sent over the network: from idle the machine heats and waits; at &quot;click to start&quot; the shot begins">Start brew</button>
+            <button id="brew-start" class="btn small" title="The dial click, sent over the network: from idle the machine heats and waits; at &quot;click to start&quot; the shot begins. Green = the water has reached the profile's temperature (Settings → Machine → Ready to brew)">Start brew</button>
             <button id="brew-stop" class="btn small danger" title="End the running profile (retracts the piston the normal way)">Stop</button>
             <button id="brew-tare" class="btn small" title="Tare the machine's scale">Tare</button>
           </div>
@@ -175,6 +201,32 @@
           <label class="check"><input type="checkbox" id="set-autoconnect" /> Connect to the machine when the app opens</label>
           <label class="check"><input type="checkbox" id="set-autoattach" checked /> After a shot, fetch the machine's own saved record and attach it (replaces the live samples)</label>
           <label class="field narrow"><span>Wait before fetching it (s)</span><input id="set-attach-delay" type="number" min="1" max="60" step="1" value="4" /></label>
+          <h3>Ready to brew — when has the water reached the profile's temperature?</h3>
+          <p class="hint">While the machine heats, the <em>Start brew</em> button turns <b>green</b> once the rule below is met, and goes back to plain after the shot until the machine heats again. The target is the loaded profile's temperature; the reading is the sensor you choose.</p>
+          <label class="field"><span>Rule</span>
+            <select id="set-heat-rule">
+              <option value="machine">the machine says so — it reports "click to start"</option>
+              <option value="reach">the water is within the tolerance of the target (first reading that is)</option>
+              <option value="hold" selected>the water has stayed within the tolerance of the target for the hold time</option>
+              <option value="settled">within the tolerance for the hold time and no longer changing (settled)</option>
+              <option value="both">the machine says so and the hold rule agrees</option>
+            </select>
+          </label>
+          <div class="row three">
+            <label class="field narrow"><span>Reading</span>
+              <select id="set-heat-sensor">
+                <option value="status" selected>status temperature (what the screen shows)</option>
+                <option value="ext1">external probe 1 (boiler side)</option>
+                <option value="ext2">external probe 2 (group side)</option>
+                <option value="tube">tube</option>
+                <option value="bar">bar heaters (mean)</option>
+              </select>
+            </label>
+            <label class="field narrow"><span>Tolerance (± °C)</span><input id="set-heat-tol" type="number" min="0.2" max="5" step="0.1" value="1" /></label>
+            <label class="field narrow"><span>Hold time (s)</span><input id="set-heat-hold" type="number" min="0" max="60" step="1" value="10" /></label>
+            <label class="field narrow"><span>Settled: moves less than (°C)</span><input id="set-heat-settle" type="number" min="0.1" max="2" step="0.1" value="0.3" /></label>
+          </div>
+          <p class="hint" id="heat-live">Connect the machine to see the readings here.</p>
         </div>
       </section>
 
@@ -823,6 +875,6 @@
   </dialog>
 
   <div class="toast" id="toast" hidden></div>
-  <script type="module" src="js/main.js?v=0.14.0"></script>
+  <script type="module" src="js/main.js?v=0.15.0"></script>
 </body>
 </html>

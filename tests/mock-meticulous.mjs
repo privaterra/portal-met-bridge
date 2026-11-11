@@ -23,8 +23,12 @@ const PORT = Number(process.env.PORT) || 8080;
 const shot = makeDemoShot({ seed: 42 });
 const startEpoch = Date.now() / 1000 + 3; // shot starts 3 s after boot
 let saved = null;
-// dial state driven by /api/v1/action/*: idle → heating → click to start → (idle again on abort)
-const dial = { phase: 'idle', since: 0, loadedProfile: 'Blooming Espresso (demo)', loadedId: 'demo0001', actions: [] };
+// dial state driven by /api/v1/action/*: idle → heating → click to start → (brewing →) idle.
+// POST /mock/dial { heatMs, tempFrom, brewMs } shapes the next cycle: how long the water
+// takes to reach the loaded profile's temperature (ramping from tempFrom with a small
+// overshoot), and whether a click at "click to start" runs a short brew (extracting).
+const dial = { phase: 'idle', since: 0, loadedProfile: 'Blooming Espresso (demo)', loadedId: 'demo0001', actions: [], heatMs: 800, tempFrom: 25, brewMs: 0, temp: 92 };
+const PROFILE_TEMP = { '80c5ea87': 92, '1a830a13': 93, demo0001: 93, dup00002: 93 };
 const AI_KEY = process.env.MOCK_AI_KEY || 'sk-test-123';
 const AI_REPORT = (n, noPortal) => `## Verdict
 
@@ -127,10 +131,10 @@ const server = http.createServer((req, res) => {
     dial.actions.push(name);
     if (!allowed.includes(name)) { res.statusCode = 400; return json(res, { status: 'error', action: name, allowed_actions: allowed }); }
     if (name === 'start') {
-      if (dial.phase === 'idle') { dial.phase = 'heating'; dial.since = Date.now(); }
-      else if (dial.phase === 'ready') { dial.phase = 'idle'; dial.started = Date.now(); } // the shot would begin here; the mock's scripted shot is the one at boot
+      if (dial.phase === 'idle') { dial.phase = 'heating'; dial.since = Date.now(); dial.heatFrom = dial.temp; }
+      else if (dial.phase === 'ready') { dial.phase = dial.brewMs > 0 ? 'brewing' : 'idle'; dial.since = Date.now(); dial.started = Date.now(); } // with brewMs the mock runs a short brew; the scripted shot is the one at boot
       else { res.statusCode = 409; return json(res, { status: 'error', action: name }); }
-    } else if (name === 'preheat') { dial.phase = 'preheat'; dial.since = Date.now(); }
+    } else if (name === 'preheat') { dial.phase = 'preheat'; dial.since = Date.now(); dial.heatFrom = dial.temp; }
     else if (name === 'abort' || name === 'stop' || name === 'home') { dial.phase = 'idle'; if (name === 'abort') return res.end(); }
     return json(res, { action: name, status: 'ok' });
   }
@@ -142,6 +146,19 @@ const server = http.createServer((req, res) => {
     dial.loadedProfile = list[load[1]];
     dial.loadedId = load[1];
     return json(res, { name: dial.loadedProfile, id: load[1] });
+  }
+  if (req.url === '/mock/dial' && req.method === 'POST') {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      try {
+        const o = JSON.parse(body || '{}');
+        for (const k of ['heatMs', 'tempFrom', 'brewMs']) if (Number.isFinite(Number(o[k]))) dial[k] = Number(o[k]);
+        if (Number.isFinite(Number(o.temp))) dial.temp = Number(o.temp);
+        json(res, dial);
+      } catch (e) { res.statusCode = 400; json(res, { error: e.message }); }
+    });
+    return;
   }
   if (req.url === '/mock/dial') return json(res, dial);
   // ---- OpenAI-compatible chat endpoint for the AI review
@@ -187,11 +204,24 @@ let idx = 0;
 setInterval(() => {
   const elapsed = (Date.now() - t0) / 1000 - 3;
   let payload;
-  if (dial.phase === 'heating' && Date.now() - dial.since > 800) dial.phase = 'ready';
-  if (dial.phase === 'preheat' && Date.now() - dial.since > 800) dial.phase = 'idle';
-  const dialPayload = dial.phase === 'heating' || dial.phase === 'preheat' ? { name: 'heating', state: 'brewing' } : dial.phase === 'ready' ? { name: 'click to start', state: 'brewing' } : null;
+  const target = PROFILE_TEMP[dial.loadedId] || 93;
+  const now = Date.now();
+  if ((dial.phase === 'heating' || dial.phase === 'preheat') && now - dial.since >= dial.heatMs) dial.phase = dial.phase === 'heating' ? 'ready' : 'idle';
+  if (dial.phase === 'brewing' && now - dial.since >= dial.brewMs) { dial.phase = 'idle'; dial.temp = target - 1.2; }
+  if (dial.phase === 'heating' || dial.phase === 'preheat') {
+    // ramp from where it started to the target, with a 0.4 °C overshoot that settles in the last 15 %
+    const p = Math.min(1, (now - dial.since) / dial.heatMs);
+    const from = dial.heatFrom ?? dial.tempFrom;
+    dial.temp = p < 0.85 ? from + (target - from) * (p / 0.85) : target + 0.4 * Math.sin(((p - 0.85) / 0.15) * Math.PI);
+  } else if (dial.phase === 'ready') dial.temp = target + 0.1 * Math.sin(now / 700);
+  else if (dial.phase === 'brewing') dial.temp = target - 0.5 - ((now - dial.since) / dial.brewMs) * 0.7;
+  const brewing = dial.phase === 'brewing' ? (now - dial.since) / 1000 : null;
+  const dialPayload = dial.phase === 'heating' || dial.phase === 'preheat' ? { name: 'heating', state: 'brewing' }
+    : dial.phase === 'ready' ? { name: 'click to start', state: 'brewing' }
+    : dial.phase === 'brewing' ? { name: brewing < 0.5 ? 'Saturate' : 'Extract', state: 'brewing', extracting: true, time: Math.round(brewing * 1000), profile_time: Math.round(brewing * 1000), sensors: { p: 2 + brewing * 4, f: 1.5, w: brewing * 1.8, t: dial.temp, g: 1.5 }, setpoints: { active: 'flow', flow: 1.5 } }
+    : null;
   if (elapsed < 0) {
-    payload = { name: 'idle', state: 'idle', extracting: false, time: -1, profile: dial.loadedProfile, loaded_profile: dial.loadedProfile, id: dial.loadedId, profile_time: -1, sensors: { p: 0, f: 0, w: 0, t: 92, g: 0 }, setpoints: { active: null } };
+    payload = { name: 'idle', state: 'idle', extracting: false, time: -1, profile: dial.loadedProfile, loaded_profile: dial.loadedProfile, id: dial.loadedId, profile_time: -1, sensors: { p: 0, f: 0, w: 0, t: Math.round(dial.temp * 10) / 10, g: 0 }, setpoints: { active: null } };
   } else if (idx < shot.machine.length) {
     while (idx < shot.machine.length - 1 && shot.machine[idx + 1].t <= elapsed) idx++;
     const s = shot.machine[idx];
@@ -209,9 +239,9 @@ setInterval(() => {
       };
       console.log('saved shot available');
     }
-    payload = { name: 'idle', state: 'idle', extracting: false, time: -1, profile: dial.loadedProfile, loaded_profile: dial.loadedProfile, id: dial.loadedId, profile_time: -1, sensors: { p: 0, f: 0, w: shot.finalWeightG, t: 92, g: 0 }, setpoints: { active: null } };
+    payload = { name: 'idle', state: 'idle', extracting: false, time: -1, profile: dial.loadedProfile, loaded_profile: dial.loadedProfile, id: dial.loadedId, profile_time: -1, sensors: { p: 0, f: 0, w: shot.finalWeightG, t: Math.round(dial.temp * 10) / 10, g: 0 }, setpoints: { active: null } };
   }
-  if (dialPayload && !payload.extracting) payload = { ...payload, ...dialPayload, sensors: { ...payload.sensors, t: 93.4 } };
+  if (dialPayload && !payload.extracting) payload = { ...payload, ...dialPayload, sensors: dialPayload.sensors || { ...payload.sensors, t: Math.round(dial.temp * 10) / 10 } };
   io.emit('status', payload);
   const e = (Date.now() - t0) / 1000;
   io.emit('sensors', { t_ext_1: 102.9 + Math.sin(e / 5), t_ext_2: 103.4 + Math.cos(e / 7), t_bar_up: 84, t_bar_mu: 87.9, t_bar_md: 88.3, t_bar_down: 85.1, t_tube: 86.3, t_motor_temp: 29.3, lam_temp: 29.7, p: 299, m_pos: elapsed > 0 && elapsed < 30 ? elapsed * 1.5 : 0, m_spd: 1.79, m_pwr: elapsed > 0 && elapsed < 30 ? 25 : 0, m_cur: 0.8, bh_pwr: 30 + 20 * Math.sin(e / 3), bh_cur: 0.03, w_stat: true, motor_temp: 29.3, weight_pred: 0 });

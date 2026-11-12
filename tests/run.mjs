@@ -338,7 +338,7 @@ await test('recorder: checkpoint recovery finalises an interrupted shot, drops a
 
 import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, splitStages, cumulativeWater } from '../js/review.js';
 import { profileFinalWeight, BEVERAGE_PREFERENCES } from '../js/analysis.js';
-import { parseMarkdown, parseInline, markdownToText, beverageNoteFor, reviewProfileOf, REVIEW_TEMPLATE, REVIEW_TEMPLATE_SERIES, buildSeriesComparison, ratingOf } from '../js/review.js';
+import { parseMarkdown, parseInline, markdownToText, beverageNoteFor, reviewProfileOf, REVIEW_TEMPLATE, REVIEW_TEMPLATE_SERIES, buildSeriesComparison, ratingOf, ratingMaxOf } from '../js/review.js';
 import { reviewToDocx, reviewMarkdownFile, reviewFileName, reviewFile, REVIEW_FORMATS, pdfSafe } from '../js/review-export.js';
 import { unzipSync, strFromU8 } from '../vendor/fflate.esm.js';
 import { PROVIDERS, buildRequest, deltaFromEvent, makeSseParser, normalizeModelList, textFromResponse, maskKey, baseUrlFor, isParamRejection, stripOptionalParams, streamCompletion, maxTokensFor, finishFromEvent, finishFromResponse } from '../js/ai.js';
@@ -912,13 +912,26 @@ await test('long reviews (v0.17): the output budget grows with the shots, a cut-
 await test('rating and comment (v0.17): 1–5 stars travel in the digest, the series comparison, the CSV and the templates', () => {
   assert.equal(ratingOf({ rating: 4 }), 4);
   assert.equal(ratingOf({ rating: 0 }), null);
-  assert.equal(ratingOf({ rating: 6 }), null);
+  assert.equal(ratingOf({ rating: 6 }), null, 'a 5-scale shot cannot hold a 6');
   assert.equal(ratingOf({ rating: '3' }), 3);
   assert.equal(ratingOf({}), null);
+  // the 1–9 scale (v0.18): each shot carries the scale it was rated on
+  assert.equal(ratingMaxOf({}), 5);
+  assert.equal(ratingMaxOf({ ratingMax: 9 }), 9);
+  assert.equal(ratingMaxOf({ ratingMax: 7 }), 5, 'only 5 or 9');
+  assert.equal(ratingOf({ rating: 7, ratingMax: 9 }), 7);
+  assert.equal(ratingOf({ rating: 10, ratingMax: 9 }), null);
+  const nine = buildShotDigest({ ...makeDemoShot({ seed: 22 }), id: 'r9', rating: 7, ratingMax: 9, context: { doseG: 18 } }, analyzeShot(makeDemoShot({ seed: 22 }).portal, makeDemoShot({ seed: 22 }).machine.map((m) => ({ t: m.t, w: m.w })), { doseG: 18, stopTimeSec: 30 }));
+  assert.equal(nine.meta.rating, 7);
+  assert.equal(nine.meta.ratingMax, 9);
+  const nineRow = summaryRow({ ...makeDemoShot({ seed: 22 }), id: 'r9', rating: 7, ratingMax: 9, context: { doseG: 18 } }, null, null);
+  assert.equal(nineRow[SUMMARY_COLUMNS.indexOf('rating')], 7);
+  assert.equal(nineRow[SUMMARY_COLUMNS.indexOf('rating_max')], 9);
   const d = makeDemoShot({ seed: 21 });
   const shot = { ...d, id: 'r1', rating: 4, comment: 'sweet, round', context: { doseG: 18, beanName: 'Geishify' } };
   const digest = buildShotDigest(shot, analyzeShot(shot.portal, shot.machine.map((m) => ({ t: m.t, w: m.w })), { doseG: 18, stopTimeSec: shot.durationSec }));
   assert.equal(digest.meta.rating, 4);
+  assert.equal(digest.meta.ratingMax, 5);
   assert.equal(digest.meta.comment, 'sweet, round');
   const plain = buildShotDigest({ ...shot, rating: undefined, comment: '  ' }, analyzeShot(shot.portal, shot.machine.map((m) => ({ t: m.t, w: m.w })), { doseG: 18, stopTimeSec: shot.durationSec }));
   assert.equal(plain.meta.rating, null);
@@ -933,11 +946,12 @@ await test('rating and comment (v0.17): 1–5 stars travel in the digest, the se
   assert.equal(cmp3.trends.rating.direction, 'rising');
   const row = summaryRow(shot, null, null);
   assert.equal(row[SUMMARY_COLUMNS.indexOf('rating')], 4);
+  assert.equal(row[SUMMARY_COLUMNS.indexOf('rating_max')], 5);
   assert.equal(row[SUMMARY_COLUMNS.indexOf('comment')], 'sweet, round');
   assert.equal(summaryRow({ ...shot, rating: undefined, comment: undefined }, null, null)[SUMMARY_COLUMNS.indexOf('rating')], '');
   for (const t of [REVIEW_TEMPLATE, REVIEW_TEMPLATE_SERIES]) {
     assert.ok(t.includes('### Stage by stage') && t.includes('### One change per shot') && t.includes('"worked well", "acceptable" or "needs work"'), 'Suggested changes starts with a verdict per stage');
-    assert.ok(t.includes('meta.rating') && t.includes('meta.comment'), 'the model is told what the rating means');
+    assert.ok(t.includes('meta.rating') && t.includes('meta.ratingMax') && t.includes('meta.comment'), 'the model is told what the rating means and its scale');
   }
   const md = parseMarkdown('## Suggested changes\n\n### Stage by stage\n\n- **Bloom**: 8 s — worked well — keep as is\n\n### One change per shot\n\n1. Grind finer.\n');
   assert.deepEqual(md.filter((b) => b.type === 'heading').map((b) => b.level), [2, 3, 3]);

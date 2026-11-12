@@ -6,7 +6,7 @@
   <title>portal-met-bridge</title>
   <meta name="description" content="Meticulous & Belka Portal conductivity data visualization & analysis: records, visualizes and analyzes the data produced by a Meticulous espresso machine and a Belka Portal conductivity sensor, shot by shot.">
   <link rel="stylesheet" href="vendor/uPlot.min.css" />
-  <link rel="stylesheet" href="css/app.css?v=0.17.1" />
+  <link rel="stylesheet" href="css/app.css?v=0.18.0" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M4 26 L10 8 L16 20 L22 6 L28 26' fill='none' stroke='%232447B8' stroke-width='3' stroke-linejoin='round'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -19,6 +19,7 @@
       <button class="view-tab" data-view="shots" aria-selected="true">Shots</button>
       <button class="view-tab" data-view="history" aria-selected="false">History <span class="count" id="history-tab-count"></span></button>
       <button class="view-tab" data-view="analysis" aria-selected="false">Analysis <span class="count" id="analysis-tab-count"></span></button>
+      <button class="view-tab" data-view="beans" aria-selected="false">Beans <span class="count" id="beans-tab-count"></span></button>
       <button class="view-tab" data-view="machine" aria-selected="false">Machine</button>
       <button class="view-tab" data-view="settings" aria-selected="false">Settings</button>
     </nav>
@@ -124,7 +125,7 @@
 
       <section class="rail-section">
         <h2>This coffee</h2>
-        <label class="field"><span>Bean <small id="bean-count"></small></span><input id="ctx-bean" type="text" list="bean-list" placeholder="pick a previous bean or type a new one" autocomplete="off" /></label>
+        <label class="field"><span>Bean <small id="bean-count"></small> <a id="ctx-bean-link" class="bean-link" target="_blank" rel="noopener noreferrer" hidden title="Open this coffee's page">info ↗</a></span><input id="ctx-bean" type="text" list="bean-list" placeholder="pick a previous bean or type a new one" autocomplete="off" /></label>
         <datalist id="bean-list"></datalist>
         <label class="field"><span>Roaster</span><input id="ctx-roaster" type="text" list="roaster-list" autocomplete="off" /></label>
         <datalist id="roaster-list"></datalist>
@@ -159,22 +160,7 @@
         <label class="field"><span>Grinder</span><input id="ctx-grinder" type="text" list="grinder-list" placeholder="e.g. Zerno Z1" autocomplete="off" /></label>
         <datalist id="grinder-list"></datalist>
         <label class="field"><span>Note for the log</span><textarea id="ctx-note" rows="2"></textarea></label>
-        <p class="hint">Describes the next shot, and is written into the shot you just pulled while it is the most recent one. Each field offers what you have entered before (press ↓ in an empty field) or takes a new entry, which is remembered. Picking a previous bean fills in its roaster, roast level, process and origin. Older shots are edited from <button class="linkish" data-goto="history">History</button>.</p>
-      </section>
-
-      <section class="rail-section grow">
-        <h2>Shots <span class="count" id="shot-count"></span></h2>
-        <div class="row">
-          <button id="shot-prev" class="btn small" title="Newer shot" disabled>◀ newer</button>
-          <button id="shot-next" class="btn small" title="Older shot" disabled>older ▶</button>
-          <button class="btn small" data-goto="history">All shots…</button>
-        </div>
-        <p class="hint" id="shot-saved-note">Every shot is saved here as it is recorded; nothing is lost if the tab closes mid-shot.</p>
-        <div class="row">
-          <button id="demo-load" class="btn small">Add a demo shot</button>
-          <button id="demo-replay" class="btn small">Replay a demo live</button>
-        </div>
-        <p class="hint">Backup, restore and recording options are under <button class="linkish" data-goto="settings">Settings</button>.</p>
+        <p class="hint">Describes the next shot, and is written into the shot you just pulled while it is the most recent one. Each field offers what you have entered before (press ↓ in an empty field) or takes a new entry, which is remembered. Picking a previous bean fills in its roaster, roast level, process and origin. Every coffee you have used is listed under <button class="linkish" data-goto="beans">Beans</button>; older shots are edited from <button class="linkish" data-goto="history">History</button>.</p>
       </section>
     </aside>
 
@@ -257,8 +243,28 @@
           </label>
           <p class="hint">The profile's <code>final_weight</code> is read from the machine's own record of the shot (so two profiles sharing a name cannot be mixed up); until the record is attached it comes from the loaded profile's id. The scale option misses nothing that happened after the pump stopped as long as the settle window covers the drips. With the typed option nothing stands in: a shot shows <em>? g</em> until you enter the weight (Enter final weight on the Shots tab, <em>? g</em> in History, or History → Edit). A weight you type always wins, whichever option is chosen; the choice applies to every shot, including earlier ones.</p>
           <h3>Rating</h3>
-          <label class="check"><input type="checkbox" id="set-ask-rating" checked /> Ask for a 1–5 star rating and a comment after each shot (after the final weight, when that is asked too)</label>
-          <p class="hint">Ratings and comments are saved with the shot, shown in History (★ column, sortable) and under the shot's title, go into the AI review as your verdict on the cup, and are included in reports, the summary CSV and the Beanconqueror hand-off. <em>Later</em> skips; rate any time by clicking the stars under a shot's title or via History → Edit.</p>
+          <label class="check"><input type="checkbox" id="set-ratings" checked /> Ratings — stars and a comment on each shot (under the shot's title, the ★ column in History, the AI review, reports and exports)</label>
+          <div class="row two">
+            <label class="field narrow"><span>Rating scale</span>
+              <select id="set-rating-scale">
+                <option value="5">1–5 stars</option>
+                <option value="9">1–9 stars</option>
+              </select>
+            </label>
+            <label class="field"><span>When to rate a brew</span>
+              <select id="set-rating-when">
+                <option value="manual">manually, afterwards — click the stars under the shot's title, or History → ★ / Edit</option>
+                <option value="after">when the shot completes — the app asks (after the final weight, when that is asked too; <em>Later</em> skips)</option>
+              </select>
+            </label>
+          </div>
+          <p class="hint">A rating is saved with the scale it was given on, so changing the scale later leaves earlier shots as they are (History shows <em>★7/9</em> next to <em>★4</em> and sorts them by their fraction). Ratings and comments go into the shot JSON, the summary CSV, the PDF report, the Beanconqueror hand-off and the AI review, where they count as your verdict on the cup.</p>
+          <h3>Demo data</h3>
+          <div class="row">
+            <button id="demo-load" class="btn small">Add a demo shot</button>
+            <button id="demo-replay" class="btn small">Replay a demo live</button>
+          </div>
+          <p class="hint">A demo shot is a made-up Meticulous shot with a Portal trace, marked as such; the live replay plays one through the recorder so you can watch the page work without a machine. Delete them from History when you are done.</p>
           <h3>Saving</h3>
           <p class="hint">Every shot is written to this browser's database while it is being recorded (a checkpoint every two seconds) and finalised when the pump stops, so a closed tab or a crash loses at most the last two seconds. The machine's own record is attached afterwards, and any shot still missing it is completed the next time the machine connects. Where the files go is set under <em>Files and folders</em>, below.</p>
         </div>
@@ -298,6 +304,22 @@
           </div>
           <p class="hint">Plain names, or a short path like <code>espresso/shots</code>; <code>..</code>, hidden names and characters no file system likes are dropped. The root is not repeated when the chosen place already bears its name (the server's <code>~/Documents/portal-met-bridge</code> holds <code>shots/</code> directly). Renaming a folder here does not move files already written; the app simply writes the next ones to the new name.</p>
           <table class="files-layout"><thead><tr><th>What</th><th>Where it goes now</th><th>Contents</th></tr></thead><tbody id="files-layout"></tbody></table>
+          <h3>Where the buttons send their files</h3>
+          <div class="row two">
+            <label class="field"><span>Shots → <em>Files for this shot</em> (CSV, JSON, graphs, report, Beanconqueror envelope)</span>
+              <select id="set-shot-files-via">
+                <option value="browser">download through the browser</option>
+                <option value="folder">save to the place chosen above (exports/ and reports/)</option>
+              </select>
+            </label>
+            <label class="field"><span>History → <em>Export selected</em>, <em>Summary CSV</em>, <em>Everything (zip)</em></span>
+              <select id="set-exports-via">
+                <option value="browser">download through the browser</option>
+                <option value="folder">save to the place chosen above (exports/)</option>
+              </select>
+            </label>
+          </div>
+          <p class="hint">AI reviews and the debug log always follow the place chosen above. <em>Export settings</em> and <em>Back up everything</em> (Backup and restore) always download; <em>Write a backup now</em> asks.</p>
           <h3>What is written on its own</h3>
           <label class="check"><input type="checkbox" id="set-autosave-files" checked /> Each shot's JSON and CSV, as soon as the shot is saved (and again when the machine's record arrives)</label>
           <p class="hint" id="autosave-note"></p>
@@ -407,10 +429,11 @@
           <h3>Everything</h3>
           <div class="row">
             <button id="backup-export" class="btn small">Back up everything (JSON)</button>
-            <label class="btn small file"><input type="file" id="backup-import" accept="application/json" hidden />Restore</label>
+            <button id="backup-restore" class="btn small">Restore…</button>
+            <input type="file" id="backup-import" accept="application/json" hidden />
             <span class="inline-note" id="backup-note"></span>
           </div>
-          <p class="hint">All shots with their samples, refractometer readings, the bean library and the saved reviews. Restoring merges by shot id; nothing is deleted.</p>
+          <p class="hint">All shots with their samples, refractometer readings, the bean library and the saved reviews, downloaded through the browser. <em>Restore…</em> asks whether to upload a backup file or pick one of the backups saved in the backups folder (the automatic ones included); restoring merges by shot id and deletes nothing.</p>
           <p class="hint" id="backup-note-where"></p>
         </div>
       </section>
@@ -544,6 +567,38 @@
       </section>
     </main>
 
+    <main class="main" id="view-beans" hidden>
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Beans <span class="count" id="beans-count"></span></h2>
+          <div class="panel-tools">
+            <input id="beans-search" type="search" placeholder="Search coffee, roaster, origin, process…" autocomplete="off" />
+            <button id="beans-add" class="btn small">Add a coffee</button>
+          </div>
+        </div>
+        <p class="hint">Every coffee you have brewed or entered under <em>This coffee</em>: how often it was pulled, how it rated, when it was last used. Open a coffee for its shots; <em>Edit</em> for its roaster, origin, process, roast level, notes and a link to where its information lives (the roaster's page, say).</p>
+        <div class="hist-wrap">
+          <table class="hist beans" id="beans-table">
+            <thead>
+              <tr>
+                <th data-sort="name" aria-sort="none">Coffee</th>
+                <th data-sort="roaster" aria-sort="none" title="and the last dose and grind used with it">Roaster</th>
+                <th>Origin</th>
+                <th>Process</th>
+                <th>Roast</th>
+                <th data-sort="shots" class="num" aria-sort="none" title="shots of this coffee">Shots</th>
+                <th data-sort="rating" class="num rating" aria-sort="none" title="average rating, on a 5 scale">Avg ★</th>
+                <th data-sort="lastUsed" class="num" aria-sort="descending">Last brewed</th>
+                <th class="actions"></th>
+              </tr>
+            </thead>
+            <tbody id="beans-rows"></tbody>
+          </table>
+        </div>
+        <p class="hint" id="beans-empty" hidden>No coffees yet — fill in <em>This coffee</em> on the Shots tab before a brew, or press <em>Add a coffee</em>.</p>
+      </section>
+    </main>
+
     <main class="main" id="view-machine" hidden>
       <section class="panel">
         <div class="panel-head">
@@ -640,6 +695,7 @@
           </select>
           <button id="hist-compare" class="btn small primary" disabled title="Overlay the graphs of the ticked shots (2–8)">Compare selected</button>
           <button id="hist-analyze" class="btn small" disabled title="Review the ticked shots with the AI provider chosen in Settings">Analyze selected</button>
+          <button id="hist-export" class="btn small" disabled title="A zip with the ticked shots' CSV, JSON, graphs and PDF reports plus a summary CSV">Export selected</button>
           <button id="hist-delete-selected" class="btn small danger" disabled>Delete selected</button>
         </div>
         <div class="hist-wrap">
@@ -718,6 +774,7 @@
         <div class="panel-head">
           <h2 id="shot-title">No shot selected</h2>
           <div class="panel-tools">
+            <span class="shot-nav"><button id="shot-prev" class="btn small" title="Newer shot" disabled>◀</button><button id="shot-next" class="btn small" title="Older shot" disabled>▶</button></span>
             <button id="shot-weigh" class="btn small primary" title="Type the final weight of this brew" hidden>Enter final weight</button>
             <button id="shot-refresh" class="btn small" title="Replace the live machine samples with the machine's own saved record of this shot" disabled>Refresh from machine</button>
             <button id="shot-edit" class="btn small" title="Edit this shot's coffee, dose, grind, note and refractometer reading" disabled>Edit details</button>
@@ -798,7 +855,7 @@
             <button id="dl-jpeg" class="btn small" disabled>Graphs (JPEG)</button>
             <button id="dl-pdf" class="btn small" disabled>Report (PDF)</button>
           </div>
-          <p class="hint">Files for <em>all</em> shots (summary CSV, zip of everything) are under <button class="linkish" data-goto="history">History</button>. <span id="shot-files-note"></span></p>
+          <p class="hint"><span id="shot-files-where"></span> Change that under <button class="linkish" data-goto="settings">Settings → Files and folders</button>. Files for <em>several</em> shots (export selected, summary CSV, zip of everything) are under <button class="linkish" data-goto="history">History</button>. <span id="shot-files-note"></span></p>
           <h3>Attach a saved machine shot</h3>
           <p class="hint">Pulls the machine's own record and attaches it to the selected recording when the times line up, or creates a new entry without Portal data.</p>
           <div class="row">
@@ -858,7 +915,7 @@
       </div>
       <p class="hint" id="e-bev-hint"></p>
       <label class="field"><span>Note</span><textarea id="e-note" rows="2"></textarea></label>
-      <div class="field"><span>Your rating</span><span class="stars" id="e-stars" role="radiogroup" aria-label="Rating" data-value="0"><button type="button" class="star" data-star="1" role="radio" aria-checked="false" title="1 — poor" aria-label="1 star">★</button><button type="button" class="star" data-star="2" role="radio" aria-checked="false" title="2 — meh" aria-label="2 stars">★</button><button type="button" class="star" data-star="3" role="radio" aria-checked="false" title="3 — fine" aria-label="3 stars">★</button><button type="button" class="star" data-star="4" role="radio" aria-checked="false" title="4 — good" aria-label="4 stars">★</button><button type="button" class="star" data-star="5" role="radio" aria-checked="false" title="5 — great" aria-label="5 stars">★</button><button type="button" class="star-clear hidden" data-star="0" title="Remove the rating">clear</button></span></div>
+      <div class="field" id="e-rating-row"><span>Your rating</span><span class="stars" id="e-stars" role="radiogroup" aria-label="Rating" data-value="0" data-max="5"><button type="button" class="star" data-star="1" role="radio" aria-checked="false" title="1 — poor" aria-label="1 star">★</button><button type="button" class="star" data-star="2" role="radio" aria-checked="false" title="2 — meh" aria-label="2 stars">★</button><button type="button" class="star" data-star="3" role="radio" aria-checked="false" title="3 — fine" aria-label="3 stars">★</button><button type="button" class="star" data-star="4" role="radio" aria-checked="false" title="4 — good" aria-label="4 stars">★</button><button type="button" class="star" data-star="5" role="radio" aria-checked="false" title="5 — great" aria-label="5 stars">★</button><button type="button" class="star-clear hidden" data-star="0" title="Remove the rating">clear</button></span></div>
       <label class="field"><span>Comment on the cup</span><textarea id="e-comment" rows="2" placeholder="e.g. sweet, round, a little short on the finish"></textarea></label>
       <p class="hint">The beverage you weighed replaces the default (the profile's target weight or the machine's scale, as chosen under Settings → Recording) for yield, EY, the summary and the Beanconqueror hand-off; the recorded samples and times stay as measured. Blank it to go back to the default.</p>
       <div class="row end">
@@ -884,11 +941,65 @@
     <form method="dialog">
       <h2 id="r-title">How was it?</h2>
       <p class="hint" id="r-sub"></p>
-      <div class="field"><span>Rating (press 1–5)</span><span class="stars big" id="r-stars" role="radiogroup" aria-label="Rating" data-value="0"><button type="button" class="star" data-star="1" role="radio" aria-checked="false" title="1 — poor" aria-label="1 star">★</button><button type="button" class="star" data-star="2" role="radio" aria-checked="false" title="2 — meh" aria-label="2 stars">★</button><button type="button" class="star" data-star="3" role="radio" aria-checked="false" title="3 — fine" aria-label="3 stars">★</button><button type="button" class="star" data-star="4" role="radio" aria-checked="false" title="4 — good" aria-label="4 stars">★</button><button type="button" class="star" data-star="5" role="radio" aria-checked="false" title="5 — great" aria-label="5 stars">★</button><button type="button" class="star-clear hidden" data-star="0" title="Remove the rating">clear</button></span></div>
+      <div class="field"><span>Rating (<span id="r-keys">press 1–5</span>)</span><span class="stars big" id="r-stars" role="radiogroup" aria-label="Rating" data-value="0" data-max="5"><button type="button" class="star" data-star="1" role="radio" aria-checked="false" title="1 — poor" aria-label="1 star">★</button><button type="button" class="star" data-star="2" role="radio" aria-checked="false" title="2 — meh" aria-label="2 stars">★</button><button type="button" class="star" data-star="3" role="radio" aria-checked="false" title="3 — fine" aria-label="3 stars">★</button><button type="button" class="star" data-star="4" role="radio" aria-checked="false" title="4 — good" aria-label="4 stars">★</button><button type="button" class="star" data-star="5" role="radio" aria-checked="false" title="5 — great" aria-label="5 stars">★</button><button type="button" class="star-clear hidden" data-star="0" title="Remove the rating">clear</button></span></div>
       <label class="field"><span>Comment (optional)</span><textarea id="r-comment" rows="3" placeholder="How it tasted, what you would change — this goes to the AI review, the reports and Beanconqueror"></textarea></label>
       <div class="row end">
         <button type="button" id="r-later" class="btn">Later</button>
         <button type="button" id="r-save" class="btn primary">Save rating</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="bean-dialog" class="modal">
+    <form method="dialog" id="bean-form">
+      <h2 id="b-title">Coffee</h2>
+      <p class="hint" id="b-sub"></p>
+      <label class="field"><span>Coffee (bag name)</span><input id="b-name" type="text" maxlength="120" required autocomplete="off" /></label>
+      <div class="row two">
+        <label class="field"><span>Roaster</span><input id="b-roaster" type="text" list="roaster-list" maxlength="120" autocomplete="off" /></label>
+        <label class="field"><span>Origin</span><input id="b-origin" type="text" list="origin-list" maxlength="120" placeholder="country, region, farm" autocomplete="off" /></label>
+      </div>
+      <div class="row two">
+        <label class="field"><span>Process</span>
+          <select id="b-process">
+            <option value="">unknown</option>
+            <option value="washed">washed</option>
+            <option value="natural">natural</option>
+            <option value="honey">honey / pulped</option>
+            <option value="anaerobic">anaerobic / fermented</option>
+            <option value="other">other</option>
+          </select>
+        </label>
+        <label class="field"><span>Roast level</span>
+          <select id="b-roast">
+            <option value="">unknown</option>
+            <option value="light">light</option>
+            <option value="medium-light">medium-light</option>
+            <option value="medium">medium</option>
+            <option value="medium-dark">medium-dark</option>
+            <option value="dark">dark</option>
+          </select>
+        </label>
+      </div>
+      <label class="field"><span>Web page for this coffee (optional)</span><input id="b-url" type="url" inputmode="url" placeholder="https://roaster.example/coffees/this-one" autocomplete="off" /></label>
+      <label class="field"><span>Notes (optional — variety, altitude, roast date, what you think of it)</span><textarea id="b-notes" rows="3" maxlength="2000"></textarea></label>
+      <label class="check" id="b-apply-row"><input type="checkbox" id="b-apply" checked /> <span id="b-apply-label">Also update this coffee's shots (name, roaster, origin, process, roast level)</span></label>
+      <p class="status" id="b-error" data-level="bad"></p>
+      <div class="row end">
+        <button type="button" id="b-delete" class="btn danger" hidden>Remove from the library</button>
+        <button type="button" id="b-cancel" class="btn">Cancel</button>
+        <button type="button" id="b-save" class="btn primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="choice-dialog" class="modal narrow">
+    <form method="dialog">
+      <h2 id="choice-title">Which way?</h2>
+      <p class="hint" id="choice-text"></p>
+      <div class="choice-list" id="choice-list"></div>
+      <div class="row end">
+        <button type="button" id="choice-cancel" class="btn">Cancel</button>
       </div>
     </form>
   </dialog>
@@ -905,6 +1016,6 @@
   </dialog>
 
   <div class="toast" id="toast" hidden></div>
-  <script type="module" src="js/main.js?v=0.17.1"></script>
+  <script type="module" src="js/main.js?v=0.18.0"></script>
 </body>
 </html>

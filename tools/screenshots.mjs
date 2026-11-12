@@ -71,15 +71,19 @@ async function seed(page) {
     };
     const put = (s) => window.__pb.store.putShot(s);
     await put(mk(11, 6 * day + 3600e3, { beanName: 'Supernova', roaster: 'Hatch', origin: 'Brazil, Cerrado', doseG: 18, grindSize: '430 µm' }, { targetG: 40, durationSec: 26, ecScale: 0.88 }));
-    await put(mk(12, 5 * day + 1800e3, { beanName: 'Supernova', roaster: 'Hatch', origin: 'Brazil, Cerrado', doseG: 18, grindSize: '420 µm' }, { targetG: 40, beverageG: 41.3, refractometer: { tdsPct: 9.4, eyPct: 21.6, at: now - 5 * day } }));
-    await put(mk(13, 4 * day, { beanName: 'Supernova', roaster: 'Hatch', origin: 'Brazil, Cerrado', doseG: 18.2, grindSize: '415 µm' }, { targetG: 40, durationSec: 34, ecScale: 1.1, refractometer: { tdsPct: 9.9, eyPct: 21.8, at: now - 4 * day } }));
-    await put(mk(21, 3 * day + 7200e3, { beanName: 'Geishify Espresso Blend', roaster: 'Cafe Unido', origin: 'Panama', doseG: 18.3, grindSize: '80 µm', process: 'washed' }, { targetG: 43, durationSec: 37, ecScale: 0.93, profileName: 'Blooming Espresso Straight' }));
+    await put(mk(12, 5 * day + 1800e3, { beanName: 'Supernova', roaster: 'Hatch', origin: 'Brazil, Cerrado', doseG: 18, grindSize: '420 µm' }, { targetG: 40, beverageG: 41.3, refractometer: { tdsPct: 9.4, eyPct: 21.6, at: now - 5 * day }, rating: 4, ratingMax: 5, comment: 'Juicy, clean finish.' }));
+    await put(mk(13, 4 * day, { beanName: 'Supernova', roaster: 'Hatch', origin: 'Brazil, Cerrado', doseG: 18.2, grindSize: '415 µm' }, { targetG: 40, durationSec: 34, ecScale: 1.1, refractometer: { tdsPct: 9.9, eyPct: 21.8, at: now - 4 * day }, rating: 3, ratingMax: 5, comment: 'A touch bitter at the end — too fine.' }));
+    await put(mk(21, 3 * day + 7200e3, { beanName: 'Geishify Espresso Blend', roaster: 'Cafe Unido', origin: 'Panama', doseG: 18.3, grindSize: '80 µm', process: 'washed' }, { targetG: 43, durationSec: 37, ecScale: 0.93, profileName: 'Blooming Espresso Straight', rating: 5, ratingMax: 5, comment: 'Floral, the best of the bag.' }));
     await put(mk(22, 2 * day + 5400e3, { beanName: 'Geishify Espresso Blend', roaster: 'Cafe Unido', origin: 'Panama', doseG: 18.3, grindSize: '85 µm', process: 'washed' }, { targetG: 43, durationSec: 35, profileName: 'Blooming Espresso Straight', refractometer: { tdsPct: 8.7, eyPct: 20.4, at: now - 2 * day } }));
     const dry = mk(31, 1 * day + 9000e3, { beanName: 'Revolver SO Bali', roaster: 'Revolver', origin: 'Indonesia, Kintamani', doseG: 18, grindSize: '65 µm', roastLevel: 'medium', process: 'washed' }, { targetG: 40, durationSec: 27 });
     dry.portal = []; // the Portal was not connected for this one
     await put(dry);
     await put(mk(32, 0.5 * day, { beanName: 'Revolver SO Bali', roaster: 'Revolver', origin: 'Indonesia, Kintamani', doseG: 18, grindSize: '70 µm', roastLevel: 'medium', process: 'washed' }, { targetG: 40, durationSec: 31, ecScale: 1.04 }));
     await window.__pb.store.seedListsFromHistory();
+    await window.__pb.store.putBean({ name: 'Geishify Espresso Blend', roaster: 'Cafe Unido', origin: 'Panama, Boquete', process: 'washed', roastLevel: 'light', url: 'https://cafeunido.example/geishify', notes: 'Geisha-led blend, roasted for espresso. Best 10–30 days off roast.' });
+    await window.__pb.store.putBean({ name: 'Supernova', roaster: 'Hatch', origin: 'Brazil, Cerrado', process: 'natural', roastLevel: 'light', url: 'https://hatch.example/supernova', notes: 'Yellow bourbon, 1 100 m.' });
+    await window.__pb.store.setSetting('ratingWhen', 'after'); // the rating dialog screenshot wants the prompt after the shot
+    window.__pb.settings.ratingWhen = 'after';
   }, await page.evaluate(() => document.querySelector('script[src*="main.js"]').src.split('v=')[1]));
 }
 
@@ -188,6 +192,13 @@ try {
   await page.waitForTimeout(400);
   await shot(page, 'history');
 
+  // ---- Beans: every coffee with its shots, rating and link (v0.18)
+  await page.click('.view-tab[data-view="beans"]');
+  await page.waitForTimeout(400);
+  await shot(page, 'beans');
+  await page.click('.view-tab[data-view="history"]');
+  await page.waitForTimeout(300);
+
   // ---- Compare: the three Supernova shots overlaid
   await page.setViewportSize({ width: 1440, height: 860 });
   for (const id of ['seed-11', 'seed-12', 'seed-13']) await page.check(`#hist-rows tr[data-id="${id}"] input[type="checkbox"]`);
@@ -251,6 +262,8 @@ try {
   // the Files and folders panel after a few files were written
   await narrow.evaluate(async () => { await window.__pb.runAutoBackup('screenshot', { force: true }); await window.__pb.log.flush(); });
   await narrow.click('#files-backup-now');
+  await narrow.waitForSelector('#choice-dialog[open]');
+  await narrow.click('#choice-list button[data-id="folder"]');
   await narrow.waitForTimeout(400);
   await narrow.evaluate(() => { document.querySelector('#toast').hidden = true; document.querySelector('#savebar').style.visibility = 'hidden'; });
   await narrow.locator('#files-panel').screenshot({ path: join(docs, 'screenshot-files.png') });

@@ -152,6 +152,18 @@ export class Store {
     });
   }
 
+  /** Store a bean record as given (the Beans tab's editor); `key` is derived from the name. */
+  async putBean(rec) {
+    const key = coffeeKey(rec?.name);
+    if (!key) throw new Error('A coffee needs a name.');
+    const db = await this.dbp;
+    const prev = (await tx(db, 'beans', 'readonly', (s) => s.get(key))) || { key, createdAt: Date.now(), uses: 0, lastUsed: Date.now() };
+    const out = { ...prev, ...rec, key, name: rec.name.trim() };
+    await tx(db, 'beans', 'readwrite', (s) => s.put(out));
+    this._changed('bean');
+    return out;
+  }
+
   async deleteBean(name) {
     const db = await this.dbp;
     await tx(db, 'beans', 'readwrite', (s) => s.delete(coffeeKey(name)));

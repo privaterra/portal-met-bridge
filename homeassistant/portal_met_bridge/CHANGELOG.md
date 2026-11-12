@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.18.0
+
+- Matches portal-met-bridge v0.18.0: rating settings (on/off, 1–5 or 1–9 scale, rate when the shot completes or afterwards), switches for where per-shot files and History exports go, *Write a backup now* and *Restore…* ask (the restore picker lists the backups in `/share/portal-met-bridge/backups`), *Export selected* in History, a Beans tab with an editor and a link per coffee; the duplicate Shots block on the left is gone.
+
 ## 0.17.1
 
 - Matches portal-met-bridge v0.17.1: the macOS build fixed (the v0.17.0 tag had no release), the Machine tab escapes everything the machine answers, CSV exports neutralize formula-like fields, the Analysis shot picker keeps rated rows on one line.

@@ -1,21 +1,21 @@
 // main.js — wires the devices, the recorder, storage, charts and export together.
 
-import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.17.1';
-import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, machineBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.17.1';
-import { MachinePanel } from './machine-panel.js?v=0.17.1';
-import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.17.1';
-import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.17.1';
-import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.17.1';
-import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, profileFinalWeight, setBeveragePreference, grindMicrons, measuredEy, DEFAULTS } from './analysis.js?v=0.17.1';
-import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, approxTokens, reviewProfileOf, ratingOf } from './review.js?v=0.17.1';
-import { PROVIDERS, streamCompletion, listModels, testKey, maskKey, maxTokensFor } from './ai.js?v=0.17.1';
-import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.17.1';
-import { makeDemoShot } from './demo.js?v=0.17.1';
-import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug, loadJsPdf } from './export.js?v=0.17.1';
-import { REVIEW_FORMATS, reviewFile, reviewMarkdownFile } from './review-export.js?v=0.17.1';
-import { log, formatLine } from './log.js?v=0.17.1';
-import { files, Files, FILE_KINDS, DEFAULT_ROOT, cleanDirName } from './files.js?v=0.17.1';
-import { HeatMonitor, HEAT_RULES, HEAT_SENSORS, sensorTemp } from './heat.js?v=0.17.1';
+import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.18.0';
+import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, machineBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.18.0';
+import { MachinePanel } from './machine-panel.js?v=0.18.0';
+import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.18.0';
+import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.18.0';
+import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.18.0';
+import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, profileFinalWeight, setBeveragePreference, grindMicrons, measuredEy, DEFAULTS } from './analysis.js?v=0.18.0';
+import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, approxTokens, reviewProfileOf, ratingOf, ratingMaxOf } from './review.js?v=0.18.0';
+import { PROVIDERS, streamCompletion, listModels, testKey, maskKey, maxTokensFor } from './ai.js?v=0.18.0';
+import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.18.0';
+import { makeDemoShot } from './demo.js?v=0.18.0';
+import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug, loadJsPdf } from './export.js?v=0.18.0';
+import { REVIEW_FORMATS, reviewFile, reviewMarkdownFile } from './review-export.js?v=0.18.0';
+import { log, formatLine } from './log.js?v=0.18.0';
+import { files, Files, FILE_KINDS, DEFAULT_ROOT, cleanDirName } from './files.js?v=0.18.0';
+import { HeatMonitor, HEAT_RULES, HEAT_SENSORS, sensorTemp } from './heat.js?v=0.18.0';
 import qrcode from '../vendor/qrcode.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -30,7 +30,7 @@ const calChart = new CalibrationChart($('chart-cal'));
 const compareChart = new CompareChart($('cmp-chart'));
 const machinePanel = new MachinePanel($('view-machine'));
 
-const VIEWS = ['shots', 'history', 'analysis', 'machine', 'settings'];
+const VIEWS = ['shots', 'history', 'analysis', 'beans', 'machine', 'settings'];
 
 function showView(name) {
   if (!VIEWS.includes(name)) name = 'shots';
@@ -43,6 +43,7 @@ function showView(name) {
   if (name === 'machine') machinePanel.onShown();
   else if (name === 'history') renderHistory();
   else if (name === 'analysis') renderAnalysis();
+  else if (name === 'beans') renderBeans();
   else if (name === 'shots') {
     timeChart.u.setSize({ width: Math.max(320, $('chart-time').clientWidth), height: 320 });
     massChart.u.setSize({ width: Math.max(320, $('chart-mass').clientWidth), height: 300 });
@@ -87,7 +88,9 @@ const SETTINGS = {
   minShotSec: { def: 5, el: 'set-min-shot', num: true, min: 0, max: 60 },
   autoGraph: { def: true, el: 'portal-auto-graph', bool: true },
   beverageDefault: { def: 'profile', el: 'set-beverage-default' },
-  askRating: { def: true, el: 'set-ask-rating', bool: true },
+  ratings: { def: true, el: 'set-ratings', bool: true },
+  ratingScale: { def: '5', el: 'set-rating-scale' },
+  ratingWhen: { def: 'manual', el: 'set-rating-when' },
   fileDestination: { def: 'auto', el: 'set-file-destination' },
   fileRoot: { def: DEFAULT_ROOT, el: 'set-dir-root', dir: '' },
   dirShots: { def: FILE_KINDS.shots.def, el: 'set-dir-shots', dir: FILE_KINDS.shots.def },
@@ -96,6 +99,8 @@ const SETTINGS = {
   dirReviews: { def: FILE_KINDS.reviews.def, el: 'set-dir-reviews', dir: FILE_KINDS.reviews.def },
   dirBackups: { def: FILE_KINDS.backups.def, el: 'set-dir-backups', dir: FILE_KINDS.backups.def },
   dirLogs: { def: FILE_KINDS.logs.def, el: 'set-dir-logs', dir: FILE_KINDS.logs.def },
+  shotFilesVia: { def: 'browser', el: 'set-shot-files-via' },
+  exportsVia: { def: 'browser', el: 'set-exports-via' },
   autoSaveFiles: { def: true, el: 'set-autosave-files', bool: true },
   autoBackup: { def: true, el: 'set-auto-backup', bool: true },
   minCalibrationShots: { def: 5, el: 'set-min-cal', num: true, min: 2, max: 20 },
@@ -223,7 +228,15 @@ function applySetting(key, v) {
       break;
     case 'autoSaveFiles':
     case 'autoBackup':
+    case 'shotFilesVia':
+    case 'exportsVia':
       renderFiles();
+      if (state.selected) renderShotFilesNote();
+      break;
+    case 'ratings':
+    case 'ratingScale':
+    case 'ratingWhen':
+      applyRatingSettings();
       break;
     case 'heatRule':
     case 'heatSensor':
@@ -298,7 +311,7 @@ async function resetSettings() {
 // Human-readable names for the save bar.
 const SETTING_LABELS = {
   meticulousHost: 'machine address', autoConnectMeticulous: 'connect on open', autoAttach: 'attach machine record', attachDelaySec: 'attach delay',
-  autoRecord: 'auto-record', machineVia: 'machine reached via', heatRule: 'ready-to-brew rule', heatSensor: 'temperature reading', heatToleranceC: 'temperature tolerance', heatHoldSec: 'hold time', heatSettleC: 'settled threshold', settleSec: 'settle window', lagSec: 'Portal lag', minShotSec: 'minimum shot length', autoGraph: 'Portal screen', autoSaveFiles: 'write shot files', beverageDefault: 'final weight', askRating: 'ask for a rating',
+  autoRecord: 'auto-record', machineVia: 'machine reached via', heatRule: 'ready-to-brew rule', heatSensor: 'temperature reading', heatToleranceC: 'temperature tolerance', heatHoldSec: 'hold time', heatSettleC: 'settled threshold', settleSec: 'settle window', lagSec: 'Portal lag', minShotSec: 'minimum shot length', autoGraph: 'Portal screen', autoSaveFiles: 'write shot files', beverageDefault: 'final weight', ratings: 'ratings', ratingScale: 'rating scale', ratingWhen: 'when to rate',
   minCalibrationShots: 'reference shots', estimatePool: 'estimate pool', logEnabled: 'logging', logLevel: 'log detail', logPackets: 'packet logging',
   logShowTail: 'live tail', fileDestination: 'where files go', fileRoot: 'root folder', dirShots: 'shot files folder', dirExports: 'exports folder', dirReports: 'reports folder',
   dirReviews: 'reviews folder', dirBackups: 'backups folder', dirLogs: 'logs folder', autoBackup: 'automatic backup',
@@ -405,13 +418,14 @@ async function init() {
   await files.probeServer();
   await restoreFolder();
   applyFileSettings();
+  document.body.classList.toggle('no-ratings', !ratingsOn());
   store.onChange = (kind) => scheduleAutoBackup(kind);
   applyHeatSettings();
   await probeAppServer().catch(() => {});
   renderMachineVia();
   renderLogStatus();
-  $('about-version').textContent = 'v0.17.1';
-  log.info('app', `portal-met-bridge v0.17.1 started · ${navigator.userAgent}`);
+  $('about-version').textContent = 'v0.18.0';
+  log.info('app', `portal-met-bridge v0.18.0 started · ${navigator.userAgent}`);
 
   const env = await environmentCheck();
   renderPortalSteps({ secure: env.secure, api: env.api, adapter: env.adapter });
@@ -842,10 +856,11 @@ recorder.addEventListener('shot', async (e) => {
   selectShot(shot.id);
   log.info('recorder', `saved shot ${shot.id}: ${fmt(shot.finalWeightG, 1)} g in ${fmt(shot.durationSec, 1)} s, ${shot.machine.length} machine + ${shot.portal.length} Portal samples`);
   toast(`Saved shot — ${fmt(shot.finalWeightG, 1)} g in ${fmt(shot.durationSec, 1)} s`);
+  const askRating = settings.ratings && settings.ratingWhen === 'after';
   if (settings.beverageDefault === 'manual') {
-    if (settings.askRating) pendingRating = shot.id; // the rating dialog follows the weight dialog
+    if (askRating) pendingRating = shot.id; // the rating dialog follows the weight dialog
     setTimeout(() => openWeightDialog(shot.id), 400); // the final weight is yours to type
-  } else if (settings.askRating) setTimeout(() => openRatingDialog(shot.id), 400);
+  } else if (askRating) setTimeout(() => openRatingDialog(shot.id), 400);
   if (settings.autoSaveFiles) autosaveShotFiles(shot).catch(() => {});
   if (settings.autoAttach && meticulous?.connected && !shot.manual) setTimeout(() => refreshFromMachine(shot.id, true), settings.attachDelaySec * 1000);
 });
@@ -942,10 +957,11 @@ function stopLiveLoop() {
 async function refreshShotList() {
   state.shots = await store.listShots();
   const n = state.shots.filter((x) => !x.inProgress).length;
-  $('shot-count').textContent = n ? `(${n})` : '';
   $('history-tab-count').textContent = n ? `(${n})` : '';
   renderHistory();
   updateShotNav();
+  if (!$('view-beans').hidden) renderBeans();
+  else $('beans-tab-count').textContent = (() => { const k = new Set(); for (const x of state.beans || []) k.add(x.key); for (const x of state.shots) if (!x.inProgress && coffeeKey(x.context?.beanName)) k.add(coffeeKey(x.context.beanName)); return k.size ? `(${k.size})` : ''; })();
 }
 
 /** Newer/older buttons on the Shots tab step through the saved shots. */
@@ -1060,17 +1076,36 @@ $('weight-dialog').addEventListener('close', () => {
 // ---- rating and comment: 1–5 stars and a few words on the cup, editable any time
 
 const STAR_WORDS = ['', 'poor', 'meh', 'fine', 'good', 'great'];
+/** A word for a rating on any scale: the five words spread over 1 … max. */
+const starWord = (r, max = 5) => (r ? STAR_WORDS[Math.max(1, Math.min(5, Math.ceil((r / max) * 5)))] : '');
+/** The scale new ratings use (Settings → Recording → Rating): 5 or 9. */
+const ratingScale = () => (String(settings.ratingScale) === '9' ? 9 : 5);
+/** Ratings are shown anywhere only while the feature is on. */
+const ratingsOn = () => settings.ratings !== false;
 
-/** Five star buttons; `name` scopes the radio group so several pickers can be on the page. */
-function starPickerHtml(name, value = 0) {
-  return `<span class="stars" role="radiogroup" aria-label="Rating">${[1, 2, 3, 4, 5].map((n) => `<button type="button" class="star${n <= value ? ' on' : ''}" data-star="${n}" role="radio" aria-checked="${n === value}" title="${n} — ${STAR_WORDS[n]}" aria-label="${n} star${n > 1 ? 's' : ''}">★</button>`).join('')}<button type="button" class="star-clear${value ? '' : ' hidden'}" data-star="0" title="Remove the rating">clear</button></span>`;
+/** Star buttons for one picker (1 … max); `max` follows the shot's scale when it has one, else the setting. */
+function starPickerHtml(value = 0, max = ratingScale()) {
+  const stars = Array.from({ length: max }, (_, i) => i + 1);
+  return `<span class="stars${max > 5 ? ' nine' : ''}" role="radiogroup" aria-label="Rating" data-max="${max}" data-value="${value || 0}">${stars.map((n) => `<button type="button" class="star${n <= value ? ' on' : ''}" data-star="${n}" role="radio" aria-checked="${n === value}" title="${n} of ${max} — ${starWord(n, max)}" aria-label="${n} of ${max}">★</button>`).join('')}<button type="button" class="star-clear${value ? '' : ' hidden'}" data-star="0" title="Remove the rating">clear</button></span>`;
 }
-/** Read-only stars for lists; empty string when unrated. */
-function starsHtml(rating, { comment = '', compact = false } = {}) {
-  const r = ratingOf({ rating });
+/** Rebuild a picker in place with the stars for `max`, so a dialog follows the chosen scale. */
+function renderStarPicker(el, value = 0, max = ratingScale()) {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = starPickerHtml(value, max);
+  el.innerHTML = tmp.firstElementChild.innerHTML; // the group element (and its click listener) stays
+  el.dataset.max = String(max);
+  el.dataset.value = String(value || 0);
+  el.classList.toggle('nine', max > 5);
+  return el;
+}
+/** Read-only stars for lists; empty string when unrated. On a 5 scale "★4"; on 9, "★7/9". */
+function starsHtml(shot, { compact = false } = {}) {
+  const r = ratingOf(shot);
   if (!r) return '';
-  const t = `${r}/5${STAR_WORDS[r] ? ` — ${STAR_WORDS[r]}` : ''}${comment ? `\n${comment}` : ''}`;
-  return `<span class="stars ro" title="${esc(t)}" aria-label="rated ${r} of 5">${compact ? `★${r}` : '★'.repeat(r) + '<span class="dim">' + '★'.repeat(5 - r) + '</span>'}</span>`;
+  const max = ratingMaxOf(shot);
+  const t = `${r}/${max} — ${starWord(r, max)}${shot.comment ? `\n${shot.comment}` : ''}`;
+  const text = compact ? (max === 5 ? `★${r}` : `★${r}/${max}`) : '★'.repeat(r) + '<span class="dim">' + '★'.repeat(max - r) + '</span>';
+  return `<span class="stars ro${max > 5 ? ' nine' : ''}" title="${esc(t)}" aria-label="rated ${r} of ${max}">${text}</span>`;
 }
 /** Wire a star picker: clicking a star sets the value; data-value on the group holds it. */
 function bindStarPicker(group, onChange) {
@@ -1084,6 +1119,7 @@ function bindStarPicker(group, onChange) {
   });
 }
 function setStarPicker(group, v) {
+  if (!group) return;
   group.dataset.value = String(v || 0);
   group.querySelectorAll('button.star').forEach((x) => {
     const n = Number(x.dataset.star);
@@ -1092,7 +1128,7 @@ function setStarPicker(group, v) {
   });
   group.querySelector('.star-clear')?.classList.toggle('hidden', !v);
 }
-const starPickerValue = (group) => ratingOf({ rating: Number(group?.dataset.value) }) || 0;
+const starPickerValue = (group) => ratingOf({ rating: Number(group?.dataset.value), ratingMax: Number(group?.dataset.max) }) || 0;
 
 async function openRatingDialog(id) {
   const shot = await store.getShot(id);
@@ -1101,7 +1137,10 @@ async function openRatingDialog(id) {
   dlg.dataset.id = id;
   $('r-title').textContent = `${ratingOf(shot) ? 'Your rating' : 'How was it?'} — ${fmtDate(shot.startedAt)}${shot.context?.beanName ? ` · ${shot.context.beanName}` : ''}`;
   $('r-sub').textContent = [shot.profileName, shot.context?.doseG ? `${shot.context.doseG} g → ${fmt(beverageOf(shot), 1)} g` : null, `${fmt(shot.durationSec, 1)} s`].filter(Boolean).join(' · ');
-  setStarPicker($('r-stars'), ratingOf(shot) || 0);
+  // a shot already rated keeps its own scale; a new rating uses the one in Settings
+  const max = ratingOf(shot) ? ratingMaxOf(shot) : ratingScale();
+  renderStarPicker($('r-stars'), ratingOf(shot) || 0, max);
+  $('r-keys').textContent = `press 1–${max}`;
   $('r-comment').value = shot.comment || '';
   if (!dlg.open) dlg.showModal();
   ($('r-stars').querySelector('button.star.on:last-of-type') || $('r-stars').querySelector('button.star')).focus();
@@ -1110,15 +1149,20 @@ async function saveRatingDialog() {
   const dlg = $('rating-dialog');
   const shot = await store.getShot(dlg.dataset.id);
   if (!shot) return dlg.close();
-  await setShotRating(shot, starPickerValue($('r-stars')), $('r-comment').value);
+  await setShotRating(shot, starPickerValue($('r-stars')), $('r-comment').value, Number($('r-stars').dataset.max));
   dlg.close();
-  toast(ratingOf(shot) ? `Rated ${ratingOf(shot)}/5${shot.comment ? ' with a comment' : ''}.` : shot.comment ? 'Comment saved.' : 'Rating cleared.');
+  toast(ratingOf(shot) ? `Rated ${ratingOf(shot)}/${ratingMaxOf(shot)}${shot.comment ? ' with a comment' : ''}.` : shot.comment ? 'Comment saved.' : 'Rating cleared.');
 }
-/** Store a rating (1–5, 0 clears) and comment on a shot, then refresh every place that shows them. */
-async function setShotRating(shot, rating, comment) {
-  const r = ratingOf({ rating });
-  if (r) shot.rating = r;
-  else delete shot.rating;
+/** Store a rating (1 … max, 0 clears) with its scale, and the comment, then refresh every place that shows them. */
+async function setShotRating(shot, rating, comment, max = ratingScale()) {
+  const r = ratingOf({ rating, ratingMax: max });
+  if (r) {
+    shot.rating = r;
+    shot.ratingMax = max === 9 ? 9 : 5;
+  } else {
+    delete shot.rating;
+    delete shot.ratingMax;
+  }
   const text = String(comment ?? '').trim();
   if (text) shot.comment = text.slice(0, 2000);
   else delete shot.comment;
@@ -1136,12 +1180,12 @@ async function setShotRating(shot, rating, comment) {
 /** The stars and comment under the shot title: click a star to rate, the pencil to write. */
 function renderShotRating(shot) {
   const box = $('shot-rating');
-  if (!shot) { box.innerHTML = ''; return; }
+  if (!shot || !ratingsOn()) { box.innerHTML = ''; return; }
   const r = ratingOf(shot) || 0;
-  box.innerHTML = `${starPickerHtml('shot', r)}<button type="button" class="linkish" id="shot-rate-edit" title="Rate this shot and write a comment">${shot.comment ? 'Edit comment' : r ? 'Add a comment' : 'Rate this shot'}</button>${shot.comment ? `<span class="comment">${esc(shot.comment)}</span>` : ''}`;
+  const max = r ? ratingMaxOf(shot) : ratingScale();
+  box.innerHTML = `${starPickerHtml(r, max)}<button type="button" class="linkish" id="shot-rate-edit" title="Rate this shot and write a comment">${shot.comment ? 'Edit comment' : r ? 'Add a comment' : 'Rate this shot'}</button>${shot.comment ? `<span class="comment">${esc(shot.comment)}</span>` : ''}`;
   const picker = box.querySelector('.stars');
-  setStarPicker(picker, r);
-  bindStarPicker(picker, (v) => setShotRating(shot, v, shot.comment));
+  bindStarPicker(picker, (v) => setShotRating(shot, v, shot.comment, max));
   $('shot-rate-edit').addEventListener('click', () => openRatingDialog(shot.id));
 }
 $('r-save').addEventListener('click', saveRatingDialog);
@@ -1150,8 +1194,17 @@ bindStarPicker($('r-stars'));
 bindStarPicker($('e-stars'));
 $('rating-dialog').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && e.target.id !== 'r-comment') { e.preventDefault(); saveRatingDialog(); }
-  if (/^[1-5]$/.test(e.key) && e.target.id !== 'r-comment') { e.preventDefault(); setStarPicker($('r-stars'), Number(e.key)); }
+  const max = Number($('r-stars').dataset.max) || 5;
+  if (/^[1-9]$/.test(e.key) && Number(e.key) <= max && e.target.id !== 'r-comment') { e.preventDefault(); setStarPicker($('r-stars'), Number(e.key)); }
 });
+/** Ratings on/off and the scale change what every view shows. */
+function applyRatingSettings() {
+  document.body.classList.toggle('no-ratings', !ratingsOn());
+  if (state.selected) renderShotRating(state.selected);
+  renderHistory();
+  if (!$('view-analysis').hidden) renderAnalysis();
+  if (!$('view-beans').hidden) renderBeans();
+}
 
 /** Short words for where a shot's beverage weight comes from. */
 const BEVERAGE_SOURCE_LABEL = { weighed: 'weighed by hand', reading: 'weighed with the reading', profile: 'profile target', scale: "machine's scale" };
@@ -1199,7 +1252,7 @@ function histSortValue(shot, key) {
     case 'finalWeightG': return beverageOf(shot) ?? -1;
     case 'ratio': return ratioOf(shot) ?? -1;
     case 'grind': return grindMicrons(shot.context) ?? -1;
-    case 'rating': return ratingOf(shot) ?? -1;
+    case 'rating': return ratingOf(shot) ? ratingOf(shot) / ratingMaxOf(shot) : -1; // scales mixed: sort by the fraction
     default: return shot[key] ?? -1;
   }
 }
@@ -1252,13 +1305,15 @@ function renderHistory() {
       `<td class="num">${fmt(s.durationSec, 0)} s</td>` +
       `<td class="num ec">${Number.isFinite(a?.meanEcPerG) ? a.meanEcPerG.toFixed(2) : '–'}</td>` +
       `<td class="num tds">${Number.isFinite(tds.v) ? (tds.measured ? `<b>${tds.v.toFixed(2)}</b>` : `<i>~${tds.v.toFixed(2)}</i>`) : '–'}</td>` +
-      `<td class="rating">${s.inProgress ? '' : ratingOf(s) ? `<button class="linkish rate" data-act="rate" title="${esc(`${ratingOf(s)}/5 — ${STAR_WORDS[ratingOf(s)]}${s.comment ? `\n${s.comment}` : ''}`)}">${starsHtml(s.rating, { compact: true })}${s.comment ? '<span class="has-comment" aria-label="has a comment">💬</span>' : ''}</button>` : `<button class="linkish rate unrated" data-act="rate" title="${s.comment ? esc(s.comment) + '\n' : ''}Not rated yet — rate it">${s.comment ? '💬' : '☆'}</button>`}</td>` +
+      `<td class="rating">${s.inProgress || !ratingsOn() ? '' : ratingOf(s) ? `<button class="linkish rate" data-act="rate" title="${esc(`${ratingOf(s)}/${ratingMaxOf(s)} — ${starWord(ratingOf(s), ratingMaxOf(s))}${s.comment ? `\n${s.comment}` : ''}`)}">${starsHtml(s, { compact: true })}${s.comment ? '<span class="has-comment" aria-label="has a comment">💬</span>' : ''}</button>` : `<button class="linkish rate unrated" data-act="rate" title="${s.comment ? esc(s.comment) + '\n' : ''}Not rated yet — rate it">${s.comment ? '💬' : '☆'}</button>`}</td>` +
       `<td class="data">${data}</td>` +
       `<td class="actions">${s.inProgress ? '' : '<button class="btn small" data-act="open">Open</button><button class="btn small" data-act="edit">Edit</button><button class="btn small danger" data-act="delete">Delete</button>'}</td>`;
     tbody.appendChild(tr);
   }
   $('hist-delete-selected').disabled = hist.checked.size === 0;
   $('hist-delete-selected').textContent = hist.checked.size ? `Delete selected (${hist.checked.size})` : 'Delete selected';
+  $('hist-export').disabled = hist.checked.size === 0;
+  $('hist-export').textContent = hist.checked.size ? `Export selected (${hist.checked.size})` : 'Export selected';
   const n = hist.checked.size;
   $('hist-compare').disabled = n < 2 || n > COMPARE_MAX;
   $('hist-compare').textContent = n >= 2 ? `Compare selected (${n})` : 'Compare selected';
@@ -1475,7 +1530,8 @@ function openShotDialog(shot) {
   $('e-dose').value = c.doseG || '';
   $('e-grind').value = (c.grindSize || '').replace(/\s*µm$/, '');
   $('e-note').value = c.note || '';
-  setStarPicker($('e-stars'), ratingOf(shot) || 0);
+  renderStarPicker($('e-stars'), ratingOf(shot) || 0, ratingOf(shot) ? ratingMaxOf(shot) : ratingScale());
+  $('e-rating-row').hidden = !ratingsOn();
   $('e-comment').value = shot.comment || '';
   $('e-tds').value = shot.refractometer?.tdsPct ?? '';
   // Beverage weighed is a field of the shot in its own right: editable with or without a reading.
@@ -1507,8 +1563,13 @@ async function saveShotDialog() {
   if (weighed > 0 && weighed < 5000) shot.beverageG = Math.round(weighed * 10) / 10;
   else delete shot.beverageG; // blank → back to the profile target or the machine's scale
   const rating = starPickerValue($('e-stars'));
-  if (rating) shot.rating = rating;
-  else delete shot.rating;
+  if (rating) {
+    shot.rating = rating;
+    shot.ratingMax = Number($('e-stars').dataset.max) === 9 ? 9 : 5;
+  } else {
+    delete shot.rating;
+    delete shot.ratingMax;
+  }
   const comment = $('e-comment').value.trim();
   if (comment) shot.comment = comment.slice(0, 2000);
   else delete shot.comment;
@@ -1548,6 +1609,7 @@ function renderShot() {
     (() => { $('shot-weigh').hidden = !(settings.beverageDefault === 'manual' && !(shot.beverageG > 0)); return null; })(),
   ].filter(Boolean).join(' · ');
   renderShotRating(shot);
+  renderShotFilesNote();
   $('shot-files-note').textContent = shot.files?.json ? `This shot's JSON and CSV were written to ${shot.files.json.replace(/[^/]+$/, '')} at ${new Date(shot.files.at).toLocaleTimeString()}.` : '';
   $('shot-delete').disabled = false;
   $('shot-edit').disabled = false;
@@ -1839,7 +1901,7 @@ async function renderExport() {
 
 async function fullLink() {
   const shot = state.selected;
-  const env = buildEnvelope(shot, state.analysis, state.estimate, { ...(shot.context || {}), rating: ratingOf(shot) ?? undefined, comment: shot.comment || '' });
+  const env = buildEnvelope(shot, state.analysis, state.estimate, { ...(shot.context || {}), rating: ratingOf(shot) ? Math.round((ratingOf(shot) / ratingMaxOf(shot)) * 10) / 2 : undefined, comment: shot.comment || '' });
   return { env, ...(await encodeHandoff(env)) };
 }
 
@@ -1860,18 +1922,21 @@ async function openLink() {
 
 async function downloadEnvelope() {
   const { env } = await fullLink();
-  deliver(`beanconqueror-${stamp(state.selected.startedAt)}.json`, JSON.stringify(env, null, 2), 'application/json');
+  deliver(`beanconqueror-${stamp(state.selected.startedAt)}.json`, JSON.stringify(env, null, 2), 'application/json', 'exports', shotFilesVia());
 }
 
 // ---------------------------------------------------------- files out --
 
 /**
- * Hand a file to the user: into the file destination (Settings → Files and
- * folders) under the subfolder for its kind when one is writable, else a
- * browser download.
+ * Hand a file to the user. `via` 'folder' (the default) puts it into the file
+ * destination (Settings → Files and folders) under the subfolder for its kind
+ * when one is writable, else downloads it; 'browser' always downloads. The
+ * per-shot files and the History exports follow their own settings
+ * (shotFilesVia, exportsVia); reviews and logs follow the destination.
  */
-async function deliver(name, data, type, kind = 'exports') {
-  if (files.ready) {
+async function deliver(name, data, type, kind = 'exports', { via = 'folder' } = {}) {
+  if (via === 'folder' && !files.ready && files.blocker) toast(`${files.blocker} Downloading ${name} instead.`, 'warn');
+  if (via === 'folder' && files.ready) {
     try {
       const blob = data instanceof Blob ? data : new Blob([data], { type: type || 'application/octet-stream' });
       const path = await files.write(kind, name, blob);
@@ -1890,6 +1955,16 @@ async function deliver(name, data, type, kind = 'exports') {
 }
 
 const fileBase = (shot) => `shot-${stamp(shot.startedAt)}-${slug(shot.context?.beanName)}`;
+/** Where the buttons under "Files for this shot" send their files (Settings → Files and folders). */
+const shotFilesVia = () => ({ via: settings.shotFilesVia === 'folder' ? 'folder' : 'browser' });
+/** Where the History exports (summary CSV, zips) go. */
+const exportsVia = () => ({ via: settings.exportsVia === 'folder' ? 'folder' : 'browser' });
+/** The note under the per-shot buttons: where they go right now, and how to change it. */
+function renderShotFilesNote() {
+  const el = $('shot-files-where');
+  if (!el) return;
+  el.textContent = settings.shotFilesVia === 'folder' ? (files.ready ? `These buttons write to ${files.describe()} (exports/ and reports/).` : `These buttons are set to write to a folder, but ${files.blocker.replace(/\.$/, '').replace(/^./, (c) => c.toLowerCase())} — so they download.`) : 'These buttons download through the browser.';
+}
 
 function shotJson(shot, analysis, estimate) {
   return JSON.stringify({ app: 'portal-met-bridge', version: 2, shot, analysis, estimate }, null, 2);
@@ -1897,12 +1972,12 @@ function shotJson(shot, analysis, estimate) {
 
 function downloadShotJson() {
   const shot = state.selected;
-  deliver(`${fileBase(shot)}.json`, shotJson(shot, state.analysis, state.estimate), 'application/json');
+  deliver(`${fileBase(shot)}.json`, shotJson(shot, state.analysis, state.estimate), 'application/json', 'exports', shotFilesVia());
 }
 
 function downloadCsv() {
   const shot = state.selected;
-  deliver(`${fileBase(shot)}.csv`, shotSamplesCsv(shot), 'text/csv');
+  deliver(`${fileBase(shot)}.csv`, shotSamplesCsv(shot), 'text/csv', 'exports', shotFilesVia());
 }
 
 /** Render both charts for a shot to JPEG. Charts must be visible (Shots view). */
@@ -1922,10 +1997,10 @@ async function downloadJpegs() {
   const shot = state.selected;
   if ($('view-shots').hidden) showView('shots');
   const { time, mass } = await chartImages(shot, state.analysis);
-  await deliver(`${fileBase(shot)}-time.jpg`, time.blob, 'image/jpeg', 'reports');
+  await deliver(`${fileBase(shot)}-time.jpg`, time.blob, 'image/jpeg', 'reports', shotFilesVia());
   if (mass) {
     await new Promise((r) => setTimeout(r, 300));
-    await deliver(`${fileBase(shot)}-ec-vs-mass.jpg`, mass.blob, 'image/jpeg', 'reports');
+    await deliver(`${fileBase(shot)}-ec-vs-mass.jpg`, mass.blob, 'image/jpeg', 'reports', shotFilesVia());
   }
 }
 
@@ -1956,7 +2031,7 @@ function reportFor(shot, analysis, estimate, fit, images, review = null) {
     ['Profile target', profileTargetOf(shot) > 0 ? `${fmt(profileTargetOf(shot), 1)} g` : '–'],
     ['Extraction', `${fmt(shot.durationSec, 1)} s`],
     ['Samples', `${shot.machine?.length ?? 0} machine · ${shot.portal?.length ?? 0} Portal`],
-    ['Your rating', ratingOf(shot) ? `${'★'.repeat(ratingOf(shot))}${'☆'.repeat(5 - ratingOf(shot))} ${ratingOf(shot)}/5` : 'not rated'],
+    ['Your rating', ratingOf(shot) ? `${'★'.repeat(ratingOf(shot))}${'☆'.repeat(ratingMaxOf(shot) - ratingOf(shot))} ${ratingOf(shot)}/${ratingMaxOf(shot)}` : 'not rated'],
     ['Analysis', a.status || '–'],
     ['AI review', review ? `${review.review.shotIds.length > 1 ? `${review.review.shotIds.length} shots` : 'this shot'} · ${fmtDate(review.review.createdAt)} (appended)` : 'none saved'],
     ['Mean EC per g', `${fmt(a.meanEcPerG, 3)} mS/cm`],
@@ -2003,7 +2078,7 @@ async function downloadPdf() {
     const images = await chartImages(shot, state.analysis);
     const review = reviewForShot(shot.id, await store.listReviews({ limit: 100000 }));
     const blob = await shotReportPdf(reportFor(shot, state.analysis, state.estimate, state.fit, images, review));
-    deliver(`${fileBase(shot)}-report.pdf`, blob, 'application/pdf', 'reports');
+    deliver(`${fileBase(shot)}-report.pdf`, blob, 'application/pdf', 'reports', shotFilesVia());
   } catch (err) {
     toast('PDF failed: ' + (err.message || err), 'error');
   }
@@ -2025,21 +2100,23 @@ async function analyseAll() {
 async function downloadSummaryCsv() {
   const all = await analyseAll();
   const rows = [SUMMARY_COLUMNS, ...all.map(({ shot, analysis, estimate }) => summaryRow(shot, analysis, estimate))];
-  deliver(`portal-met-bridge-shots-${stamp(Date.now())}.csv`, rowsToCsv(rows), 'text/csv');
+  deliver(`portal-met-bridge-shots-${stamp(Date.now())}.csv`, rowsToCsv(rows), 'text/csv', 'exports', exportsVia());
 }
 
-async function downloadZip() {
-  const all = await analyseAll();
+/** A zip of every shot's files (no ids) or of the given shots only (History → Export selected). */
+async function downloadZip(ids = null) {
+  const wanted = Array.isArray(ids) && ids.length ? new Set(ids) : null;
+  const all = (await analyseAll()).filter(({ shot }) => !wanted || wanted.has(shot.id));
   if (!all.length) {
-    toast('No shots to export yet.');
+    toast(wanted ? 'None of the selected shots is still here.' : 'No shots to export yet.');
     return;
   }
   if ($('view-shots').hidden) showView('shots');
   const prog = $('dl-progress');
   const files = {};
   files['shots-summary.csv'] = rowsToCsv([SUMMARY_COLUMNS, ...all.map(({ shot, analysis, estimate }) => summaryRow(shot, analysis, estimate))]);
-  files['backup.json'] = JSON.stringify(await store.exportAll());
-  files['README.txt'] = `portal-met-bridge export — ${new Date().toString()}\n\nshots-summary.csv   one row per shot (EC metrics, refractometer reading, estimate)\nbackup.json         full backup; restore it with the Restore button\nshots/<shot>/       samples.csv, shot.json, time.jpg, ec-vs-mass.jpg, report.pdf per shot (the report ends with the newest saved AI review that covers the shot, when there is one)\n\nEC is a conductivity proxy; TDS/EY are estimates from refractometer calibration unless a refractometer reading is present.\n`;
+  if (!wanted) files['backup.json'] = JSON.stringify(await store.exportAll());
+  files['README.txt'] = `portal-met-bridge export — ${new Date().toString()}${wanted ? ` — ${all.length} selected shot${all.length === 1 ? '' : 's'}` : ''}\n\nshots-summary.csv   one row per shot (EC metrics, refractometer reading, estimate, rating)\n${wanted ? '' : 'backup.json         full backup; restore it with the Restore button\n'}shots/<shot>/       samples.csv, shot.json, time.jpg, ec-vs-mass.jpg, report.pdf per shot (the report ends with the newest saved AI review that covers the shot, when there is one)\n\nEC is a conductivity proxy; TDS/EY are estimates from refractometer calibration unless a refractometer reading is present.\n`;
   const selectedId = state.selected?.id;
   const reviews = await store.listReviews({ limit: 100000 });
   let i = 0;
@@ -2065,8 +2142,8 @@ async function downloadZip() {
   prog.textContent = 'Zipping…';
   try {
     const blob = await buildZip(files);
-    deliver(`portal-met-bridge-export-${stamp(Date.now())}.zip`, blob);
-    prog.textContent = `${all.length} shots exported.`;
+    deliver(wanted ? `portal-met-bridge-export-${all.length}-shots-${stamp(Date.now())}.zip` : `portal-met-bridge-export-${stamp(Date.now())}.zip`, blob, 'application/zip', 'exports', exportsVia());
+    prog.textContent = `${all.length} shot${all.length === 1 ? '' : 's'} exported.`;
   } catch (err) {
     toast('Zip failed: ' + (err.message || err), 'error');
     prog.textContent = '';
@@ -2156,6 +2233,7 @@ async function refreshBeanLists() {
   state.beans = beans;
   $('bean-list').innerHTML = beans.map((b) => `<option value="${esc(b.name)}">${esc([b.roaster, b.roastLevel, b.origin].filter(Boolean).join(' · '))}</option>`).join('');
   $('bean-count').textContent = beans.length ? `(${beans.length} known)` : '';
+  renderBeanLink();
   state.lists = {};
   for (const kind of LIST_KINDS) {
     const values = await store.listValues(kind);
@@ -2163,7 +2241,199 @@ async function refreshBeanLists() {
     $(`${kind}-list`).innerHTML = values.map((v) => `<option value="${esc(v.value)}">${esc(`used ${v.uses}× · ${new Date(v.lastUsed).toLocaleDateString()}`)}</option>`).join('');
   }
   renderPickListChips();
+  renderBeans();
 }
+
+// ------------------------------------------------------------------ beans --
+
+/** A safe http(s) URL for a link, or '' — anything else (javascript:, data:) is dropped. */
+function safeUrl(u) {
+  const t = String(u || '').trim();
+  if (!t) return '';
+  try {
+    const url = new URL(/^[a-z][a-z0-9+.-]*:/i.test(t) ? t : `https://${t}`);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : '';
+  } catch {
+    return '';
+  }
+}
+/** The "info ↗" link beside the Bean field, when the picked coffee has a page. */
+function renderBeanLink() {
+  const a = $('ctx-bean-link');
+  if (!a) return;
+  const b = (state.beans || []).find((x) => x.key === coffeeKey($('ctx-bean').value));
+  const url = safeUrl(b?.url);
+  a.hidden = !url;
+  if (url) a.href = url;
+}
+
+const beansView = { search: '', sort: 'lastUsed', dir: 'desc' };
+
+/**
+ * Every coffee, from the bean library and from the shots themselves (a coffee
+ * that only exists in old shots still appears): [{ key, name, roaster, origin,
+ * process, roastLevel, url, notes, shots, rated, avg5, lastUsed, firstUsed, lastDoseG, lastGrind, inLibrary }].
+ */
+function collectBeans() {
+  const byKey = new Map();
+  for (const b of state.beans || []) byKey.set(b.key, { ...b, shots: 0, rated: 0, ratingSum5: 0, lastUsed: b.lastUsed || 0, firstUsed: b.createdAt || 0, inLibrary: true });
+  for (const shot of state.shots || []) {
+    if (shot.inProgress) continue;
+    const c = shot.context || {};
+    const key = coffeeKey(c.beanName);
+    if (!key) continue;
+    let b = byKey.get(key);
+    if (!b) {
+      b = { key, name: c.beanName.trim(), roaster: c.roaster || '', origin: c.origin || '', process: c.process || '', roastLevel: c.roastLevel || '', url: '', notes: '', shots: 0, rated: 0, ratingSum5: 0, lastUsed: 0, firstUsed: 0, lastDoseG: Number(c.doseG) || 0, lastGrind: c.grindSize || '', inLibrary: false };
+      byKey.set(key, b);
+    }
+    b.shots++;
+    if (shot.startedAt > (b.lastBrewed || 0)) {
+      b.lastBrewed = shot.startedAt;
+      if (!b.inLibrary) { b.lastDoseG = Number(c.doseG) || b.lastDoseG; b.lastGrind = c.grindSize || b.lastGrind; }
+    }
+    if (!b.firstBrewed || shot.startedAt < b.firstBrewed) b.firstBrewed = shot.startedAt;
+    const r = ratingOf(shot);
+    if (r) { b.rated++; b.ratingSum5 += (r / ratingMaxOf(shot)) * 5; }
+  }
+  return [...byKey.values()].map((b) => ({ ...b, lastUsed: Math.max(b.lastUsed || 0, b.lastBrewed || 0), avg5: b.rated ? b.ratingSum5 / b.rated : null }));
+}
+
+function renderBeans() {
+  const tbody = $('beans-rows');
+  if (!tbody) return;
+  const all = collectBeans();
+  const q = beansView.search.trim().toLowerCase();
+  const rows = all.filter((b) => !q || [b.name, b.roaster, b.origin, b.process, b.roastLevel, b.notes].join(' ').toLowerCase().includes(q));
+  const val = (b) => {
+    switch (beansView.sort) {
+      case 'name': return (b.name || '').toLowerCase();
+      case 'roaster': return (b.roaster || '').toLowerCase();
+      case 'shots': return b.shots;
+      case 'rating': return b.avg5 ?? -1;
+      default: return b.lastUsed || 0;
+    }
+  };
+  rows.sort((a, b) => { const x = val(a), y = val(b); const c = x < y ? -1 : x > y ? 1 : 0; return beansView.dir === 'asc' ? c : -c; });
+  $('beans-table').querySelectorAll('th[data-sort]').forEach((th) => th.setAttribute('aria-sort', th.dataset.sort === beansView.sort ? (beansView.dir === 'asc' ? 'ascending' : 'descending') : 'none'));
+  const n = all.length;
+  $('beans-count').textContent = n ? `(${n})` : '';
+  $('beans-tab-count').textContent = n ? `(${n})` : '';
+  $('beans-empty').hidden = n > 0;
+  const grind = (b) => [b.lastDoseG ? `${b.lastDoseG} g` : '', b.lastGrind ? String(b.lastGrind) : ''].filter(Boolean).join(' · ');
+  tbody.innerHTML = rows
+    .map((b) => {
+      const url = safeUrl(b.url);
+      return `<tr data-key="${esc(b.key)}">` +
+        `<td class="name"><button class="linkish" data-act="shots" title="Show this coffee's shots in History">${esc(b.name)}</button>${url ? ` <a class="bean-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer" title="${esc(url)}">info ↗</a>` : ''}${b.notes ? `<small title="${esc(b.notes)}">${esc(b.notes.length > 70 ? b.notes.slice(0, 68) + '…' : b.notes)}</small>` : ''}</td>` +
+        `<td class="roaster">${esc(b.roaster || '')}${grind(b) ? `<small>${esc(grind(b))}</small>` : ''}</td><td>${esc(b.origin || '')}</td><td>${esc(b.process || '')}</td><td>${esc(b.roastLevel || '')}</td>` +
+        `<td class="num">${b.shots ? `<button class="linkish" data-act="shots">${b.shots}</button>` : '<span class="muted">0</span>'}</td>` +
+        `<td class="num rating">${b.avg5 != null ? `<span class="stars ro" title="${b.rated} rated shot${b.rated === 1 ? '' : 's'}">★${b.avg5.toFixed(1)}</span>` : '<span class="muted">–</span>'}</td>` +
+        `<td class="num">${b.lastBrewed ? esc(fmtDate(b.lastBrewed)) : '<span class="muted">never</span>'}</td>` +
+        `<td class="actions"><button class="btn small" data-act="use" title="Fill This coffee on the Shots tab with it">Use</button> <button class="btn small" data-act="edit">Edit</button></td>` +
+        `</tr>`;
+    })
+    .join('');
+}
+
+let beanEditing = null; // { key, name, shots } while the dialog is open; null for a new coffee
+function openBeanDialog(bean) {
+  const dlg = $('bean-dialog');
+  beanEditing = bean ? { key: bean.key, name: bean.name, shots: bean.shots || 0 } : null;
+  $('b-title').textContent = bean ? bean.name : 'Add a coffee';
+  $('b-sub').textContent = bean ? `${bean.shots || 0} shot${bean.shots === 1 ? '' : 's'}${bean.lastBrewed ? ` · last ${fmtDate(bean.lastBrewed)}` : ''}${bean.inLibrary ? '' : ' · from the shots only (saved to the library when you press Save)'}` : 'A coffee you want ready in the Bean pick-list before its first shot.';
+  $('b-name').value = bean?.name || '';
+  $('b-roaster').value = bean?.roaster || '';
+  $('b-origin').value = bean?.origin || '';
+  $('b-process').value = bean?.process || '';
+  $('b-roast').value = bean?.roastLevel || '';
+  $('b-url').value = bean?.url || '';
+  $('b-notes').value = bean?.notes || '';
+  $('b-apply-row').hidden = !(bean && bean.shots);
+  $('b-apply').checked = true;
+  $('b-apply-label').textContent = `Also update this coffee's ${bean?.shots || 0} shot${bean?.shots === 1 ? '' : 's'} (name, roaster, origin, process, roast level)`;
+  $('b-delete').hidden = !(bean && bean.inLibrary && !bean.shots);
+  $('b-error').textContent = '';
+  dlg.showModal();
+  $('b-name').focus();
+}
+async function saveBeanDialog() {
+  const name = $('b-name').value.trim();
+  const err = $('b-error');
+  if (!name) { err.textContent = 'The coffee needs a name.'; return; }
+  const rawUrl = $('b-url').value.trim();
+  const url = safeUrl(rawUrl);
+  if (rawUrl && !url) { err.textContent = 'The web page must be an http(s) address.'; return; }
+  const key = coffeeKey(name);
+  const prevKey = beanEditing?.key || null;
+  const existing = (state.beans || []).find((b) => b.key === key);
+  if (existing && key !== prevKey) { err.textContent = `"${existing.name}" is already in the library — edit that one, or pick another name.`; return; }
+  const rec = { name, roaster: $('b-roaster').value.trim(), origin: $('b-origin').value.trim(), process: $('b-process').value, roastLevel: $('b-roast').value, url, notes: $('b-notes').value.trim().slice(0, 2000) };
+  const saved = await store.putBean(rec);
+  if (prevKey && prevKey !== key) await store.deleteBean(beanEditing.name); // renamed: drop the old record
+  let touched = 0;
+  if (prevKey && beanEditing.shots && $('b-apply').checked) {
+    for (const shot of await store.listShots({ limit: 100000 })) {
+      if (coffeeKey(shot.context?.beanName) !== prevKey) continue;
+      shot.context = { ...(shot.context || {}), beanName: name, roaster: rec.roaster, origin: rec.origin, process: rec.process, roastLevel: rec.roastLevel };
+      await store.putShot(shot);
+      touched++;
+    }
+  }
+  for (const [kind, value] of [['roaster', rec.roaster], ['origin', rec.origin]]) if (value) await store.rememberValue(kind, value).catch(() => {});
+  $('bean-dialog').close();
+  log.info('beans', `saved ${saved.key}${touched ? `, ${touched} shots updated` : ''}`);
+  await refreshBeanLists();
+  if (touched) {
+    await refreshShotList();
+    if (state.selected && coffeeKey(state.selected.context?.beanName) === key) selectShot(state.selected.id);
+    if (coffeeKey($('ctx-bean').value) === prevKey) { $('ctx-bean').value = name; await contextChanged({ target: $('ctx-bean') }); }
+  }
+  toast(`Saved ${name}${touched ? ` and updated ${touched} shot${touched === 1 ? '' : 's'}` : ''}.`);
+}
+async function beansAction(ev) {
+  const b = ev.target.closest('button[data-act]');
+  if (!b) return;
+  const key = b.closest('tr')?.dataset.key;
+  const bean = collectBeans().find((x) => x.key === key);
+  if (!bean) return;
+  if (b.dataset.act === 'edit') return openBeanDialog(bean);
+  if (b.dataset.act === 'use') {
+    writeContext({ ...readContext(), beanName: bean.name, roaster: bean.roaster || '', origin: bean.origin || '', process: bean.process || '', roastLevel: bean.roastLevel || '', doseG: bean.lastDoseG || readContext().doseG, grindSize: bean.lastGrind || readContext().grindSize });
+    await contextChanged({ target: $('ctx-bean') });
+    showView('shots');
+    toast(`This coffee: ${bean.name}.`);
+    return;
+  }
+  if (b.dataset.act === 'shots') {
+    hist.search = bean.name;
+    $('hist-search').value = bean.name;
+    hist.filter = 'all';
+    $('hist-filter').value = 'all';
+    showView('history');
+  }
+}
+$('beans-rows').addEventListener('click', beansAction);
+$('beans-search').addEventListener('input', () => { beansView.search = $('beans-search').value; renderBeans(); });
+$('beans-add').addEventListener('click', () => openBeanDialog(null));
+$('beans-table').querySelector('thead').addEventListener('click', (ev) => {
+  const th = ev.target.closest('th[data-sort]');
+  if (!th) return;
+  const key = th.dataset.sort;
+  if (beansView.sort === key) beansView.dir = beansView.dir === 'asc' ? 'desc' : 'asc';
+  else { beansView.sort = key; beansView.dir = key === 'name' || key === 'roaster' ? 'asc' : 'desc'; }
+  renderBeans();
+});
+$('b-save').addEventListener('click', () => saveBeanDialog().catch((err) => ($('b-error').textContent = err?.message || String(err))));
+$('b-cancel').addEventListener('click', () => $('bean-dialog').close());
+$('b-delete').addEventListener('click', async () => {
+  if (!beanEditing) return;
+  await store.deleteBean(beanEditing.name);
+  $('bean-dialog').close();
+  await refreshBeanLists();
+  toast(`Removed ${beanEditing.name} from the library.`);
+});
+$('bean-form').addEventListener('submit', (e) => { e.preventDefault(); saveBeanDialog().catch((err) => ($('b-error').textContent = err?.message || String(err))); });
 
 function renderPickListChips() {
   const chip = (label, meta, onRemove) => {
@@ -2228,6 +2498,7 @@ async function beanPicked() {
 async function contextChanged(ev) {
   const id = ev?.target?.id;
   if (id === 'ctx-bean') await beanPicked();
+  renderBeanLink();
   const ctx = readContext();
   await store.setSetting('context', ctx);
   let listsTouched = false;
@@ -2383,7 +2654,7 @@ function renderFiles() {
     .map(([kind, spec]) => `<tr><td>${esc(spec.label)}</td><td><code>${esc(files.ready ? base + (files.layout[kind] ? files.layout[kind] + '/' : '') : 'download folder')}</code></td><td>${esc(spec.what)}</td></tr>`)
     .join('');
   $('autosave-note').textContent = files.ready ? `Shot files land in ${files.whereOf('shots')}.` : 'Nothing is written until a folder (or the server\'s data folder) is chosen above; the database copy in this browser is kept regardless.';
-  $('backup-note-where').textContent = files.ready ? `Backups and exports are written to ${files.describe()}; the automatic backup is ${settings.autoBackup ? 'on' : 'off'}.` : "Files go to the browser's download folder; the automatic backup needs a folder (Settings → Files and folders).";
+  $('backup-note-where').textContent = files.ready ? `The automatic backup (${settings.autoBackup ? 'on' : 'off'}) and Write a backup now use ${files.whereOf('backups')}; the buttons above download through the browser.` : "The buttons above download through the browser; the automatic backup needs a folder or the server's data folder (Files and folders).";
   $('log-folder').textContent = files.ready ? `The log is appended to ${files.whereOf('logs')}<date>.log as it happens.` : 'The log stays in this page (last 5,000 lines); choose a destination under Files and folders to have it written as a file.';
   renderLogStatus();
 }
@@ -2847,7 +3118,7 @@ window.addEventListener('beforeunload', (e) => {
 });
 document.querySelectorAll('[data-goto]').forEach((b) => b.addEventListener('click', () => showView(b.dataset.goto)));
 $('meticulous-test').addEventListener('click', testMeticulous);
-$('settings-export').addEventListener('click', () => deliver(`portal-met-bridge-settings-${stamp(Date.now())}.json`, JSON.stringify(settingsDocument(), null, 2), 'application/json', 'backups'));
+$('settings-export').addEventListener('click', () => deliver(`portal-met-bridge-settings-${stamp(Date.now())}.json`, JSON.stringify(settingsDocument(), null, 2), 'application/json', 'backups', { via: 'browser' }));
 $('settings-import').addEventListener('change', async (e) => {
   const file = e.target.files[0];
   if (!file) return;
@@ -2884,8 +3155,22 @@ $('files-pick-folder').addEventListener('click', pickFolder);
 $('files-reallow-folder').addEventListener('click', reallowFolder);
 $('files-forget-folder').addEventListener('click', forgetFolder);
 $('files-backup-now').addEventListener('click', async () => {
-  if (!files.ready) return toast(files.blocker, 'error');
+  const how = await chooseDialog({
+    title: 'Write a backup now',
+    text: 'The whole database: shots with their samples, readings, beans, saved reviews.',
+    choices: [
+      { id: 'folder', label: files.ready ? `Save to ${files.whereOf('backups')}` : 'Save to the backups folder', hint: files.ready ? 'portal-met-bridge-latest.json, plus a dated copy the first time each day' : files.blocker, disabled: !files.ready },
+      { id: 'browser', label: 'Download through the browser', hint: 'portal-met-bridge-backup-<date>.json in your download folder' },
+    ],
+  });
+  if (!how) return;
   try {
+    if (how === 'browser') {
+      const doc = await backupDocument();
+      download(`portal-met-bridge-backup-${stamp(Date.now())}.json`, JSON.stringify(doc), 'application/json');
+      toast(`Backup downloaded (${doc.shots.length} shots).`);
+      return;
+    }
     const ok = await runAutoBackup('button', { force: true });
     toast(ok ? `Backup written to ${files.whereOf('backups')}` : 'A backup is already being written.');
   } catch (err) {
@@ -2920,7 +3205,7 @@ $('hist-filter').addEventListener('change', () => { hist.filter = $('hist-filter
 document.querySelectorAll('#hist-table th[data-sort]').forEach((th) => th.addEventListener('click', () => {
   const key = th.dataset.sort;
   if (hist.sort === key) hist.dir = hist.dir === 'asc' ? 'desc' : 'asc';
-  else { hist.sort = key; hist.dir = key === 'startedAt' || key === 'meanEc' || key === 'tds' || key === 'finalWeightG' || key === 'durationSec' ? 'desc' : 'asc'; }
+  else { hist.sort = key; hist.dir = key === 'startedAt' || key === 'meanEc' || key === 'tds' || key === 'finalWeightG' || key === 'durationSec' || key === 'rating' ? 'desc' : 'asc'; }
   renderHistory();
 }));
 $('hist-select-all').addEventListener('change', () => {
@@ -2930,6 +3215,7 @@ $('hist-select-all').addEventListener('change', () => {
   renderHistory();
 });
 $('hist-delete-selected').addEventListener('click', () => deleteShots([...hist.checked]));
+$('hist-export').addEventListener('click', () => downloadZip([...hist.checked]));
 $('hist-compare').addEventListener('click', () => openCompare([...hist.checked]));
 $('hist-analyze').addEventListener('click', () => openAnalysis([...hist.checked]));
 $('cmp-close').addEventListener('click', closeCompare);
@@ -2951,7 +3237,7 @@ $('dl-json').addEventListener('click', downloadShotJson);
 $('dl-jpeg').addEventListener('click', downloadJpegs);
 $('dl-pdf').addEventListener('click', downloadPdf);
 $('dl-summary').addEventListener('click', downloadSummaryCsv);
-$('dl-zip').addEventListener('click', downloadZip);
+$('dl-zip').addEventListener('click', () => downloadZip());
 $('demo-load').addEventListener('click', addDemoShot);
 $('demo-replay').addEventListener('click', replayDemoLive);
 async function backupDocument() {
@@ -2959,17 +3245,71 @@ async function backupDocument() {
 }
 $('backup-export').addEventListener('click', async () => {
   const doc = await backupDocument();
-  await deliver(`portal-met-bridge-backup-${stamp(Date.now())}.json`, JSON.stringify(doc), 'application/json', 'backups');
-  $('backup-note').textContent = `${doc.shots.length} shots, ${doc.beans.length} beans.`;
+  await deliver(`portal-met-bridge-backup-${stamp(Date.now())}.json`, JSON.stringify(doc), 'application/json', 'backups', { via: 'browser' });
+  $('backup-note').textContent = `${doc.shots.length} shots, ${doc.beans.length} beans — downloaded.`;
+});
+
+/**
+ * A small "which way?" dialog: resolves to the chosen id, or null when dismissed.
+ * choices: [{ id, label, hint, disabled }].
+ */
+function chooseDialog({ title, text = '', choices }) {
+  return new Promise((resolve) => {
+    const dlg = $('choice-dialog');
+    $('choice-title').textContent = title;
+    $('choice-text').textContent = text;
+    $('choice-text').hidden = !text;
+    $('choice-list').innerHTML = choices.map((c) => `<button type="button" class="choice" data-id="${esc(c.id)}" ${c.disabled ? 'disabled' : ''}><b>${esc(c.label)}</b>${c.hint ? `<small>${esc(c.hint)}</small>` : ''}</button>`).join('');
+    // resolve from the close event (it fires asynchronously after close()), so a dialog
+    // opened right after this one cannot be closed by this one's late event
+    let result = null;
+    $('choice-list').onclick = (ev) => { const b = ev.target.closest('button.choice'); if (b && !b.disabled) { result = b.dataset.id; dlg.close(); } };
+    $('choice-cancel').onclick = () => { result = null; dlg.close(); };
+    dlg.addEventListener('close', () => resolve(result), { once: true });
+    dlg.showModal();
+    dlg.querySelector('button.choice:not([disabled])')?.focus();
+  });
+}
+
+/** Restore from a backup: a file you upload, or one of the backups saved in the backups folder. */
+async function restoreBackup(json, label) {
+  const n = await store.importAll(json);
+  await refreshBeanLists();
+  await refreshShotList();
+  renderBeans();
+  toast(`Restored ${n} shots from ${label}.`);
+  $('backup-note').textContent = `Restored ${n} shots from ${label}.`;
+}
+$('backup-restore').addEventListener('click', async () => {
+  const saved = files.ready ? await files.list('backups').catch(() => []) : [];
+  const jsons = saved.filter((f) => /\.json$/i.test(f.name));
+  const how = await chooseDialog({
+    title: 'Restore from a backup',
+    text: 'Restoring merges by shot id — nothing already here is deleted.',
+    choices: [
+      { id: 'upload', label: 'Upload a backup file', hint: 'choose a portal-met-bridge-backup-….json (or -latest.json) with the browser' },
+      { id: 'saved', label: `Pick one of the saved backups`, hint: files.ready ? (jsons.length ? `${jsons.length} in ${files.whereOf('backups')}` : `none yet in ${files.whereOf('backups')}`) : 'needs a folder or the server\'s data folder under Files and folders', disabled: !jsons.length },
+    ],
+  });
+  if (how === 'upload') return $('backup-import').click();
+  if (how !== 'saved') return;
+  const which = await chooseDialog({
+    title: `Saved backups in ${files.whereOf('backups')}`,
+    text: 'Newest first.',
+    choices: jsons.slice(0, 30).map((f) => ({ id: f.name, label: f.name, hint: `${fmtDate(f.mtime)} · ${(f.size / 1024).toFixed(0)} kB` })),
+  });
+  if (!which) return;
+  try {
+    await restoreBackup(JSON.parse(await files.read('backups', which)), which);
+  } catch (err) {
+    toast(`Restore failed: ${err?.message || err}`, 'error');
+  }
 });
 $('backup-import').addEventListener('change', async (e) => {
   const file = e.target.files[0];
   if (!file) return;
   try {
-    const n = await store.importAll(JSON.parse(await file.text()));
-    await refreshBeanLists();
-    await refreshShotList();
-    toast(`Restored ${n} shots.`);
+    await restoreBackup(JSON.parse(await file.text()), file.name);
   } catch (err) {
     toast(err.message || String(err), 'error');
   }
@@ -3219,7 +3559,7 @@ function renderAnalysisList() {
       const on = an.ids.includes(s.id);
       const c = s.context || {};
       const tags = [s.portal?.length ? `P ${s.portal.length}` : 'no Portal', s.machineShotId ? 'record' : 'live', c.grindSize ? `${esc(c.grindSize)}` : ''].filter(Boolean);
-      return `<li class="${on ? 'on' : ''}"><label><input type="checkbox" data-id="${esc(s.id)}" ${on ? 'checked' : ''} /> <span class="when">${esc(fmtDate(s.startedAt))}</span> <span class="what">${esc(c.beanName || 'unnamed coffee')} <small>${esc(s.profileName || '')}</small></span> <span class="tags">${starsHtml(s.rating, { comment: s.comment, compact: true })}${tags.map((t) => `<span class="tag">${t}</span>`).join('')}</span></label></li>`;
+      return `<li class="${on ? 'on' : ''}"><label><input type="checkbox" data-id="${esc(s.id)}" ${on ? 'checked' : ''} /> <span class="when">${esc(fmtDate(s.startedAt))}</span> <span class="what">${esc(c.beanName || 'unnamed coffee')} <small>${esc(s.profileName || '')}</small></span> <span class="tags">${ratingsOn() ? starsHtml(s, { compact: true }) : ''}${tags.map((t) => `<span class="tag">${t}</span>`).join('')}</span></label></li>`;
     })
     .join('');
   if (!shown.length) ul.innerHTML = `<li class="empty">${state.shots.length ? 'No shot matches.' : 'No shots recorded yet.'}</li>`;
@@ -3515,7 +3855,7 @@ function renderAnalysisDigest() {
   $('an-digest').innerHTML = items
     .map(({ shot, digest }) => {
       const m = digest.meta;
-      const head = `<h3>${esc(shotLabel(shot))}</h3><p class="hint">${[m.profile ? `${m.profile}${shot.reviewProfile ? ' (profile chosen for this review)' : m.recordedProfile === undefined && !shot.machineSource?.profile ? ' (name only)' : ''}` : 'profile unknown', m.grindUm ? `${fmt(m.grindUm, 0)} µm` : 'no grind recorded', m.doseG ? `${fmt(m.doseG, 1)} g in` : 'no dose', `${fmt(m.beverageG, 1)} g out (${m.beverageSource === 'profile' ? 'profile target' : m.beverageSource === 'weighed' ? 'weighed' : 'scale'})`, m.ratio ? `1 : ${fmt(m.ratio, 2)}` : null, `${fmt(m.durationSec, 1)} s`, m.profileTargetG ? `target ${fmt(m.profileTargetG, 1)} g` : null, m.profileTemperatureC ? `setpoint ${fmt(m.profileTemperatureC, 0)} °C` : null, digest.ec ? `mean EC/g ${fmt(digest.ec.meanEcPerG, 3)}` : null, m.rating ? `rated ${m.rating}/5` : 'not rated'].filter(Boolean).join(' · ')}${m.comment ? `<br><em>“${esc(m.comment)}”</em>` : ''}</p>`;
+      const head = `<h3>${esc(shotLabel(shot))}</h3><p class="hint">${[m.profile ? `${m.profile}${shot.reviewProfile ? ' (profile chosen for this review)' : m.recordedProfile === undefined && !shot.machineSource?.profile ? ' (name only)' : ''}` : 'profile unknown', m.grindUm ? `${fmt(m.grindUm, 0)} µm` : 'no grind recorded', m.doseG ? `${fmt(m.doseG, 1)} g in` : 'no dose', `${fmt(m.beverageG, 1)} g out (${m.beverageSource === 'profile' ? 'profile target' : m.beverageSource === 'weighed' ? 'weighed' : 'scale'})`, m.ratio ? `1 : ${fmt(m.ratio, 2)}` : null, `${fmt(m.durationSec, 1)} s`, m.profileTargetG ? `target ${fmt(m.profileTargetG, 1)} g` : null, m.profileTemperatureC ? `setpoint ${fmt(m.profileTemperatureC, 0)} °C` : null, digest.ec ? `mean EC/g ${fmt(digest.ec.meanEcPerG, 3)}` : null, m.rating ? `rated ${m.rating}/${m.ratingMax || 5}` : 'not rated'].filter(Boolean).join(' · ')}${m.comment ? `<br><em>“${esc(m.comment)}”</em>` : ''}</p>`;
       const gaps = digest.gaps.length ? `<ul class="gaps">${digest.gaps.map((g) => `<li>${esc(g)}</li>`).join('')}</ul>` : '';
       return `<div class="an-shot">${head}${gaps}${stageTable(digest)}</div>`;
     })

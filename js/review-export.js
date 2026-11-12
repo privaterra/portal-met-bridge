@@ -3,7 +3,7 @@
 // PDF (jsPDF, with a small rich-text layout). All three are written from the
 // same block structure that parseMarkdown() produces, so they agree.
 
-import { parseMarkdown } from './review.js?v=0.17.1';
+import { parseMarkdown } from './review.js?v=0.18.0';
 import { zipSync, strToU8 } from '../vendor/fflate.esm.js';
 
 export const REVIEW_FORMATS = {

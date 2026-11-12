@@ -519,3 +519,27 @@ table.hist td.rating .linkish.rate.unrated { color: var(--ink-3); font-weight: 4
 table.hist td.rating .has-comment { font-size: 11px; margin-left: 2px; }
 .an-list .tags .stars.ro { font-size: 11px; letter-spacing: 0; font-weight: 600; border: 1px solid var(--amber); border-radius: 10px; padding: 0 6px; line-height: 16px; }
 .field > .stars { margin-top: 2px; }
+
+body.no-ratings table.hist th.rating, body.no-ratings table.hist td.rating, body.no-ratings .shot-rating { display: none; }
+.stars.nine button.star { font-size: 17px; }
+.stars.big.nine button.star { font-size: 24px; padding: 0 2px; }
+
+/* ---- the "which way?" dialog: one button per choice */
+.choice-list { display: grid; gap: 8px; margin: 8px 0 14px; max-height: 50vh; overflow: auto; }
+.choice-list .choice { display: grid; gap: 2px; text-align: left; padding: 10px 12px; border: 1px solid var(--rule); border-radius: 10px; background: #fff; cursor: pointer; font: inherit; color: inherit; }
+.choice-list .choice:hover:not([disabled]), .choice-list .choice:focus-visible { border-color: var(--teal); background: #eef6f6; outline: none; }
+.choice-list .choice[disabled] { opacity: 0.55; cursor: not-allowed; }
+.choice-list .choice small { color: var(--ink-3); font-size: 12px; }
+
+.shot-nav { display: inline-flex; gap: 2px; margin-right: 6px; }
+.shot-nav .btn.small { padding: 2px 8px; }
+
+/* ---- Beans tab */
+table.beans td.name { font-weight: 600; }
+table.beans td.name button.linkish { font-weight: 600; text-decoration: none; color: var(--ink); }
+table.beans td.name button.linkish:hover { text-decoration: underline; }
+table.beans td.name small { display: block; font-weight: 400; color: var(--ink-3); }
+table.beans td.roaster small { display: block; color: var(--ink-3); }
+table.beans td.muted, table.beans .muted { color: var(--ink-3); }
+.bean-link { font-size: 11px; font-weight: 500; color: var(--cobalt); text-decoration: none; margin-left: 4px; }
+.bean-link:hover { text-decoration: underline; }

@@ -3,8 +3,9 @@
 // loaded lazily from vendor/ only when a PDF is asked for.
 
 import { zipSync, strToU8 } from '../vendor/fflate.esm.js';
-import { beverageOf, beverageSource, profileTargetOf, measuredEy } from './analysis.js?v=0.17.1';
-import { pdfWriter } from './review-export.js?v=0.17.1';
+import { beverageOf, beverageSource, profileTargetOf, measuredEy } from './analysis.js?v=0.18.0';
+import { pdfWriter } from './review-export.js?v=0.18.0';
+import { ratingOf, ratingMaxOf } from './review.js?v=0.18.0';
 
 const APP = 'portal-met-bridge';
 
@@ -295,7 +296,7 @@ export const SUMMARY_COLUMNS = [
   'id', 'started_iso', 'source', 'profile', 'bean', 'roaster', 'roast_level', 'process', 'origin', 'dose_g', 'grind', 'grinder',
   'beverage_g', 'beverage_source', 'profile_target_g', 'machine_weight_g', 'ratio', 'extraction_s', 'machine_samples', 'portal_samples', 'analysis_status', 'mean_ec_per_g', 'integral_ec_g', 'peak_ec', 'peak_at_g',
   'last5g_mean_ec', 'last5g_slope', 'mass_at_90pct_g', 'coverage', 'first_drop_s', 'portal_mean_temp_c',
-  'refractometer_tds_pct', 'refractometer_ey_pct', 'estimated_tds_pct', 'estimated_ey_pct', 'estimate_model', 'estimate_pool', 'estimate_flags', 'note', 'rating', 'comment',
+  'refractometer_tds_pct', 'refractometer_ey_pct', 'estimated_tds_pct', 'estimated_ey_pct', 'estimate_model', 'estimate_pool', 'estimate_flags', 'note', 'rating', 'rating_max', 'comment',
 ];
 
 /** One row per shot; `extra` is { analysis, estimate } computed by the caller. */
@@ -307,7 +308,7 @@ export function summaryRow(shot, analysis, estimate) {
     shot.id, new Date(shot.startedAt).toISOString(), shot.source, shot.profileName ?? '', c.beanName ?? '', c.roaster ?? '', c.roastLevel ?? '', c.process ?? '', c.origin ?? '', c.doseG || '', c.grindSize ?? '', c.grinderName ?? '',
     round(beverageOf(shot), 1), beverageSource(shot) ?? '', round(profileTargetOf(shot), 1), round(shot.finalWeightG, 1), Number(c.doseG) > 0 && beverageOf(shot) > 0 ? round(beverageOf(shot) / Number(c.doseG), 2) : '', round(shot.durationSec, 1), shot.machine?.length ?? 0, shot.portal?.length ?? 0, a.status ?? '', round(a.meanEcPerG, 4), round(a.integralEcG, 2), round(a.mainPeakEc, 4), round(a.mainPeakMassG, 1),
     round(a.tail?.last5g?.mean, 4), round(a.tail?.last5g?.slopePerG, 4), round(a.massAt90PctG, 1), round(a.coverageRatio, 3), round(a.firstDropTimeSec, 2), round(a.meanTempC, 1),
-    shot.refractometer?.tdsPct ?? '', round(measuredEy(shot), 2), round(e.tdsPct, 2), round(e.eyPct, 2), e.model ?? '', e.pool ?? '', (e.flags || []).join(' | '), c.note ?? '', Number.isInteger(shot.rating) && shot.rating >= 1 && shot.rating <= 5 ? shot.rating : '', shot.comment ?? '',
+    shot.refractometer?.tdsPct ?? '', round(measuredEy(shot), 2), round(e.tdsPct, 2), round(e.eyPct, 2), e.model ?? '', e.pool ?? '', (e.flags || []).join(' | '), c.note ?? '', ratingOf(shot) ?? '', ratingOf(shot) ? ratingMaxOf(shot) : '', shot.comment ?? '',
   ];
 }
 

@@ -6,7 +6,7 @@
 //   buildReviewMessages(...)         → { system, user } for any provider
 //   renderMarkdown(md)               → safe HTML for the report pane
 
-import { beverageOf, beverageSource, profileTargetOf, profileFinalWeight, measuredEy, grindMicrons } from './analysis.js?v=0.17.1';
+import { beverageOf, beverageSource, profileTargetOf, profileFinalWeight, measuredEy, grindMicrons } from './analysis.js?v=0.18.0';
 
 const r1 = (v) => (Number.isFinite(v) ? Math.round(v * 10) / 10 : null);
 const r2 = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
@@ -130,6 +130,7 @@ export function buildShotDigest(shot, analysis, { profileTargetG, profile = revi
     durationSec: r1(shot.durationSec),
     note: c.note || null,
     rating: ratingOf(shot),
+    ratingMax: ratingOf(shot) ? ratingMaxOf(shot) : null,
     comment: typeof shot.comment === 'string' && shot.comment.trim() ? shot.comment.trim() : null,
     refractometerTdsPct: Number(shot.refractometer?.tdsPct) > 0 ? shot.refractometer.tdsPct : null,
     measuredEyPct: r2(measuredEy(shot)),
@@ -266,10 +267,14 @@ export function buildShotDigest(shot, analysis, { profileTargetG, profile = revi
 }
 
 /** One sentence that says which weight is the cup and which is only the profile's aim — the model must not confuse them. */
-/** The user's 1–5 star rating of a shot, or null when it has none. */
+/** The scale a shot was rated on: 5 (default) or 9 stars. */
+export function ratingMaxOf(shot) {
+  return Number(shot?.ratingMax) === 9 ? 9 : 5;
+}
+/** The user's star rating of a shot (1 … ratingMaxOf(shot)), or null when it has none. */
 export function ratingOf(shot) {
   const r = Number(shot?.rating);
-  return Number.isInteger(r) && r >= 1 && r <= 5 ? r : null;
+  return Number.isInteger(r) && r >= 1 && r <= ratingMaxOf(shot) ? r : null;
 }
 
 export function beverageNoteFor(shot, beverage, target) {
@@ -339,7 +344,7 @@ Bullets listing only the data you were given: the shot ids/dates, the profile na
 
 Rules: use the numbers from the digest and do not recompute or round them differently; never invent values that are not there — say "not recorded" instead; keep the tone plain and specific; write for the person who pulled the shot; do not describe the chart (the app shows it); do not add a title, preamble or closing remarks.
 Weights: meta.beverageG is the cup — the yield to use for ratio and EY — and meta.beverageNote says where it came from (weighed by hand, the profile's target, or the scale). meta.profileTargetG is only what the profile aimed to stop at and meta.scaleFinalG only what the machine's scale read; quote them as such and never present either as the measured yield when a hand-weighed value exists. When the three disagree, say so and by how much.
-Rating: meta.rating is the user's own 1–5 star rating of the shot in the cup (5 best; null when not rated) and meta.comment their comment on it; treat both as the taste verdict for that shot, weigh the trace against them, and say so when the numbers and the rating disagree.`;
+Rating: meta.rating is the user's own star rating of the shot in the cup, out of meta.ratingMax (5 or 9; the top mark is best; null when not rated) and meta.comment their comment on it; treat both as the taste verdict for that shot, weigh the trace against them, and say so when the numbers and the rating disagree.`;
 
 /** The report outline when several shots are reviewed together: every section compares. */
 export const REVIEW_TEMPLATE_SERIES = `Write the report in Markdown with exactly these sections, in this order (use "##" headings; no top-level title, the app adds it). Several shots are given, in brewing order, and every section must compare them — never review only the last one.
@@ -370,7 +375,7 @@ Bullets listing only the data you were given: the shot ids/dates in order, the p
 
 Rules: use the numbers from the digests and the app's comparison and do not recompute or round them differently; never invent values that are not there — say "not recorded" instead; keep the tone plain and specific; write for the person who pulled the shots; do not describe the charts (the app shows them); do not add a title, preamble or closing remarks.
 Weights: meta.beverageG is the cup — the yield to use for ratio and EY — and meta.beverageNote says where it came from (weighed by hand, the profile's target, or the scale). meta.profileTargetG is only what the profile aimed to stop at and meta.scaleFinalG only what the machine's scale read; quote them as such and never present either as the measured yield when a hand-weighed value exists. When the three disagree, say so and by how much.
-Rating: meta.rating is the user's own 1–5 star rating of the shot in the cup (5 best; null when not rated) and meta.comment their comment on it; treat both as the taste verdict for that shot, weigh the trace against them, and say so when the numbers and the rating disagree.`;
+Rating: meta.rating is the user's own star rating of the shot in the cup, out of meta.ratingMax (5 or 9; the top mark is best; null when not rated) and meta.comment their comment on it; treat both as the taste verdict for that shot, weigh the trace against them, and say so when the numbers and the rating disagree.`;
 
 const num = (v) => (v === null || v === undefined || v === '' ? null : Number.isFinite(Number(v)) ? Number(v) : null); // null stays null (never 0)
 const delta = (a, b, digits = 2) => (a === null || b === null ? null : Math.round((b - a) * 10 ** digits) / 10 ** digits);
@@ -417,6 +422,7 @@ export function buildSeriesComparison(digests) {
     refractometerTdsPct: num(d.meta?.refractometerTdsPct),
     measuredEyPct: num(d.meta?.measuredEyPct),
     rating: num(d.meta?.rating),
+    ratingMax: num(d.meta?.ratingMax),
     comment: d.meta?.comment ?? null,
     portalData: !!d.ec && d.ec.meanEcPerG != null,
     stageNames: (d.stages || []).map((st) => st.name),

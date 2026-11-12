@@ -78,6 +78,13 @@ try {
   await context.addInitScript({ content: readFileSync(join(here, 'fake-bluetooth.js'), 'utf8') });
   await context.addInitScript({ content: readFileSync(join(here, 'fake-folder.js'), 'utf8') });
   const page = await context.newPage();
+  const keep = process.env.E2E_OUT; // set to a folder to keep the exported files
+  const dl = async (sel) => {
+    const [d] = await Promise.all([page.waitForEvent('download', { timeout: 30000 }), page.click(sel)]);
+    const p = await d.path();
+    if (keep) await d.saveAs(join(keep, d.suggestedFilename()));
+    return { name: d.suggestedFilename(), bytes: statSync(p).size, path: p };
+  };
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
@@ -125,6 +132,11 @@ try {
   await page.click('#settings-save');
   await page.waitForTimeout(300);
   check('Save settings commits every edited field', (await page.textContent('#meticulous-addr')) === `localhost:${MOCK_PORT}` && (await page.evaluate(() => window.__pb.settings.settleSec)) === 7 && /Saved 2 settings/.test(await page.textContent('#savebar-status')), (await page.textContent('#savebar-status')).trim());
+  // Rating settings (v0.18): on, 1–5, rated manually afterwards — switched to "when the shot completes" for the dialog test below
+  const ratingDefaults = await page.evaluate(() => ({ on: document.querySelector('#set-ratings').checked, scale: document.querySelector('#set-rating-scale').value, when: document.querySelector('#set-rating-when').value, via: document.querySelector('#set-shot-files-via').value, exportsVia: document.querySelector('#set-exports-via').value, rail: !!document.querySelector('.rail #demo-load'), demoInSettings: !!document.querySelector('#view-settings #demo-load'), nav: !!document.querySelector('#view-shots .panel-tools #shot-prev') }));
+  check('defaults: ratings on, 1–5 scale, rated manually; per-shot files and exports download; the rail has no Shots block, demo buttons live in Settings and ◀ ▶ by the shot title', ratingDefaults.on && ratingDefaults.scale === '5' && ratingDefaults.when === 'manual' && ratingDefaults.via === 'browser' && ratingDefaults.exportsVia === 'browser' && !ratingDefaults.rail && ratingDefaults.demoInSettings && ratingDefaults.nav, JSON.stringify(ratingDefaults));
+  await page.selectOption('#set-rating-when', 'after');
+  await page.waitForTimeout(200);
   await page.click('#meticulous-host');
   await page.keyboard.press('Control+A');
   await page.keyboard.type('typo.local');
@@ -326,6 +338,7 @@ try {
   await page.waitForTimeout(200);
   const opened = await page.evaluate(() => ({ shotsVisible: !document.querySelector('#view-shots').hidden, histHidden: document.querySelector('#view-history').hidden, sub: document.querySelector('#shot-sub').textContent }));
   check('History → Open shows the shot on the Shots tab', opened.shotsVisible && opened.histHidden && /E2E coffee \(edited\)/.test(opened.sub), JSON.stringify(opened).slice(0, 160));
+  await page.click('.view-tab[data-view="settings"]');
   await page.click('#demo-load');
   await page.waitForTimeout(600);
   await page.click('.view-tab[data-view="history"]');
@@ -335,6 +348,12 @@ try {
   // Compare: tick both shots and overlay their graphs
   for (const r of rowsWithDemo) await page.check(`#hist-rows tr[data-id="${r.id}"] input[type="checkbox"]`);
   check('Compare selected is enabled with two ticked shots', /Compare selected \(2\)/.test(await page.textContent('#hist-compare')) && !(await page.isDisabled('#hist-compare')));
+  // Export selected (v0.18): a zip of just the ticked shots, through the browser by default
+  check('Export selected is enabled with the ticked shots', /Export selected \(2\)/.test(await page.textContent('#hist-export')) && !(await page.isDisabled('#hist-export')));
+  const selZip = await dl('#hist-export');
+  await page.waitForFunction(() => /2 shots exported/.test(document.querySelector('#dl-progress').textContent), null, { timeout: 60000 });
+  check('Export selected downloads a zip named for the two shots', /portal-met-bridge-export-2-shots-.*\.zip$/.test(selZip.name) && selZip.bytes > 40000, `${selZip.name} ${selZip.bytes} B`);
+  await page.click('.view-tab[data-view="history"]');
   await page.click('#hist-compare');
   await page.waitForTimeout(500);
   const cmp = await page.evaluate(() => ({ visible: !document.querySelector('#compare-panel').hidden, series: window.__pb.compareChart.u?.series.length, legendRows: document.querySelectorAll('#cmp-legend tbody tr').length, legendText: document.querySelector('#cmp-legend').textContent.replace(/\s+/g, ' ').slice(0, 300), xField: !document.querySelector('#cmp-x-field').hidden }));
@@ -372,10 +391,19 @@ try {
   const basis = await page.textContent('#est-flags');
   check('estimate after one reading is flagged preliminary and excludes the shot itself', /Preliminary|No refractometer/.test(basis), basis.trim().slice(0, 80));
 
-  // Exports with "save to folder" on: files land in the fake folder, no browser download
+  // Per-shot files follow Settings → Files and folders → "Where the buttons send their files" (v0.18): browser by default, even with a folder ready
+  const csvDl = await dl('#dl-csv');
+  let folderFiles = await page.evaluate(() => Object.keys(window.__fakeFolderFiles || {}));
+  check('with the default "download through the browser", CSV (samples) downloads although a folder is ready, and the note says so', /\.csv$/.test(csvDl.name) && !folderFiles.some((f) => /exports\/shot-.*\.csv$/.test(f)) && /download through the browser/.test(await page.textContent('#shot-files-where')), `${csvDl.name}; folder: ${folderFiles.join(', ')}`);
+  await page.click('.view-tab[data-view="settings"]');
+  await page.selectOption('#set-shot-files-via', 'folder');
+  await page.selectOption('#set-exports-via', 'folder');
+  await page.waitForTimeout(200);
+  await page.click('.view-tab[data-view="shots"]');
+  check('set to the folder, the note under the buttons names it', /write to .*portal-met-bridge\/ \(exports\/ and reports\/\)/.test(await page.textContent('#shot-files-where')), (await page.textContent('#shot-files-where')).trim());
   await page.click('#dl-csv');
   await page.waitForTimeout(800);
-  let folderFiles = await page.evaluate(() => Object.keys(window.__fakeFolderFiles || {}));
+  folderFiles = await page.evaluate(() => Object.keys(window.__fakeFolderFiles || {}));
   check('CSV saved into the chosen folder', folderFiles.some((f) => /portal-met-bridge\/exports\/shot-.*\.csv$/.test(f)), folderFiles.join(', '));
   await page.click('.view-tab[data-view="settings"]');
   await page.click('#log-download');
@@ -408,11 +436,28 @@ try {
   await page.click('#log-download');
   await page.waitForTimeout(600);
   await page.click('#files-backup-now');
+  await page.waitForSelector('#choice-dialog[open]');
+  check('Write a backup now asks: the folder (named) or a browser download', /Write a backup now/.test(await page.textContent('#choice-title')) && /espresso\/pmb\/backups\//.test(await page.textContent('#choice-list button[data-id="folder"]')) && !(await page.isDisabled('#choice-list button[data-id="folder"]')), (await page.textContent('#choice-list')).replace(/\s+/g, ' ').slice(0, 200));
+  await page.click('#choice-list button[data-id="folder"]');
   await page.waitForFunction(() => /Backup written/.test(document.querySelector('#toast').textContent), null, { timeout: 10000 });
   disk = onDisk();
   check('after the rename, exports, the log and a backup land under the new root and names', disk.some((f) => /^espresso\/pmb\/CSV out\/shot-.*\.csv$/.test(f)) && disk.some((f) => /^espresso\/pmb\/logs\/portal-met-bridge-log-.*\.txt$/.test(f)) && disk.some((f) => /^espresso\/pmb\/logs\/\d{4}-\d{2}-\d{2}\.log$/.test(f)) && disk.includes('espresso/pmb/backups/portal-met-bridge-latest.json') && disk.some((f) => /^espresso\/pmb\/backups\/portal-met-bridge-\d{4}-\d{2}-\d{2}\.json$/.test(f)), disk.join(', '));
   const backupDoc = JSON.parse(readFileSync(join(process.env.PMB_E2E_DATA, 'espresso/pmb/backups/portal-met-bridge-latest.json'), 'utf8'));
   check('the automatic backup is a full export (shots with samples, restorable)', backupDoc.app === 'portal-met-bridge' && Array.isArray(backupDoc.shots) && backupDoc.shots.length >= 1 && Array.isArray(backupDoc.shots[0].machine), `${backupDoc.shots?.length} shots`);
+  // Back up everything downloads; Restore… offers the saved backups of the backups folder (v0.18)
+  const everything = await dl('#backup-export');
+  check('Back up everything (JSON) downloads through the browser', /portal-met-bridge-backup-.*\.json$/.test(everything.name) && JSON.parse(readFileSync(everything.path, 'utf8')).shots.length === backupDoc.shots.length, everything.name);
+  await page.click('#backup-restore');
+  await page.waitForSelector('#choice-dialog[open]');
+  const restoreChoices = await page.evaluate(() => ({ title: document.querySelector('#choice-title').textContent, upload: !document.querySelector('#choice-list button[data-id="upload"]').disabled, saved: !document.querySelector('#choice-list button[data-id="saved"]').disabled, hint: document.querySelector('#choice-list button[data-id="saved"]').textContent }));
+  check('Restore asks: upload a file, or pick a saved backup (counted, in the backups folder)', /Restore from a backup/.test(restoreChoices.title) && restoreChoices.upload && restoreChoices.saved && /\d+ in .*espresso\/pmb\/backups\//.test(restoreChoices.hint), JSON.stringify(restoreChoices));
+  await page.click('#choice-list button[data-id="saved"]');
+  await page.waitForFunction(() => /Saved backups in/.test(document.querySelector('#choice-title').textContent));
+  const savedList = await page.evaluate(() => [...document.querySelectorAll('#choice-list button.choice')].map((b) => b.dataset.id));
+  check('the saved backups are listed, latest and the dated copy', savedList.includes('portal-met-bridge-latest.json') && savedList.some((n) => /^portal-met-bridge-\d{4}-\d{2}-\d{2}\.json$/.test(n)), savedList.join(','));
+  await page.click('#choice-list button[data-id="portal-met-bridge-latest.json"]');
+  await page.waitForFunction(() => /Restored \d+ shots from portal-met-bridge-latest\.json/.test(document.querySelector('#toast').textContent), null, { timeout: 10000 });
+  check('picking one restores it (merging by id: the shot count is unchanged)', (await page.evaluate(() => window.__pb.state.shots.filter((x) => !x.inProgress).length)) === backupDoc.shots.length, await page.textContent('#toast'));
   const refused = await page.evaluate(async () => { const codes = []; for (const p of ['../x.txt', 'a/.hidden', 'a/..%2Fb', 'bad:name']) codes.push((await fetch(`api/files/${p}`, { method: 'PUT', body: 'x' })).status); return codes; });
   check('the server refuses paths that leave the data folder or hide files', refused.every((c) => c === 400 || c === 404), refused.join(','));
   await page.fill('#set-dir-root', 'portal-met-bridge');
@@ -472,10 +517,10 @@ try {
   const logHasKey = await page.evaluate(() => /sk-test-123/.test(window.__pb.log.asText()));
   check('the key never appears in the debug log', logHasKey === false);
 
-  // Settings export round-trip
-  await page.click('#settings-export');
-  await page.waitForTimeout(500);
-  const settingsDoc = await page.evaluate(() => { const k = Object.keys(window.__fakeFolderFiles).find((f) => /backups\/portal-met-bridge-settings-.*\.json$/.test(f)); return k ? JSON.parse(window.__fakeFolderFiles[k]) : null; });
+  // Settings export round-trip — always a browser download (v0.18), even with the server's folder in use
+  const settingsDl = await dl('#settings-export');
+  const settingsDoc = JSON.parse(readFileSync(settingsDl.path, 'utf8'));
+  check('Export settings downloads through the browser rather than writing to the folder', /portal-met-bridge-settings-.*\.json$/.test(settingsDl.name) && !onDisk().some((f) => /settings-.*\.json$/.test(f)), settingsDl.name);
   check('settings export has the machine address and recording options', settingsDoc?.app === 'portal-met-bridge-settings' && settingsDoc.settings.meticulousHost === `localhost:${MOCK_PORT}` && 'settleSec' in settingsDoc.settings && 'logEnabled' in settingsDoc.settings && settingsDoc.settings.beverageDefault === 'profile', JSON.stringify(settingsDoc?.settings || {}).slice(0, 120));
   check('settings export carries the AI provider and model but never the API keys', settingsDoc?.settings.aiProvider === 'openai' && settingsDoc.settings.aiModelOpenai === 'mock-gpt-2' && !('aiKeyOpenai' in settingsDoc.settings) && !('aiKeyAnthropic' in settingsDoc.settings) && !JSON.stringify(settingsDoc).includes('sk-test-123'), Object.keys(settingsDoc?.settings || {}).filter((k) => k.startsWith('ai')).join(','));
 
@@ -596,6 +641,73 @@ try {
   await page.waitForTimeout(300);
   check('Delete removes the saved review after confirmation', (await page.evaluate(() => document.querySelectorAll('#an-saved-rows tr').length)) === 0 && (await page.textContent('#analysis-tab-count')) === '');
 
+  // ---- Rating scale 1–9 (v0.18): a new rating uses the scale in Settings; earlier ones keep theirs
+  await page.click('.view-tab[data-view="settings"]');
+  await page.selectOption('#set-rating-scale', '9');
+  await page.waitForTimeout(200);
+  await page.click('.view-tab[data-view="history"]');
+  await page.click('#hist-rows tr[data-id="second-portal"] td.rating button[data-act="rate"]');
+  await page.waitForSelector('#rating-dialog[open]');
+  const nine = await page.evaluate(() => ({ stars: document.querySelectorAll('#r-stars button.star').length, keys: document.querySelector('#r-keys').textContent, max: document.querySelector('#r-stars').dataset.max }));
+  check('with the 1–9 scale the rating dialog shows nine stars', nine.stars === 9 && nine.keys === 'press 1–9' && nine.max === '9', JSON.stringify(nine));
+  await page.keyboard.press('7');
+  await page.click('#r-save');
+  await page.waitForTimeout(400);
+  const nineRow = await page.evaluate(() => ({ row: document.querySelector('#hist-rows tr[data-id="second-portal"] td.rating').textContent, shot: window.__pb.state.shots.find((x) => x.id === 'second-portal'), old: document.querySelector(`#hist-rows tr[data-id="${window.__pb.state.shots.find((x) => x.context?.beanName === 'E2E coffee (edited)')?.id}"] td.rating`)?.textContent }));
+  check('the shot is saved as 7 of 9 and History shows ★7/9 while the earlier 3-of-5 shot still shows ★3', /★7\/9/.test(nineRow.row) && nineRow.shot.rating === 7 && nineRow.shot.ratingMax === 9 && /★3/.test(nineRow.old || '') && !/\/5/.test(nineRow.old || ''), JSON.stringify({ row: nineRow.row, rating: nineRow.shot.rating, max: nineRow.shot.ratingMax, old: nineRow.old }));
+  await page.click('#hist-table th[data-sort="rating"]'); // first click: best first
+  const ratingOrder = await page.evaluate(() => [...document.querySelectorAll('#hist-rows tr td.rating')].map((td) => td.textContent.trim()).filter(Boolean));
+  check('sorting by ★ compares fractions across scales (7/9 before 3/5)', ratingOrder[0].startsWith('★7/9') && ratingOrder[1].startsWith('★3'), ratingOrder.join(' | '));
+  await page.click('#hist-table th[data-sort="startedAt"]');
+  await page.click('.view-tab[data-view="settings"]');
+  await page.selectOption('#set-rating-scale', '5');
+  await page.uncheck('#set-ratings');
+  await page.waitForTimeout(200);
+  check('ratings off hides the ★ column and the stars under the shot title', (await page.evaluate(() => document.body.classList.contains('no-ratings') && getComputedStyle(document.querySelector('#hist-table th.rating')).display === 'none')));
+  await page.check('#set-ratings');
+  await page.waitForTimeout(200);
+
+  // ---- Beans tab (v0.18): every coffee, its shots and rating, editable with a link
+  await page.click('.view-tab[data-view="beans"]');
+  await page.waitForTimeout(300);
+  const beansTab = await page.evaluate(() => ({ visible: !document.querySelector('#view-beans').hidden, rows: [...document.querySelectorAll('#beans-rows tr')].map((tr) => ({ key: tr.dataset.key, name: tr.querySelector('td.name button').textContent, shots: tr.children[5].textContent.trim(), avg: tr.querySelector('td.rating').textContent.trim() })), tabCount: document.querySelector('#beans-tab-count').textContent, order: [...document.querySelectorAll('.view-tab')].map((b) => b.dataset.view).join(',') }));
+  const coffeeRow = beansTab.rows.find((r) => r.name === 'E2E coffee (edited)');
+  const e2eRow = beansTab.rows.find((r) => r.name === 'E2E coffee');
+  check('the Beans tab sits between Analysis and Machine and lists each coffee with its shot count and average rating', beansTab.visible && beansTab.order === 'shots,history,analysis,beans,machine,settings' && coffeeRow && coffeeRow.shots === '1' && /★3\.0/.test(coffeeRow.avg) && e2eRow && e2eRow.shots === '2' && /★3\.9/.test(e2eRow.avg) && beansTab.tabCount === `(${beansTab.rows.length})`, JSON.stringify(beansTab).slice(0, 400));
+  await page.click(`#beans-rows tr[data-key="${coffeeRow.key}"] button[data-act="edit"]`);
+  await page.waitForSelector('#bean-dialog[open]');
+  check('Edit opens the coffee with its fields and the "also update its shots" option', (await page.inputValue('#b-name')) === 'E2E coffee (edited)' && (await page.inputValue('#b-roaster')) === 'E2E roaster' && !(await page.isHidden('#b-apply-row')) && /1 shot /.test(await page.textContent('#b-apply-label')));
+  await page.fill('#b-url', 'roaster.example/e2e');
+  await page.fill('#b-origin', 'Colombia, Huila, La Esperanza');
+  await page.fill('#b-notes', 'Pink bourbon, 1 900 m');
+  await page.click('#b-save');
+  await page.waitForTimeout(500);
+  const beanSaved = await page.evaluate(() => { const tr = [...document.querySelectorAll('#beans-rows tr')].find((x) => /E2E coffee \(edited\)/.test(x.textContent)); return { origin: tr.children[2].textContent, link: tr.querySelector('td.name a.bean-link')?.getAttribute('href'), notes: tr.querySelector('td.name small')?.textContent, shotOrigin: window.__pb.state.shots.find((x) => x.context?.beanName === 'E2E coffee (edited)')?.context.origin, rec: window.__pb.state.beans.find((b) => b.name === 'E2E coffee (edited)') }; });
+  check('saving stores the link (https added), origin and notes on the coffee and updates its shot', beanSaved.origin === 'Colombia, Huila, La Esperanza' && beanSaved.link === 'https://roaster.example/e2e' && /Pink bourbon/.test(beanSaved.notes || '') && beanSaved.shotOrigin === 'Colombia, Huila, La Esperanza' && beanSaved.rec?.url === 'https://roaster.example/e2e', JSON.stringify(beanSaved).slice(0, 300));
+  await page.click('#beans-add');
+  await page.waitForSelector('#bean-dialog[open]');
+  await page.fill('#b-name', 'Future bag');
+  await page.fill('#b-roaster', 'Someone');
+  await page.fill('#b-url', 'javascript:alert(1)');
+  await page.click('#b-save');
+  check('a non-http link is refused', /http\(s\) address/.test(await page.textContent('#b-error')) && (await page.evaluate(() => document.querySelector('#bean-dialog').open)));
+  await page.fill('#b-url', '');
+  await page.click('#b-save');
+  await page.waitForTimeout(400);
+  const added = await page.evaluate(() => ({ row: [...document.querySelectorAll('#beans-rows tr')].some((x) => /Future bag/.test(x.textContent) && /never/.test(x.textContent)), pick: [...document.querySelectorAll('#bean-list option')].some((o) => o.value === 'Future bag') }));
+  check('Add a coffee puts it in the list (no shots yet) and in the Bean pick-list', added.row && added.pick, JSON.stringify(added));
+  await page.click(`#beans-rows tr[data-key="${coffeeRow.key}"] td.name button[data-act="shots"]`);
+  await page.waitForTimeout(300);
+  const toShots = await page.evaluate(() => ({ hist: !document.querySelector('#view-history').hidden, search: document.querySelector('#hist-search').value, rows: document.querySelectorAll('#hist-rows tr').length }));
+  check('opening a coffee shows its shots in History (search filled with its name)', toShots.hist && toShots.search === 'E2E coffee (edited)' && toShots.rows === 1, JSON.stringify(toShots));
+  await page.fill('#hist-search', '');
+  await page.dispatchEvent('#hist-search', 'input');
+  await page.click('.view-tab[data-view="beans"]');
+  await page.click(`#beans-rows tr[data-key="${coffeeRow.key}"] button[data-act="use"]`);
+  await page.waitForTimeout(400);
+  const used = await page.evaluate(() => ({ shots: !document.querySelector('#view-shots').hidden, bean: document.querySelector('#ctx-bean').value, origin: document.querySelector('#ctx-origin').value, link: (() => { const a = document.querySelector('#ctx-bean-link'); return !a.hidden && a.href; })() }));
+  check('Use fills This coffee on the Shots tab, and the Bean field shows the info link for a coffee that has a page', used.shots && used.bean === 'E2E coffee (edited)' && used.origin === 'Colombia, Huila, La Esperanza' && used.link === 'https://roaster.example/e2e', JSON.stringify(used));
+
   // ---- Machine tab: the machine's answers are data, never markup (code-scanning CWE-79, v0.17.1)
   await page.click('.view-tab[data-view="machine"]');
   await page.evaluate(async () => { await window.__pb.machinePanel.refreshAll(); });
@@ -684,13 +796,6 @@ try {
   await page.click('.view-tab[data-view="shots"]');
 
   // Exports: JPEG, PDF, summary CSV, zip
-  const keep = process.env.E2E_OUT; // set to a folder to keep the exported files
-  const dl = async (sel) => {
-    const [d] = await Promise.all([page.waitForEvent('download', { timeout: 30000 }), page.click(sel)]);
-    const p = await d.path();
-    if (keep) await d.saveAs(join(keep, d.suggestedFilename()));
-    return { name: d.suggestedFilename(), bytes: statSync(p).size, path: p };
-  };
   const jpg = await dl('#dl-jpeg');
   check('JPEG export downloads', jpg.bytes > 10000 && /time\.jpg$/.test(jpg.name), `${jpg.name} ${jpg.bytes} B`);
   const jpg2 = await page.waitForEvent('download', { timeout: 10000 }); // the second graph

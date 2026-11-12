@@ -29,7 +29,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
-import { readFile, stat, mkdir, rm, open } from 'node:fs/promises';
+import { readFile, stat, mkdir, rm, open, readdir } from 'node:fs/promises';
 import { readFileSync, createWriteStream } from 'node:fs';
 import { extname, join, normalize, resolve, sep, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -137,7 +137,22 @@ async function handleFiles(req, res, path) {
   }
   if (req.method === 'GET') {
     const s = await stat(full);
-    if (s.isDirectory()) return json(res, 400, { error: 'That is a folder.' });
+    if (s.isDirectory()) {
+      // a listing, so the page can offer saved backups to restore: files only, newest first
+      const names = await readdir(full);
+      const entries = [];
+      for (const name of names) {
+        if (name.startsWith('.')) continue;
+        try {
+          const st = await stat(join(full, name));
+          entries.push({ name, size: st.size, mtime: st.mtimeMs, dir: st.isDirectory() });
+        } catch {
+          /* vanished meanwhile */
+        }
+      }
+      entries.sort((a, b) => b.mtime - a.mtime);
+      return json(res, 200, { dir: rel, entries });
+    }
     res.writeHead(200, { 'Content-Type': types[extname(full)] || 'application/octet-stream', 'Content-Length': s.size, 'Cache-Control': 'no-store' });
     const fh = await open(full);
     fh.createReadStream().pipe(res);

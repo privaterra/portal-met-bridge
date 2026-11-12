@@ -261,6 +261,54 @@ export class Files extends EventTarget {
     }
   }
 
+  // ----------------------------------------------------------------- read --
+
+  /**
+   * The files of one kind at the effective destination (not subfolders), newest
+   * first: [{ name, size, mtime }]. Empty when nothing is writable or the folder
+   * does not exist yet.
+   */
+  async list(kind) {
+    if (!this.ready) return [];
+    const rel = this.pathOf(kind, '').replace(/\/+$/, '');
+    try {
+      if (this.effective === 'server') {
+        const res = await fetch(`${this.apiBase}/${rel.split('/').map(encodeURIComponent).join('/')}`, { cache: 'no-store' });
+        if (!res.ok) return [];
+        const body = await res.json();
+        return (body.entries || []).filter((e) => !e.dir).map((e) => ({ name: e.name, size: e.size, mtime: e.mtime }));
+      }
+      let dir = this.folder;
+      for (const p of rel.split('/').filter(Boolean)) dir = await dir.getDirectoryHandle(p);
+      const out = [];
+      for await (const [name, handle] of dir.entries()) {
+        if (handle.kind !== 'file' || name.startsWith('.')) continue;
+        const f = await handle.getFile();
+        out.push({ name, size: f.size, mtime: f.lastModified });
+      }
+      return out.sort((a, b) => b.mtime - a.mtime);
+    } catch (err) {
+      if (err?.name === 'NotFoundError') return [];
+      throw err;
+    }
+  }
+
+  /** The text of <root>/<kind>/<name> at the effective destination. */
+  async read(kind, name) {
+    if (!this.ready) throw new Error(this.blocker || 'No readable destination.');
+    const rel = this.pathOf(kind, name);
+    if (this.effective === 'server') {
+      const res = await fetch(`${this.apiBase}/${rel.split('/').map(encodeURIComponent).join('/')}`, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`could not read ${rel} (${res.status})`);
+      return res.text();
+    }
+    const parts = rel.split('/');
+    const file = parts.pop();
+    let dir = this.folder;
+    for (const p of parts) dir = await dir.getDirectoryHandle(p);
+    return (await (await dir.getFileHandle(file)).getFile()).text();
+  }
+
   // ---------------------------------------------------------------- erase --
 
   /**

@@ -284,6 +284,20 @@ await test('CSV exports: escaping, per-sample rows, summary columns', () => {
   assert.equal(csvEscape('a,b'), '"a,b"');
   assert.equal(csvEscape('say "hi"'), '"say ""hi"""');
   assert.equal(csvEscape(NaN), '');
+  // formula injection (CWE-1236): text that a spreadsheet would evaluate is marked as text
+  assert.equal(csvEscape('=HYPERLINK("http://x","go")'), `"'=HYPERLINK(""http://x"",""go"")"`);
+  assert.equal(csvEscape('@SUM(A1)'), "'@SUM(A1)");
+  assert.equal(csvEscape('+cmd|calc'), "'+cmd|calc");
+  assert.equal(csvEscape('-2+3'), "'-2+3");
+  assert.equal(csvEscape('\tx'), "'\tx");
+  assert.equal(csvEscape(-1.5), '-1.5', 'numbers are untouched');
+  assert.equal(csvEscape('-1.5'), '-1.5', 'a numeric string is untouched');
+  assert.equal(csvEscape('+42'), '+42');
+  assert.equal(csvEscape('1e-3'), '1e-3');
+  assert.equal(csvEscape('Blooming Espresso'), 'Blooming Espresso');
+  const bad = summaryRow({ id: 'x', startedAt: 0, durationSec: 1, portal: [], machine: [], profileName: '=cmd', context: { beanName: '@evil', note: '-note', doseG: 18 } }, null, null);
+  assert.equal(bad[SUMMARY_COLUMNS.indexOf('profile')], '=cmd', 'summaryRow carries the raw value');
+  assert.ok(rowsToCsv([bad]).includes("'=cmd") && rowsToCsv([bad]).includes("'@evil") && rowsToCsv([bad]).includes("'-note"), 'the CSV writer neutralizes them');
   const shot = makeDemoShot({ seed: 3 });
   shot.context = { beanName: 'Test, with comma', roaster: 'R', roastLevel: 'light', doseG: 18 };
   const csv = shotSamplesCsv(shot);
@@ -950,6 +964,43 @@ await test('release: every version stamp agrees with package.json (tools/bump-ve
   assert.ok(ha.includes(`\nversion: "${version}"\n`), `homeassistant config.yaml version is ${/version: "([^"]*)"/.exec(ha)?.[1]}, package.json ${version}`);
   const changelog = readFileSync(new URL('../homeassistant/portal_met_bridge/CHANGELOG.md', import.meta.url), 'utf8');
   assert.ok(changelog.includes(`## ${version}`), 'the Home Assistant CHANGELOG has an entry for this version');
+});
+
+await test('packaging: tools/package-macos.sh builds the bundle with two Node runtimes (the path that broke the v0.17.0 release build)', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const { mkdtempSync, mkdirSync, writeFileSync, chmodSync, existsSync, rmSync, statSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  if (process.platform === 'win32') return;
+  const root = mkdtempSync(join(tmpdir(), 'pmb-pkg-'));
+  try {
+    const tarballs = {};
+    for (const arch of ['arm64', 'x64']) {
+      const dir = `node-v24.0.0-darwin-${arch}`;
+      mkdirSync(join(root, dir, 'bin'), { recursive: true });
+      mkdirSync(join(root, dir, 'lib', 'node_modules', 'npm'), { recursive: true });
+      writeFileSync(join(root, dir, 'bin', 'node'), `#!/bin/sh\nexec "${process.execPath}" "$@"\n`);
+      chmodSync(join(root, dir, 'bin', 'node'), 0o755);
+      writeFileSync(join(root, dir, 'LICENSE'), 'test');
+      writeFileSync(join(root, dir, 'README.md'), 'test');
+      tarballs[arch] = join(root, `${dir}.tar.gz`);
+      execFileSync('tar', ['-czf', tarballs[arch], '-C', root, dir]);
+    }
+    const out = join(root, 'dist');
+    const log = execFileSync('bash', [new URL('../tools/package-macos.sh', import.meta.url).pathname, '--node-arm64', tarballs.arm64, '--node-x64', tarballs.x64, '--out', out, '--no-zip'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    assert.match(log, /bundled Node for arm64/);
+    assert.match(log, /bundled Node for x64/);
+    const app = join(out, 'Portal Met Bridge.app', 'Contents');
+    for (const f of ['MacOS/portal-met-bridge', 'Helpers/launcher.sh', 'Helpers/node/arm64/bin/node', 'Helpers/node/x64/bin/node', 'Helpers/node/x64/LICENSE', 'Resources/app/index.html', 'Resources/app/serve.mjs', 'Resources/app/js/main.js', 'Resources/app/vendor/jspdf.umd.min.js', 'Info.plist', 'PkgInfo']) assert.ok(existsSync(join(app, f)), `${f} is in the bundle`);
+    assert.ok(!existsSync(join(app, 'Helpers/node/x64/lib')), 'npm and headers are stripped from the bundled runtime');
+    assert.ok(statSync(join(app, 'MacOS/portal-met-bridge')).mode & 0o111, 'the main executable is executable');
+    const plist = readFileSync(join(app, 'Info.plist'), 'utf8');
+    const version = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+    assert.ok(plist.includes(`<string>${version}</string>`) && plist.includes('org.privaterra.portal-met-bridge'), 'Info.plist carries the version and bundle id');
+    assert.ok(!existsSync(join(app, 'Resources/app/tests')) && !existsSync(join(app, 'Resources/app/.git')), 'no tests or git in the bundle');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 console.log(`\n${passed} test group(s) passed in total${process.exitCode ? ', with failures' : ''}.`);

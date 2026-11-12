@@ -10,8 +10,8 @@
 //   Settings            /settings, read-only
 
 import uPlot from '../vendor/uPlot.esm.js';
-import { COLORS } from './charts.js?v=0.17.0';
-import { isEndStage } from './meticulous.js?v=0.17.0';
+import { COLORS } from './charts.js?v=0.17.1';
+import { isEndStage } from './meticulous.js?v=0.17.1';
 
 const $ = (id) => document.getElementById(id);
 const font = '12px "Avenir Next", Avenir, system-ui, -apple-system, sans-serif';
@@ -193,8 +193,8 @@ export class MachinePanel {
     const rows = [
       ['Socket', c ? (c.connected ? 'connected' : 'reconnecting') : 'not connected'],
       ['Address', c ? c.baseUrl : '–'],
-      ['Status stream', `<span id="mc-status-age">–</span>`],
-      ['Sensors stream', `<span id="mc-sensors-age">–</span>`],
+      ['Status stream', `<span id="mc-status-age">–</span>`, RAW], // our own markup, not the machine's
+      ['Sensors stream', `<span id="mc-sensors-age">–</span>`, RAW],
     ];
     if (w) {
       const st = w.status || {};
@@ -214,7 +214,7 @@ export class MachinePanel {
       );
       if (h.message) rows.push(['Note', h.message]);
     }
-    $('mc-conn').innerHTML = kv(rows, true);
+    $('mc-conn').innerHTML = kv(rows); // every machine-provided value is escaped; only the two spans above are raw
   }
 
   _renderSettings(s) {
@@ -235,7 +235,7 @@ export class MachinePanel {
         const img = this.client?.imageUrl(p.display?.image);
         const vars = (p.variables || []).map((v) => `<span class="var">${esc(v.name)} <b>${esc(String(v.value))}</b></span>`).join('');
         const isActive = active && p.name === active;
-        return `<article class="profile${isActive ? ' active' : ''}" style="--accent:${esc(p.display?.accentColor || '#2447B8')}">
+        return `<article class="profile${isActive ? ' active' : ''}" style="--accent:${cssColor(p.display?.accentColor)}">
           ${img ? `<img src="${esc(img)}" alt="" loading="lazy" />` : '<div class="noimg"></div>'}
           <div class="profile-body">
             <h4>${esc(p.name)}${isActive ? ' <small>loaded</small>' : ''}</h4>
@@ -251,17 +251,18 @@ export class MachinePanel {
   }
 
   _renderStats(stats, last) {
-    const by = (stats?.byProfile || []).slice().sort((a, b) => b.count - a.count);
-    const total = stats?.totalSavedShots ?? by.reduce((n, p) => n + p.count, 0);
+    // The machine's answer is data, not markup: counts are coerced to numbers before they reach innerHTML.
+    const by = (Array.isArray(stats?.byProfile) ? stats.byProfile : []).map((p) => ({ name: String(p?.name ?? ''), count: num(p?.count, 0), profileVersions: num(p?.profileVersions, 0) })).sort((a, b) => b.count - a.count);
+    const total = num(stats?.totalSavedShots, null) ?? by.reduce((n, p) => n + p.count, 0);
     const max = Math.max(1, ...by.map((p) => p.count));
     const bars = by
-      .map((p) => `<div class="bar-row"><span class="bar-label">${esc(p.name || 'unnamed')}</span><span class="bar"><i style="width:${(100 * p.count) / max}%"></i></span><span class="bar-n">${p.count}${p.profileVersions > 1 ? ` <small>· ${p.profileVersions} versions</small>` : ''}</span></div>`)
+      .map((p) => `<div class="bar-row"><span class="bar-label">${esc(p.name || 'unnamed')}</span><span class="bar"><i style="width:${Math.min(100, (100 * p.count) / max)}%"></i></span><span class="bar-n">${p.count}${p.profileVersions > 1 ? ` <small>· ${p.profileVersions} versions</small>` : ''}</span></div>`)
       .join('');
     let lastHtml = '';
     if (last) {
-      const data = last.data || [];
-      const maxW = Math.max(0, ...data.map((d) => d.shot?.weight ?? 0));
-      const dur = data.length ? data[data.length - 1].time / 1000 : 0;
+      const data = Array.isArray(last.data) ? last.data : [];
+      const maxW = Math.max(0, ...data.map((d) => num(d?.shot?.weight, 0)));
+      const dur = data.length ? num(data[data.length - 1]?.time, 0) / 1000 : 0;
       lastHtml = `<h3>Last saved shot</h3>${kv([
         ['When', last.time ? new Date(last.time * 1000).toLocaleString() : '–'],
         ['Profile', last.name || last.profile_name],
@@ -271,8 +272,8 @@ export class MachinePanel {
       ])}`;
     }
     $('mc-stats').innerHTML = `<div class="stat-tiles">
-        <div class="metric"><div class="v">${total}</div><div class="k">saved shots</div></div>
-        <div class="metric"><div class="v">${stats?.mileage ?? '–'}</div><div class="k">lifetime shots (ESP counter)</div></div>
+        <div class="metric"><div class="v">${num(total, 0)}</div><div class="k">saved shots</div></div>
+        <div class="metric"><div class="v">${num(stats?.mileage, '–')}</div><div class="k">lifetime shots (ESP counter)</div></div>
         <div class="metric"><div class="v">${by.length}</div><div class="k">profiles with history</div></div>
       </div>
       <h3>Shots by profile</h3><div class="bars">${bars || '<p class="hint">No shots saved yet.</p>'}</div>${lastHtml}`;
@@ -354,13 +355,19 @@ const fmt = (x, d) => (Number.isFinite(x) ? x.toFixed(d) : '–');
 const fmtv = (d, unit) => (u, v) => (v == null ? '–' : v.toFixed(d) + unit);
 const yn = (b) => (b === true ? 'yes' : b === false ? 'no' : '–');
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+/** A finite number from the machine's JSON, or `fallback` — never a string that could carry markup. */
+const num = (x, fallback) => (x === null || x === undefined || x === '' || !Number.isFinite(Number(x)) ? fallback : Number(x));
+/** A profile's accent colour, only as a plain CSS colour literal (hex, rgb()/hsl(), or a name); anything else gets the default. */
+const cssColor = (c) => (typeof c === 'string' && /^(#[0-9a-f]{3,8}|(rgb|hsl)a?\([\d.,%\s/]+\)|[a-z]{3,20})$/i.test(c.trim()) ? c.trim() : '#2447B8');
+/** Marks a kv row whose value is markup of our own making; every other value is escaped. */
+const RAW = { html: true };
 function avg(...xs) {
   const v = xs.filter((x) => Number.isFinite(x));
   return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
 }
-function kv(rows, html = false) {
+function kv(rows) {
   return `<dl class="kv">${rows
     .filter(([, v]) => v !== null && v !== undefined && v !== '')
-    .map(([k, v]) => `<dt>${esc(k)}</dt><dd>${html ? v : esc(String(v))}</dd>`)
+    .map(([k, v, opt]) => `<dt>${esc(k)}</dt><dd>${opt?.html ? v : esc(String(v))}</dd>`)
     .join('')}</dl>`;
 }

@@ -3,8 +3,8 @@
 // loaded lazily from vendor/ only when a PDF is asked for.
 
 import { zipSync, strToU8 } from '../vendor/fflate.esm.js';
-import { beverageOf, beverageSource, profileTargetOf, measuredEy } from './analysis.js?v=0.17.0';
-import { pdfWriter } from './review-export.js?v=0.17.0';
+import { beverageOf, beverageSource, profileTargetOf, measuredEy } from './analysis.js?v=0.17.1';
+import { pdfWriter } from './review-export.js?v=0.17.1';
 
 const APP = 'portal-met-bridge';
 
@@ -262,10 +262,19 @@ export async function shotReportPdf(r) {
 
 // ------------------------------------------------------------------- CSV --
 
+/**
+ * One CSV field. Quotes delimiters and newlines, and neutralizes text that a
+ * spreadsheet would run as a formula (CWE-1236): a string starting with = + - @
+ * or a tab/CR gets a leading apostrophe, which Excel, Numbers and LibreOffice
+ * read as "this is text" — so a note like "=HYPERLINK(...)" or "@SUM" from a
+ * profile name, a coffee field or an imported shot stays inert. Numbers, and
+ * strings that are plain numbers ("-1.5"), are left alone.
+ */
 export function csvEscape(v) {
   if (v === undefined || v === null || (typeof v === 'number' && Number.isNaN(v))) return '';
-  const s = String(v);
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  let s = String(v);
+  if (typeof v === 'string' && /^[=+\-@\t\r]/.test(s) && !/^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i.test(s.trim())) s = `'${s}`;
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
 export function rowsToCsv(rows) {

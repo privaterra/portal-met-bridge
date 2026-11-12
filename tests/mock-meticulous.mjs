@@ -95,7 +95,9 @@ const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Headers', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   if (req.method === 'OPTIONS') return res.end();
-  if (req.url === '/api/v1/history/stats') return json(res, { totalSavedShots: 63, byProfile: [{ name: 'Blooming Espresso', count: 34, profileVersions: 3 }, { name: 'Blooming Espresso - Revolver', count: 14, profileVersions: 1 }], mileage: 109 });
+  if (req.url === '/api/v1/history/stats') return json(res, dial.hostile
+    ? { totalSavedShots: '<img src=x onerror="window.__xss=(window.__xss||0)+1">', byProfile: [{ name: 'Evil <img src=x onerror="window.__xss=(window.__xss||0)+1">', count: '34<img src=x onerror="window.__xss=(window.__xss||0)+1">', profileVersions: '<b>3</b>' }, { name: 'Blooming Espresso', count: 14, profileVersions: 1 }], mileage: '<i onclick="1">109</i>' }
+    : { totalSavedShots: 63, byProfile: [{ name: 'Blooming Espresso', count: 34, profileVersions: 3 }, { name: 'Blooming Espresso - Revolver', count: 14, profileVersions: 1 }], mileage: 109 });
   if (req.url === '/api/v1/history/last') { res.setHeader('Content-Type', 'application/json'); return res.end(saved ? JSON.stringify(saved).replace('"motor_speed": 1', '"motor_speed": NaN') : 'null'); }
   if (req.url === '/api/v1/history') return json(res, { history: saved ? [saved] : [] });
   if (req.url === '/api/v1/machine') return json(res, { name: 'MeticulousMock', hostname: 'mock-000001', firmware: '0.2.24-mock', mainVoltage: 120, serial: '000001', color: 'BLACK', batch_number: '0047', build_date: '2026-06-14T06:25:10Z', software_version: '2026-10-31', image_build_channel: 'beta', image_version: '2026M1510-beta', disturbance_resilience: false, disturbance_resilience_supported: true, tare_behavior_supported: true, pour_over_profiles_supported: true, pour_over_profile_schema_version: 1, repository_info: { backend: { branch: 'beta', commit: '0044ec9 - mock' }, firmware: { branch: 'beta', commit: '1891448a - mock' } }, version_history: ['beta-20261031_225605'] });
@@ -121,6 +123,7 @@ const server = http.createServer((req, res) => {
   }
   if (req.url === '/api/v1/profile/list') return json(res, [{ id: '80c5ea87', name: 'Blooming Espresso', author: 'Robert Guerra', temperature: 92, final_weight: 43, last_changed: 1789974014, display: { accentColor: '#FA3012', shortDescription: 'Floral bloom', description: 'Start with 18.0 g, 43 g out.', image: '/api/v1/profile/image/x.jpeg' }, variables: [{ name: 'Bloom Time', key: 'bloom_time', type: 'time', value: 20 }, { name: 'Extraction Flow', key: 'extraction_flow', type: 'flow', value: 2 }] }, { id: '1a830a13', name: 'Blooming - Hatch Supernova', author: 'Robert Guerra', temperature: 93, final_weight: 38, display: { accentColor: '#433C36' }, variables: [] }, { id: 'demo0001', name: 'Blooming Espresso (demo)', author: 'mock', temperature: 93, final_weight: 38, display: { accentColor: '#2447B8' }, variables: [] }, { id: 'dup00002', name: 'Blooming Espresso', author: 'Robert Guerra', temperature: 93, final_weight: '$final_weight', last_changed: 1789900000, display: { accentColor: '#FA3012' }, variables: [{ name: 'Final weight', key: 'final_weight', type: 'weight', value: 38 }] }]); // a second "Blooming Espresso": same name, 38 g via a variable
   if (req.url === '/api/v1/settings') return json(res, { enable_sounds: true, heat_on_boot: true, heating_timeout: 10, update_channel: 'beta', tare_behavior: 'after_retraction', time_zone: 'America/Toronto', clock_format_24_hour: true, disturbance_resilience: false, partial_retraction: 45.33 });
+  if (req.url === '/api/v1/wifi/config' && dial.hostile) return json(res, { config: { mode: '<b>CLIENT</b>', apName: 'Mock' }, status: { connected: true, connection_name: 'Home <img src=x onerror="window.__xss=(window.__xss||0)+1">', gateway: '<script>window.__xss=99</script>', ips: ['192.168.1.50<img src=x onerror="window.__xss=(window.__xss||0)+1">'], dns: [], mac: '"><img src=x onerror="window.__xss=(window.__xss||0)+1">', hostname: 'mock' }, health: { link_connected: true, has_ipv4: true, message: 'note <img src=x onerror="window.__xss=(window.__xss||0)+1">' } });
   if (req.url === '/api/v1/wifi/config') return json(res, { config: { mode: 'CLIENT', apName: 'Mock' }, status: { connected: true, connection_name: 'HomeWiFi', gateway: '192.168.1.1', ips: ['192.168.1.50', 'fe80::1'], dns: ['192.168.1.1'], mac: '00:11:22:33:44:55', hostname: 'mock-000001' }, health: { mode: 'CLIENT', link_connected: true, has_ipv4: true, gateway_reachable: false, dns_resolves: false, internet_reachable: false, degraded: false, message: '' } });
   if (req.url === '/api/v1/notifications') return json(res, []);
   // ---- dial actions (backend api/action.py)
@@ -155,6 +158,7 @@ const server = http.createServer((req, res) => {
         const o = JSON.parse(body || '{}');
         for (const k of ['heatMs', 'tempFrom', 'brewMs']) if (Number.isFinite(Number(o[k]))) dial[k] = Number(o[k]);
         if (Number.isFinite(Number(o.temp))) dial.temp = Number(o.temp);
+        if ('hostile' in o) dial.hostile = !!o.hostile; // answer the Wi-Fi and statistics requests with markup in every string (and a string where a number belongs)
         json(res, dial);
       } catch (e) { res.statusCode = 400; json(res, { error: e.message }); }
     });

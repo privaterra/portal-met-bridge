@@ -400,7 +400,7 @@ table.hist tbody tr.recording td { font-style: italic; }
 .an-list label { display: grid; grid-template-columns: auto auto 1fr auto; gap: 8px; align-items: center; padding: 6px 8px; font-size: 13px; cursor: pointer; }
 .an-list .when { color: var(--ink-3); font-size: 12px; white-space: nowrap; }
 .an-list .what small { color: var(--ink-3); margin-left: 4px; }
-.an-list .tags { display: flex; gap: 4px; }
+.an-list .tags { display: flex; gap: 4px; align-items: center; }
 .an-list .tag { font-size: 10px; border: 1px solid var(--rule); border-radius: 10px; padding: 0 6px; color: var(--ink-3); white-space: nowrap; }
 .an-shot { margin-top: 14px; }
 .an-shot h3 { font-size: 14px; margin: 0 0 2px; }
@@ -517,5 +517,5 @@ table.hist th.rating, table.hist td.rating { text-align: center; }
 table.hist td.rating .linkish.rate { text-decoration: none; color: var(--amber); font-weight: 600; }
 table.hist td.rating .linkish.rate.unrated { color: var(--ink-3); font-weight: 400; }
 table.hist td.rating .has-comment { font-size: 11px; margin-left: 2px; }
-.an-list .stars.ro { font-size: 11px; letter-spacing: 0; margin-right: 6px; }
+.an-list .tags .stars.ro { font-size: 11px; letter-spacing: 0; font-weight: 600; border: 1px solid var(--amber); border-radius: 10px; padding: 0 6px; line-height: 16px; }
 .field > .stars { margin-top: 2px; }

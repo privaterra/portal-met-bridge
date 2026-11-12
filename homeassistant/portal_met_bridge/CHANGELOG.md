@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.17.1
+
+- Matches portal-met-bridge v0.17.1: the macOS build fixed (the v0.17.0 tag had no release), the Machine tab escapes everything the machine answers, CSV exports neutralize formula-like fields, the Analysis shot picker keeps rated rows on one line.
+
 ## 0.17.0
 
 - Matches portal-met-bridge v0.17.0: the PDF report ends with the shot's saved AI review; reviews of several shots are continued automatically when the model stops at its output limit; *Suggested changes* comments on every stage; a 1–5 star rating and a comment after each shot (History ★ column, the review reads them); the new tagline.

@@ -13,6 +13,8 @@ Home Assistant renamed add-ons to **apps** in 2026; the files and the UI paths h
 
 ## 1. Releasing a version (every time)
 
+The step-by-step walkthrough — including watching the workflow, publishing the draft, attaching or replacing the macOS package by hand, and what to do when the build fails — is [docs/RELEASING.md](RELEASING.md). In short:
+
 ```sh
 cd ~/Sites/portal-met-bridge
 node tools/bump-version.mjs 0.14.0      # package.json, cache-busting stamps, About line, and the Home Assistant config.yaml
@@ -81,6 +83,7 @@ Why a compiled main executable: notarization (2.3) requires every executable in 
 
 ```sh
 tools/package-macos.sh --download-node          # app + zip (+ dmg on macOS); downloads the newest Node 24 LTS for both CPUs and checks SHASUMS256
+tools/package-macos.sh --download-node --arch arm64   # Apple silicon only: portal-met-bridge-X.Y.Z-macos-arm64.zip, about half the size
 tools/package-macos.sh                          # smaller: no Node bundled, the launcher finds node on the Mac or shows a dialog
 tools/package-macos.sh --out dist --no-zip      # only the .app
 ```
@@ -212,6 +215,8 @@ Switching back is a matter of commenting the line out again.
 
 ## 4. Checklist per release
 
+(The long form, with the GitHub screens and the manual upload, is [RELEASING.md](RELEASING.md).)
+
 1. `node tools/bump-version.mjs X.Y.Z`; update `homeassistant/portal_met_bridge/CHANGELOG.md`; `node tests/run.mjs`; commit; `tools/publish.sh`.
 2. Write `docs/releases/vX.Y.Z.md` (the release notes; commit it with the version) → `tools/tag-release.sh` → wait for **Release** to finish → read the draft and press **Publish release**.
 3. On a Home Assistant machine: Settings → Apps → ⋮ → *Check for updates* → Portal Met Bridge shows the new version → Update → Open Web UI → Settings → About shows the version.
@@ -223,9 +228,11 @@ Switching back is a matter of commenting the line out again.
 | --- | --- |
 | *Add repository to my Home Assistant* badge → *refused to connect* | The badge on my.home-assistant.io opens the instance address that site has stored in the browser (default `http://homeassistant.local:8123`). Press *change* there and enter the address actually used, or add the repository URL by hand in Settings → Apps → Install app → ⋮ → Repositories. |
 | `tools/tag-release.sh: node: command not found` (or the same from `package-macos.sh`) | Fixed after v0.14.0: both scripts read the version with `sed` and need only git, bash, curl and tar. `node tools/bump-version.mjs` and the tests do need Node: `brew install node`, or, if Homebrew's Node is installed but that shell cannot see it, `export PATH=/opt/homebrew/bin:$PATH` (Intel Macs: `/usr/local/bin`). |
+| Release workflow: `tools/package-macos.sh: line 80: arch: unbound variable` (v0.17.0) | A bug in `unpack_node` — one `local` line read `$arch` before assigning it — that only ran when a Node tarball was bundled, i.e. only on the runner. Fixed in 0.17.1 and covered by a unit test that builds the bundle with stand-in runtimes; the broken tag cannot be rebuilt (RELEASING.md section 5), so the fix shipped as the next version. |
 | Release workflow: *tag v0.14.0 but package.json says 0.13.0* | Bump first, then tag. Delete the tag (`git tag -d v0.14.0 && git push origin :refs/tags/v0.14.0`), fix, retag. |
 | Release workflow: 403 on the release step | Settings → Actions → General → Workflow permissions → *Read and write permissions*. |
 | The .app opens Terminal-less and nothing happens | Look at `~/Library/Logs/portal-met-bridge.log`. Usually port 8787 is in use (another copy, or `node serve.mjs` in a Terminal): the launcher then only opens the browser. |
+| Want an Apple-silicon-only download | `tools/package-macos.sh --download-node --arch arm64` → `portal-met-bridge-X.Y.Z-macos-arm64.zip` (about half the size); attach it to the release by hand (RELEASING.md section 4). The workflow's universal zip runs on Apple silicon too. |
 | The .app says Node is needed | The bundle was built without `--download-node` and the Mac has no Node; `brew install node` or use the full release zip. |
 | Home Assistant: install fails, log says *404* or *tar: short read* while downloading | The tag matching `config.yaml`'s version is not on GitHub yet, or the device cannot reach github.com. Push the tag (`tools/tag-release.sh`). |
 | Home Assistant: *Portal Met Bridge* missing from the store after adding the repository | `repository.yaml` must be at the repository root and valid YAML; Settings → System → Logs → Supervisor shows why a repository was skipped. ⋮ → *Check for updates* refreshes the store. |

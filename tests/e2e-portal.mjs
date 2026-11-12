@@ -496,6 +496,8 @@ try {
   await page.click('#hist-analyze');
   await page.waitForTimeout(400);
   check('Analyze selected opens the Analysis tab with those shots ticked', (await page.isVisible('#view-analysis')) && (await page.textContent('#an-sel-count')).trim() === '(3)' && (await page.evaluate(() => document.querySelectorAll('#an-list input:checked').length)) === 3);
+  const ratedRow = await page.evaluate(() => { const li = [...document.querySelectorAll('#an-list li')].find((x) => x.querySelector('.stars')); if (!li) return null; const r = (sel) => li.querySelector(sel).getBoundingClientRect(); const w = r('.when'); const t = r('.tags'); return { stars: li.querySelector('.stars').textContent, inTags: !!li.querySelector('.tags .stars'), sameLine: t.top < w.bottom && t.bottom > w.top, tagsRightOfWhat: t.left >= r('.what').right - 1 }; });
+  check('a rated shot keeps its row on one line in the picker, the ★ chip among the tags (v0.17.1)', ratedRow && ratedRow.stars === '★3' && ratedRow.inTags && ratedRow.sameLine && ratedRow.tagsRightOfWhat, JSON.stringify(ratedRow));
   check('the size note counts shots and the one without Portal data', /About [\d,]+ tokens will be sent \(3 shots, 1 without Portal data\)/.test(await page.textContent('#an-size')), (await page.textContent('#an-size')).trim());
   const digestInfo = await page.evaluate(() => ({ blocks: document.querySelectorAll('#an-digest .an-shot').length, tables: document.querySelectorAll('#an-digest table.stages').length, noPortal: document.querySelectorAll('#an-digest .an-shot .muted').length > 0, gaps: [...document.querySelectorAll('#an-digest .gaps li')].map((li) => li.textContent).filter((t) => /No Belka Portal/.test(t)).length, stageNames: [...document.querySelectorAll('#an-digest .an-shot:last-child table.stages tbody td:first-child')].map((td) => td.textContent), chart: !!document.querySelector('#an-chart canvas') }));
   check('the local digest shows a stage table per shot, the record\'s stage names, and marks the shot without Portal data', digestInfo.blocks === 3 && digestInfo.tables === 3 && digestInfo.noPortal && digestInfo.gaps === 1 && digestInfo.stageNames.slice(0, 4).join(',') === 'Saturate,Bloom,Gentle Rebuild,Extract' && digestInfo.chart, JSON.stringify(digestInfo));
@@ -593,6 +595,20 @@ try {
   await page.click('#confirm-go');
   await page.waitForTimeout(300);
   check('Delete removes the saved review after confirmation', (await page.evaluate(() => document.querySelectorAll('#an-saved-rows tr').length)) === 0 && (await page.textContent('#analysis-tab-count')) === '');
+
+  // ---- Machine tab: the machine's answers are data, never markup (code-scanning CWE-79, v0.17.1)
+  await page.click('.view-tab[data-view="machine"]');
+  await page.evaluate(async () => { await window.__pb.machinePanel.refreshAll(); });
+  await page.waitForFunction(() => /HomeWiFi/.test(document.querySelector('#mc-conn')?.textContent || '') && /Blooming Espresso/.test(document.querySelector('#mc-stats')?.textContent || ''), null, { timeout: 8000 });
+  const machineTab = await page.evaluate(() => ({ conn: document.querySelector('#mc-conn').textContent.replace(/\s+/g, ' '), stats: document.querySelector('#mc-stats').textContent.replace(/\s+/g, ' '), bars: document.querySelectorAll('#mc-stats .bar-row').length, profiles: document.querySelectorAll('#mc-profiles article.profile').length }));
+  check('the Machine tab shows connectivity, statistics and the profiles from the machine', /Wi-FiHomeWiFi/.test(machineTab.conn) && /63saved shots/.test(machineTab.stats) && machineTab.bars === 2 && machineTab.profiles === 4, JSON.stringify(machineTab).slice(0, 300));
+  await page.evaluate(async (port) => { await fetch(`http://127.0.0.1:${port}/mock/dial`, { method: 'POST', body: JSON.stringify({ hostile: true }) }); await window.__pb.machinePanel.refreshAll(); }, MOCK_PORT);
+  await page.waitForFunction(() => /Evil/.test(document.querySelector('#mc-stats')?.textContent || ''), null, { timeout: 8000 });
+  await page.waitForTimeout(300);
+  const hostile = await page.evaluate(() => { const conn = document.querySelector('#mc-conn').textContent; const stats = document.querySelector('#mc-stats').textContent.replace(/\s+/g, ' '); return { xss: window.__xss === undefined, imgs: document.querySelectorAll('#view-machine img[src="x"]').length, scripts: document.querySelectorAll('#view-machine script').length, injected: document.querySelectorAll('#mc-conn b, #mc-conn i, #mc-stats .bar-n b, #mc-stats .bar-label b, #mc-stats .metric i, #mc-stats .metric b').length, wifiText: /Wi-FiHome <img src=x onerror/.test(conn), modeText: /Mode<b>CLIENT<\/b>/.test(conn), noteText: /Notenote <img src=x/.test(conn), evilText: /Evil <img src=x onerror/.test(stats), total: /14saved shots/.test(stats), mileage: /–lifetime shots/.test(stats), versions: !/versions/.test(stats) }; });
+  check('markup in the Wi-Fi name, mode, health note, profile names and counts is shown as text — nothing runs, no element is created, strings where numbers belong count as nothing', Object.entries(hostile).every(([k, v]) => (k === 'imgs' || k === 'scripts' || k === 'injected' ? v === 0 : v === true)), JSON.stringify(hostile));
+  await page.evaluate(async (port) => { await fetch(`http://127.0.0.1:${port}/mock/dial`, { method: 'POST', body: JSON.stringify({ hostile: false }) }); await window.__pb.machinePanel.refreshAll(); }, MOCK_PORT);
+  await page.waitForFunction(() => /HomeWiFi/.test(document.querySelector('#mc-conn')?.textContent || ''), null, { timeout: 8000 });
 
   // ---- Brew controls: the dial's actions over the API (the mock plays "heating → click to start")
   await page.click('.view-tab[data-view="shots"]');

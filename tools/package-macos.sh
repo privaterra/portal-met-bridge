@@ -12,6 +12,7 @@
 #
 #   tools/package-macos.sh                       # app + zip, uses the Node already on the Mac
 #   tools/package-macos.sh --download-node       # also bundles Node for Apple silicon and Intel
+#   tools/package-macos.sh --download-node --arch arm64   # Apple silicon only (half the size; zip named …-macos-arm64.zip)
 #   tools/package-macos.sh --node-arm64 node-v24.x-darwin-arm64.tar.gz --node-x64 node-v24.x-darwin-x64.tar.gz
 #   tools/package-macos.sh --out dist --no-zip   # just the .app
 #
@@ -28,12 +29,14 @@ node_x64=""
 download_node=0
 make_zip=1
 node_major="${NODE_MAJOR:-24}"
+arches="arm64 x64" # which runtimes --download-node fetches: both (default), or one with --arch
 while [ $# -gt 0 ]; do
   case "$1" in
     --out) out="$2"; shift 2 ;;
     --node-arm64) node_arm64="$2"; shift 2 ;;
     --node-x64) node_x64="$2"; shift 2 ;;
     --download-node) download_node=1; shift ;;
+    --arch) case "$2" in arm64|x64) arches="$2" ;; both|all) arches="arm64 x64" ;; *) echo "--arch takes arm64, x64 or both" >&2; exit 2 ;; esac; shift 2 ;;
     --node-major) node_major="$2"; shift 2 ;;
     --no-zip) make_zip=0; shift ;;
     -h|--help) sed -n 2,16p "$0"; exit 0 ;;
@@ -77,7 +80,8 @@ fetch_node() { # arch → path of a tarball in $out/.node
   echo "$out/.node/$file"
 }
 unpack_node() { # tarball arch
-  local tgz="$1" arch="$2" dest="$contents/Helpers/node/$arch"
+  local tgz="$1" arch="$2" dest
+  dest="$contents/Helpers/node/$arch" # (a separate statement: in one `local` line every word is expanded before any is assigned, so "$arch" there is unbound under set -u — this is what broke the v0.17.0 release build)
   mkdir -p "$dest"
   tar -xzf "$tgz" -C "$dest" --strip-components=1 '*/bin/node' '*/LICENSE' 2>/dev/null || tar -xzf "$tgz" -C "$dest" --strip-components=1
   rm -rf "$dest/lib" "$dest/include" "$dest/share" "$dest/bin/npm" "$dest/bin/npx" "$dest/bin/corepack" "$dest/CHANGELOG.md" "$dest/README.md"
@@ -85,8 +89,8 @@ unpack_node() { # tarball arch
   echo "bundled Node for $arch: $(basename "$tgz")"
 }
 if [ "$download_node" = 1 ]; then
-  node_arm64="$(fetch_node arm64)"
-  node_x64="$(fetch_node x64)"
+  case " $arches " in *" arm64 "*) node_arm64="$(fetch_node arm64)" ;; esac
+  case " $arches " in *" x64 "*) node_x64="$(fetch_node x64)" ;; esac
 fi
 [ -n "$node_arm64" ] && unpack_node "$node_arm64" arm64
 [ -n "$node_x64" ] && unpack_node "$node_x64" x64
@@ -206,8 +210,11 @@ elif [ -f "$here/assets/icon-1024.png" ]; then
 fi
 
 # ---- archives
+# a bundle with one runtime says so in its file names (…-macos-arm64.zip); with both, or none, it is …-macos.zip
+suffix=""
+if [ -n "$node_arm64" ] && [ -z "$node_x64" ]; then suffix="-arm64"; elif [ -z "$node_arm64" ] && [ -n "$node_x64" ]; then suffix="-x64"; fi
 if [ "$make_zip" = 1 ]; then
-  zip_name="portal-met-bridge-$version-macos.zip"
+  zip_name="portal-met-bridge-$version-macos$suffix.zip"
   rm -f "$out/$zip_name"
   if command -v ditto >/dev/null 2>&1; then
     (cd "$out" && ditto -c -k --sequesterRsrc --keepParent "$name.app" "$zip_name")
@@ -216,7 +223,7 @@ if [ "$make_zip" = 1 ]; then
   fi
   echo "zip: $out/$zip_name ($(du -h "$out/$zip_name" | cut -f1))"
   if command -v hdiutil >/dev/null 2>&1; then
-    dmg="$out/portal-met-bridge-$version-macos.dmg"
+    dmg="$out/portal-met-bridge-$version-macos$suffix.dmg"
     rm -f "$dmg"
     stage="$out/.dmg"
     rm -rf "$stage" && mkdir -p "$stage"

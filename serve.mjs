@@ -12,6 +12,12 @@
 //         GET api/cert hands out the certificate so it can be trusted once. A page on
 //         https cannot call the machine's plain-http API itself (mixed content), so it
 //         goes through the proxy below.
+//   ALLOWED_HOSTS=espresso.example.org node serve.mjs
+//       → also answer to that name. The server answers only to names that cannot be the
+//         target of a DNS-rebinding attack on their own: IP addresses, localhost, single-label
+//         and .local/.lan/.home/.internal names, this computer's hostname, and the names in the
+//         TLS certificate. A public DNS name (a reverse proxy, DuckDNS, a tailnet name) must be
+//         listed here, comma-separated; ALLOWED_HOSTS=* turns the check off.
 //   ALLOW_QUIT=0 node serve.mjs            → the page's Stop button may not stop this server
 //       (by default a page served to this same computer may: POST api/quit; the macOS app
 //        and start.command rely on it); ALLOW_QUIT=1 lets any client stop it (the Home
@@ -29,8 +35,9 @@
 import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
-import { readFile, stat, mkdir, rm, open, readdir } from 'node:fs/promises';
+import { readFile, stat, mkdir, rm, open, readdir, realpath } from 'node:fs/promises';
 import { readFileSync, createWriteStream } from 'node:fs';
+import { X509Certificate } from 'node:crypto';
 import { extname, join, normalize, resolve, sep, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { networkInterfaces, hostname } from 'node:os';
@@ -58,6 +65,98 @@ const platform = supervisorToken ? 'home-assistant' : process.env.PMB_PLATFORM |
 let server = null;
 let tlsServer = null;
 
+// ------------------------------------------------------------- hardening --
+// The server has no accounts: whoever can reach it can use it. That is the
+// point on localhost and acceptable on a home LAN, but a *web page* the user
+// happens to visit must not be able to use it through their browser. Three
+// checks see to that (docs/SECURITY.md has the reasoning):
+//   1. hostAllowed():  the Host header must be a name this server answers to,
+//      which stops DNS rebinding (evil.example re-pointed at 127.0.0.1);
+//   2. crossSite():    api/ and machine/ requests that a browser marks as coming
+//      from another site (Origin, Sec-Fetch-Site) are refused, which stops
+//      cross-site request forgery — a page elsewhere stopping the server,
+//      starting a brew through the relay, or probing the LAN with it;
+//   3. the response headers below, and a Content-Security-Policy on the page.
+
+const listedHosts = new Set((process.env.ALLOWED_HOSTS || '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean)); // named by whoever runs the server
+const allowedHosts = new Set(listedHosts); // …plus the names in the TLS certificate, added at start
+
+/** The hostname of a Host header value: lower-case, without port or IPv6 brackets. */
+export function hostnameOf(hostHeader) {
+  const h = String(hostHeader || '').trim().toLowerCase();
+  if (h.startsWith('[')) return h.slice(1, h.indexOf(']') > 0 ? h.indexOf(']') : undefined);
+  return h.replace(/:\d+$/, '');
+}
+
+/**
+ * Whether this server answers to the name in a Host header. Names that DNS
+ * rebinding cannot produce are always fine; anything else must be listed
+ * (ALLOWED_HOSTS, or a name in the TLS certificate).
+ */
+export function hostAllowed(hostHeader, extra = allowedHosts) {
+  const name = hostnameOf(hostHeader);
+  if (!name) return false;
+  if (extra.has('*')) return true;
+  if (net.isIP(name)) return true; // an address, not a name: nothing to rebind
+  if (name === 'localhost' || name.endsWith('.localhost')) return true;
+  if (!name.includes('.')) return true; // a single-label LAN name (homeassistant, meticulous)
+  if (/\.(local|lan|home|internal|home\.arpa)$/.test(name)) return true; // not resolvable from the public DNS
+  if (name === hostname().toLowerCase()) return true;
+  return extra.has(name);
+}
+
+/**
+ * Whether a browser says this request comes from another site. Requests
+ * without these headers (curl, scripts, the tests) are not a browser's and pass.
+ */
+export function crossSite(req, listed = listedHosts) {
+  const origin = req.headers.origin;
+  if (origin !== undefined) {
+    if (origin === 'null') return true; // a sandboxed frame, a file, a redirect chain
+    try {
+      const o = new URL(origin);
+      if (o.host.toLowerCase() === String(req.headers.host || '').toLowerCase()) return false;
+      return !listed.has(o.hostname.toLowerCase()); // behind a reverse proxy that rewrites Host, the public name listed in ALLOWED_HOSTS is this server too
+    } catch {
+      return true;
+    }
+  }
+  const site = req.headers['sec-fetch-site'];
+  return site === 'cross-site' || site === 'same-site'; // same-site still means another origin (another port on localhost)
+}
+
+/** The page's Content-Security-Policy: the one in index.html's <meta>, so there is a single source. */
+let pageCsp = '';
+try {
+  pageCsp = readFileSync(join(root, 'index.html'), 'utf8').match(/<meta http-equiv="Content-Security-Policy" content="([^"]+)"/)?.[1] || '';
+} catch {
+  /* no index.html next to the server (tests importing the helpers) */
+}
+
+/** Headers every response carries. */
+const baseHeaders = {
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer',
+  'Cross-Origin-Resource-Policy': 'same-origin',
+  'X-Frame-Options': 'DENY',
+};
+/** Headers for the app's own page and files. */
+const pageHeaders = (type) => ({
+  ...baseHeaders,
+  'Content-Type': type,
+  'Cache-Control': 'no-store',
+  ...(type.startsWith('text/html') ? { 'Content-Security-Policy': `${pageCsp ? pageCsp + '; ' : ''}frame-ancestors 'none'`, 'Cross-Origin-Opener-Policy': 'same-origin', 'Permissions-Policy': 'bluetooth=(self), camera=(), microphone=(), geolocation=(), payment=(), usb=()' } : {}),
+});
+/** What the static server hands out: the app, nothing else in the folder (no .git, tests, tools, package files). */
+const STATIC_ROOTS = new Set(['index.html', 'css', 'js', 'vendor', 'assets', 'docs', 'LICENSE', 'README.md']);
+export function staticAllowed(path) {
+  const parts = String(path).split('/').filter(Boolean);
+  if (!parts.length || !STATIC_ROOTS.has(parts[0])) return false;
+  return !parts.some((p) => p.startsWith('.') || p.includes('\\') || p.includes('\0'));
+}
+/** Files from the data folder are data: typed as text or bytes, downloaded rather than rendered, and sandboxed if a browser opens one anyway. */
+const DATA_TYPES = { '.json': 'application/json; charset=utf-8', '.csv': 'text/csv; charset=utf-8', '.log': 'text/plain; charset=utf-8', '.md': 'text/plain; charset=utf-8', '.txt': 'text/plain; charset=utf-8' };
+
 /** Requests from this computer itself (the page opened on localhost). */
 export function isLoopback(addr) {
   return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1' || addr === 'localhost';
@@ -75,7 +174,7 @@ const types = {
 };
 
 const json = (res, status, body) => {
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.writeHead(status, { ...baseHeaders, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(body));
 };
 
@@ -98,12 +197,38 @@ export function safeDataPath(dir, rel) {
   return full;
 }
 
+/**
+ * The same check against the real filesystem: the deepest part of `full` that
+ * exists must still be inside the data folder once symbolic links are followed,
+ * so a link planted in the folder cannot lead a read, write or delete outside it.
+ */
+export async function insideDataDir(dir, full) {
+  let realDir;
+  try {
+    realDir = await realpath(dir);
+  } catch {
+    return false;
+  }
+  let probe = full;
+  for (;;) {
+    try {
+      const real = await realpath(probe);
+      return real === realDir || real.startsWith(realDir + sep);
+    } catch (e) {
+      if (e.code !== 'ENOENT' && e.code !== 'ENOTDIR') return false;
+      const up = dirname(probe);
+      if (up === probe) return false;
+      probe = up;
+    }
+  }
+}
+
 async function handleFiles(req, res, path) {
   if (!dataDir) return json(res, 404, { error: 'This server has no data folder. Start it with DATA_DIR=<folder> (or --data <folder>).' });
-  const rel = decodeURIComponent(path.slice('/api/files'.length)).replace(/^\/+/, '');
+  const rel = path.slice('/api/files'.length).replace(/^\/+/, ''); // `path` is already decoded, once
   if (req.method === 'GET' && !rel) return json(res, 200, { dataDir: dataDirShown, host: hostname(), write: 'PUT /api/files/<path>[?append=1]', erase: 'DELETE /api/files/<path>' });
   const full = safeDataPath(dataDir, rel);
-  if (!full) return json(res, 400, { error: `Refused path: ${rel || '(empty)'}` });
+  if (!full || !(await insideDataDir(dataDir, full))) return json(res, 400, { error: `Refused path: ${rel || '(empty)'}` });
   if (req.method === 'PUT') {
     const append = /(?:^|[?&])append=1(?:&|$)/.test(new URL(req.url, 'http://x').search);
     await mkdir(dirname(full), { recursive: true });
@@ -153,7 +278,7 @@ async function handleFiles(req, res, path) {
       entries.sort((a, b) => b.mtime - a.mtime);
       return json(res, 200, { dir: rel, entries });
     }
-    res.writeHead(200, { 'Content-Type': types[extname(full)] || 'application/octet-stream', 'Content-Length': s.size, 'Cache-Control': 'no-store' });
+    res.writeHead(200, { ...baseHeaders, 'Content-Type': DATA_TYPES[extname(full).toLowerCase()] || 'application/octet-stream', 'Content-Length': s.size, 'Cache-Control': 'no-store', 'Content-Disposition': 'attachment', 'Content-Security-Policy': "sandbox; default-src 'none'" });
     const fh = await open(full);
     fh.createReadStream().pipe(res);
     return undefined;
@@ -177,8 +302,10 @@ export function machineTarget(spec) {
     const [a, b] = [Number(ip4[1]), Number(ip4[2])];
     if (ip4.slice(1).some((x) => Number(x) > 255)) return null;
     const privateIp = a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || a === 127;
+    if (host === '169.254.169.254') return null; // a cloud metadata service is never an espresso machine
     return privateIp ? { host, port } : null;
   }
+  if (/^(supervisor|hassio|observer)$/i.test(host)) return null; // Home Assistant's own control plane, reachable only from inside the app's container
   if (/^localhost$/i.test(host) || /\.local$/i.test(host) || /\.lan$/i.test(host) || /\.home$/i.test(host) || /\.internal$/i.test(host) || !host.includes('.')) return { host, port };
   return null;
 }
@@ -190,11 +317,13 @@ function handleMachineProxy(req, res, path) {
   if (!target) return json(res, 400, { error: 'machine proxy: give a LAN address, e.g. /machine/192.168.1.20/api/v1/machine' });
   const search = new URL(req.url, 'http://x').search;
   const headers = { ...req.headers, host: `${target.host}:${target.port}` };
-  delete headers['accept-encoding'];
+  // the machine gets the request, not this origin's credentials or where it came from
+  for (const h of ['accept-encoding', 'cookie', 'authorization', 'origin', 'referer']) delete headers[h];
   const up = http.request({ host: target.host, port: target.port, method: req.method, path: (m[2] || '/') + search, headers, timeout: 15000 }, (r) => {
     const h = { ...r.headers };
-    delete h['access-control-allow-origin'];
-    res.writeHead(r.statusCode || 502, h);
+    // …and its answer may not set cookies or policy for this origin
+    for (const k of Object.keys(h)) if (/^(access-control-|set-cookie|content-security-policy|strict-transport-security|clear-site-data|x-frame-options|cross-origin-|permissions-policy|service-worker-allowed)/i.test(k)) delete h[k];
+    res.writeHead(r.statusCode || 502, { ...h, ...baseHeaders, ...(/^text\/html|^image\/svg/i.test(String(h['content-type'] || '')) ? { 'Content-Security-Policy': "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'" } : {}) });
     r.pipe(res);
   });
   up.on('timeout', () => up.destroy(new Error('timeout')));
@@ -217,7 +346,10 @@ function handleMachineUpgrade(req, socket, head) {
   }
   const upstream = net.connect(target.port, target.host, () => {
     const lines = [`${req.method} ${(m[2] || '/') + (m[3] || '')} HTTP/1.1`];
-    for (const [k, v] of Object.entries(req.headers)) lines.push(`${k}: ${k.toLowerCase() === 'host' ? `${target.host}:${target.port}` : v}`);
+    for (const [k, v] of Object.entries(req.headers)) {
+      if (/^(cookie|authorization|origin)$/i.test(k)) continue;
+      lines.push(`${k}: ${k.toLowerCase() === 'host' ? `${target.host}:${target.port}` : v}`);
+    }
     upstream.write(lines.join('\r\n') + '\r\n\r\n');
     if (head?.length) upstream.write(head);
     socket.pipe(upstream).pipe(socket);
@@ -295,23 +427,37 @@ function handleServer(req, res, path) {
   return json(res, 404, { error: 'unknown' });
 }
 
+/** Why a request is refused before it reaches a handler, or null. */
+function refusal(req) {
+  if (!hostAllowed(req.headers.host)) {
+    return { status: 421, error: `This server does not answer to the name "${hostnameOf(req.headers.host) || '(none)'}". Open it by its address or its .local name, or start it with ALLOWED_HOSTS=${hostnameOf(req.headers.host) || '<name>'} (Home Assistant: the app's allowed_hosts option).` };
+  }
+  if (isApi(req) && crossSite(req)) return { status: 403, error: 'Cross-site requests are refused: this API answers only the page it serves.' };
+  return null;
+}
+
 async function handleRequest(req, res) {
     try {
+      const no = refusal(req);
+      if (no) return json(res, no.status, { error: no.error });
       let path = decodeURIComponent(new URL(req.url, 'http://x').pathname);
       if (path === '/api/files' || path.startsWith('/api/files/')) return await handleFiles(req, res, path);
       if (path === '/api/server' || path === '/api/quit' || path === '/api/cert') return handleServer(req, res, path);
       if (path.startsWith('/machine/')) return handleMachineProxy(req, res, path);
+      if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error: 'GET' });
       if (path === '/') path = '/index.html';
+      if (!staticAllowed(path)) throw Object.assign(new Error('not served'), { code: 'ENOENT' });
       const file = normalize(join(root, path));
       if (!file.startsWith(root)) throw Object.assign(new Error('forbidden'), { code: 'EACCES' });
       const s = await stat(file);
       if (s.isDirectory()) throw Object.assign(new Error('dir'), { code: 'ENOENT' });
-      res.writeHead(200, { 'Content-Type': types[extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
-      res.end(await readFile(file));
+      res.writeHead(200, pageHeaders(types[extname(file)] || 'application/octet-stream'));
+      res.end(req.method === 'HEAD' ? undefined : await readFile(file));
     } catch (e) {
       if (res.headersSent) return res.end();
+      if (e instanceof URIError) return json(res, 400, { error: 'malformed URL' });
       if (isApi(req) && e.code !== 'ENOENT' && e.code !== 'EACCES') return json(res, 500, { error: e.message });
-      res.writeHead(e.code === 'ENOENT' ? 404 : 403, { 'Content-Type': 'text/plain' });
+      res.writeHead(e.code === 'ENOENT' ? 404 : 403, { ...baseHeaders, 'Content-Type': 'text/plain' });
       res.end(e.code === 'ENOENT' ? 'Not found' : 'Forbidden');
     }
 }
@@ -319,6 +465,11 @@ async function handleRequest(req, res) {
 export function createServer(tlsOptions = null) {
   const srv = tlsOptions ? https.createServer(tlsOptions, handleRequest) : http.createServer(handleRequest);
   srv.on('upgrade', (req, socket, head) => {
+    // a WebSocket is not bound by the same-origin policy, so the Origin check here is the only one there is
+    if (refusal(req)) {
+      socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+      return socket.destroy();
+    }
     if (req.url.startsWith('/machine/')) return handleMachineUpgrade(req, socket, head);
     socket.destroy();
     return undefined;
@@ -342,7 +493,15 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
   });
   if (tlsPort && tlsCertFile && tlsKeyFile) {
     try {
-      tlsServer = createServer({ cert: readFileSync(tlsCertFile), key: readFileSync(tlsKeyFile) });
+      const certPem = readFileSync(tlsCertFile);
+      // the names the certificate was issued for are names this server answers to
+      try {
+        const sans = new X509Certificate(certPem).subjectAltName || '';
+        for (const m of sans.matchAll(/DNS:([^,\s]+)/g)) if (!m[1].includes('*')) allowedHosts.add(m[1].toLowerCase());
+      } catch {
+        /* an unreadable certificate fails below, with its own message */
+      }
+      tlsServer = createServer({ cert: certPem, key: readFileSync(tlsKeyFile), minVersion: 'TLSv1.2' });
       tlsServer.listen(tlsPort, host, () => {
         const names = [];
         if (host !== '127.0.0.1' && host !== 'localhost') for (const list of Object.values(networkInterfaces())) for (const n of list || []) if (n.family === 'IPv4' && !n.internal) names.push(n.address);

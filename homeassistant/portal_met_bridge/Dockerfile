@@ -10,10 +10,13 @@ ARG APP_VERSION=${BUILD_VERSION}
 # APP_REF overrides the tag: a branch name (main) or a commit, for testing unreleased code.
 ARG APP_REF=v${APP_VERSION}
 
-RUN apk add --no-cache nodejs openssl \
+# `apk upgrade` first: the base image is rebuilt now and then, the packages in it (OpenSSL, musl, busybox)
+# get security fixes in between, and Node comes from the same repository at its newest patch level.
+RUN apk upgrade --no-cache \
+  && apk add --no-cache nodejs openssl \
   && mkdir -p /opt/app \
   && curl -fsSL "https://github.com/privaterra/portal-met-bridge/archive/${APP_REF}.tar.gz" | tar -xz -C /opt/app --strip-components=1 \
-  && rm -rf /opt/app/docs/*.png /opt/app/tests /opt/app/tools /opt/app/.github /opt/app/homeassistant
+  && rm -rf /opt/app/docs/*.png /opt/app/tests /opt/app/tools /opt/app/.github /opt/app/homeassistant /opt/app/package-lock.json
 
 COPY run.sh /
 RUN chmod a+x /run.sh

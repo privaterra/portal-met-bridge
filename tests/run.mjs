@@ -832,16 +832,16 @@ await test('series review (v0.16): several shots get the comparing template and 
 
 await test('machine via the server (v0.16): the proxy target guard and the client\'s proxied URLs', async () => {
   const { machineTarget } = await import('../serve.mjs');
-  assert.deepEqual(machineTarget('192.168.30.2'), { host: '192.168.30.2', port: 80 });
+  assert.deepEqual(machineTarget('192.168.1.20'), { host: '192.168.1.20', port: 80 });
   assert.deepEqual(machineTarget('10.0.0.5:8080'), { host: '10.0.0.5', port: 8080 });
   assert.deepEqual(machineTarget('meticulous.local'), { host: 'meticulous.local', port: 80 });
   assert.deepEqual(machineTarget('meticulous'), { host: 'meticulous', port: 80 }, 'a bare LAN hostname');
   assert.deepEqual(machineTarget('127.0.0.1:8792'), { host: '127.0.0.1', port: 8792 });
   for (const bad of ['8.8.8.8', 'example.com', 'meticulous.local:70000', '192.168.1.300', 'a b', '', '../x', 'http://x']) assert.equal(machineTarget(bad), null, `refused: ${bad}`);
   const { machineBaseUrl, normalizeBaseUrl } = await import('../js/meticulous.js');
-  assert.equal(normalizeBaseUrl('192.168.30.2'), 'http://192.168.30.2');
-  assert.equal(machineBaseUrl('192.168.30.2', { via: 'direct', pageOrigin: 'https://homeassistant.local:8788' }), 'http://192.168.30.2');
-  assert.equal(machineBaseUrl('192.168.30.2', { via: 'server', pageOrigin: 'https://homeassistant.local:8788' }), 'https://homeassistant.local:8788/machine/192.168.30.2');
+  assert.equal(normalizeBaseUrl('192.168.1.20'), 'http://192.168.1.20');
+  assert.equal(machineBaseUrl('192.168.1.20', { via: 'direct', pageOrigin: 'https://homeassistant.local:8788' }), 'http://192.168.1.20');
+  assert.equal(machineBaseUrl('192.168.1.20', { via: 'server', pageOrigin: 'https://homeassistant.local:8788' }), 'https://homeassistant.local:8788/machine/192.168.1.20');
   assert.equal(machineBaseUrl('meticulous.local:8080', { via: 'server', pageOrigin: 'http://localhost:8787' }), 'http://localhost:8787/machine/meticulous.local:8080');
 });
 
@@ -978,6 +978,231 @@ await test('release: every version stamp agrees with package.json (tools/bump-ve
   assert.ok(ha.includes(`\nversion: "${version}"\n`), `homeassistant config.yaml version is ${/version: "([^"]*)"/.exec(ha)?.[1]}, package.json ${version}`);
   const changelog = readFileSync(new URL('../homeassistant/portal_met_bridge/CHANGELOG.md', import.meta.url), 'utf8');
   assert.ok(changelog.includes(`## ${version}`), 'the Home Assistant CHANGELOG has an entry for this version');
+});
+
+await test('security (v0.19): the server answers only its own page — Host and Origin checks, a static allowlist, inert data files, no symlink escape, a relay that carries no credentials', async () => {
+  const { hostAllowed, crossSite, hostnameOf, staticAllowed, machineTarget, insideDataDir } = await import('../serve.mjs');
+  // names DNS rebinding cannot forge pass; a public name must be listed
+  for (const ok of ['localhost:8787', '127.0.0.1:8787', '[::1]:8787', '192.168.1.20', 'homeassistant.local:8788', 'homeassistant:8787', 'pi.lan', 'box.home.arpa', 'app.localhost:8787']) assert.equal(hostAllowed(ok, new Set()), true, ok);
+  for (const bad of ['evil.example:8787', 'attacker.com', '', undefined, 'localhost.evil.example', '127.0.0.1.nip.io']) assert.equal(hostAllowed(bad, new Set()), false, String(bad));
+  assert.equal(hostAllowed('espresso.example.org:8788', new Set(['espresso.example.org'])), true);
+  assert.equal(hostAllowed('anything.example', new Set(['*'])), true);
+  assert.equal(hostnameOf('[fe80::1]:8787'), 'fe80::1');
+  const rq = (headers) => ({ headers });
+  assert.equal(crossSite(rq({ host: 'localhost:8787' })), false, 'no browser headers: a script or curl');
+  assert.equal(crossSite(rq({ host: 'localhost:8787', origin: 'http://localhost:8787' })), false);
+  assert.equal(crossSite(rq({ host: 'localhost:8787', origin: 'http://localhost:3000' })), true, 'another port is another origin');
+  assert.equal(crossSite(rq({ host: 'localhost:8787', origin: 'https://evil.example' })), true);
+  assert.equal(crossSite(rq({ host: 'localhost:8787', origin: 'null' })), true);
+  assert.equal(crossSite(rq({ host: 'localhost:8787', 'sec-fetch-site': 'cross-site' })), true, 'an <img> or form on another site');
+  assert.equal(crossSite(rq({ host: 'localhost:8787', 'sec-fetch-site': 'same-origin' })), false);
+  assert.equal(crossSite(rq({ host: 'localhost:8787', 'sec-fetch-site': 'none' })), false, 'typed into the address bar');
+  assert.equal(crossSite(rq({ host: '10.0.0.5:8787', origin: 'https://espresso.example.org' }), new Set(['espresso.example.org'])), false, 'behind a reverse proxy: the listed public name');
+  for (const ok of ['/index.html', '/js/main.js', '/css/app.css', '/vendor/uPlot.esm.js', '/docs/NOTES.md', '/assets/icon-1024.png']) assert.equal(staticAllowed(ok), true, ok);
+  for (const bad of ['/.git/config', '/package.json', '/package-lock.json', '/tests/run.mjs', '/tools/vendor.mjs', '/serve.mjs', '/js/.hidden', '/homeassistant/portal_met_bridge/run.sh', '/.github/workflows/release.yml', '/']) assert.equal(staticAllowed(bad), false, bad);
+  for (const bad of ['169.254.169.254', 'supervisor', 'hassio', 'supervisor:80']) assert.equal(machineTarget(bad), null, bad);
+
+  const http = await import('node:http');
+  const { spawn } = await import('node:child_process');
+  const { mkdtempSync, rmSync, writeFileSync, symlinkSync, existsSync, mkdirSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'pmb-sec-'));
+  const data = join(dir, 'data');
+  mkdirSync(data);
+  writeFileSync(join(dir, 'outside.txt'), 'secret outside the data folder');
+  let linked = true;
+  try { symlinkSync(dir, join(data, 'link')); } catch { linked = false; }
+  if (linked) assert.equal(await insideDataDir(data, join(data, 'link', 'outside.txt')), false);
+  assert.equal(await insideDataDir(data, join(data, 'shots', 'new.json')), true, 'a path that does not exist yet, inside');
+  // a stand-in machine that tries to set a cookie and echoes what it was sent
+  let seen = null;
+  const machine = http.createServer((q, r) => { seen = q.headers; r.writeHead(200, { 'Content-Type': 'text/html', 'Set-Cookie': 'sid=1', 'Access-Control-Allow-Origin': '*', 'Content-Security-Policy': "default-src *" }); r.end('<script>1</script>'); });
+  await new Promise((r) => machine.listen(8817, '127.0.0.1', r));
+  const srv = spawn('node', [new URL('../serve.mjs', import.meta.url).pathname], { env: { ...process.env, PORT: '8816', DATA_DIR: data, ALLOWED_HOSTS: '', TLS_PORT: '' }, stdio: 'ignore' });
+  const call = (path, { method = 'GET', headers = {}, body = null } = {}) => new Promise((resolve, reject) => {
+    const q = http.request({ host: '127.0.0.1', port: 8816, path, method, headers: { host: '127.0.0.1:8816', ...headers } }, (res) => { let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: b })); });
+    q.on('error', reject);
+    q.end(body);
+  });
+  try {
+    await new Promise((r) => setTimeout(r, 800));
+    // the page, with its policy
+    const page = await call('/');
+    assert.equal(page.status, 200);
+    assert.match(page.headers['content-security-policy'], /script-src 'self'/);
+    assert.match(page.headers['content-security-policy'], /frame-ancestors 'none'/);
+    assert.ok(!/unsafe-eval|script-src[^;]*unsafe-inline/.test(page.headers['content-security-policy']), 'no inline or eval script');
+    assert.equal(page.headers['x-content-type-options'], 'nosniff');
+    assert.equal(page.headers['x-frame-options'], 'DENY');
+    assert.match(page.body, /<meta http-equiv="Content-Security-Policy"/, 'the same policy in the page itself, for other servers');
+    assert.ok(!/<script(?![^>]*\bsrc=)[^>]*>/.test(page.body) && !/\son[a-z]+="/.test(page.body), 'no inline script or handler in index.html');
+    // nothing but the app is served
+    for (const p of ['/.git/config', '/package.json', '/tests/run.mjs', '/serve.mjs', '/tools/vendor.mjs', '/js/../package.json', '/%2e%2e/etc/passwd']) assert.equal((await call(p)).status, 404, p);
+    assert.equal((await call('/js/main.js')).status, 200);
+    assert.equal((await call('/index.html', { method: 'POST' })).status, 405);
+    // DNS rebinding: a foreign name in Host
+    const rebind = await call('/api/server', { headers: { host: 'evil.example:8816' } });
+    assert.equal(rebind.status, 421);
+    assert.match(JSON.parse(rebind.body).error, /ALLOWED_HOSTS=evil\.example/);
+    assert.equal((await call('/', { headers: { host: 'evil.example:8816' } })).status, 421, 'not even the page');
+    // cross-site request forgery
+    assert.equal((await call('/api/quit', { method: 'POST', headers: { origin: 'https://evil.example' } })).status, 403);
+    assert.equal((await call('/api/quit', { method: 'POST', headers: { 'sec-fetch-site': 'cross-site' } })).status, 403);
+    assert.equal((await call('/machine/127.0.0.1:8817/api/v1/action/start', { method: 'POST', headers: { origin: 'https://evil.example', 'content-type': 'text/plain' } })).status, 403, 'a page elsewhere cannot start a brew through the relay');
+    assert.equal(seen, null, 'and the machine never saw it');
+    assert.equal((await call('/machine/127.0.0.1:8817/x', { headers: { 'sec-fetch-site': 'cross-site' } })).status, 403, 'nor probe the LAN with an <img>');
+    assert.equal((await call('/api/files/a.json', { method: 'PUT', headers: { origin: 'http://localhost:3000' }, body: '{}' })).status, 403);
+    assert.equal((await call('/api/server', { headers: { origin: 'http://127.0.0.1:8816', 'sec-fetch-site': 'same-origin' } })).status, 200, 'the page itself passes');
+    // the relay: same-origin works, carries no cookie, brings none back, and the machine's HTML cannot script here
+    const relayed = await call('/machine/127.0.0.1:8817/api/v1/machine', { headers: { origin: 'http://127.0.0.1:8816', cookie: 'app=1', authorization: 'Bearer x' } });
+    assert.equal(relayed.status, 200);
+    assert.ok(seen && !seen.cookie && !seen.authorization && !seen.origin, JSON.stringify(seen));
+    assert.equal(relayed.headers['set-cookie'], undefined);
+    assert.equal(relayed.headers['access-control-allow-origin'], undefined);
+    assert.match(relayed.headers['content-security-policy'], /^sandbox/);
+    assert.equal(relayed.headers['x-content-type-options'], 'nosniff');
+    for (const t of ['169.254.169.254', 'supervisor', '8.8.8.8', 'example.com']) assert.equal((await call(`/machine/${t}/`)).status, 400, t);
+    // data files are data: an .html in the folder is downloaded as bytes, sandboxed
+    assert.equal((await call('/api/files/exports/x.html', { method: 'PUT', body: '<script>alert(1)</script>' })).status, 200);
+    const html = await call('/api/files/exports/x.html');
+    assert.equal(html.status, 200);
+    assert.equal(html.headers['content-type'], 'application/octet-stream');
+    assert.equal(html.headers['content-disposition'], 'attachment');
+    assert.match(html.headers['content-security-policy'], /^sandbox/);
+    assert.equal((await call('/api/files/backups/b.json', { method: 'PUT', body: '{"a":1}' })).status, 200);
+    assert.match((await call('/api/files/backups/b.json')).headers['content-type'], /^application\/json/);
+    assert.equal((await call('/api/files/a%20b%25c.txt', { method: 'PUT', body: 'x' })).status, 200, 'a percent sign in a name is decoded once');
+    assert.ok(existsSync(join(data, 'a b%c.txt')));
+    assert.equal((await call('/api/files/%E0%A4%A')).status, 400, 'a malformed escape is a bad request, not a crash');
+    // a symbolic link in the folder leads nowhere
+    if (linked) {
+      assert.equal((await call('/api/files/link/outside.txt')).status, 400);
+      assert.equal((await call('/api/files/link/planted.txt', { method: 'PUT', body: 'x' })).status, 400);
+      assert.ok(!existsSync(join(dir, 'planted.txt')));
+      assert.equal((await call('/api/files/link/outside.txt', { method: 'DELETE' })).status, 400);
+      assert.ok(existsSync(join(dir, 'outside.txt')));
+    }
+    // a WebSocket from another site is refused before it reaches the machine
+    const upgrade = (origin) => new Promise((resolve) => {
+      const q = http.request({ host: '127.0.0.1', port: 8816, path: '/machine/127.0.0.1:8817/socket.io/?EIO=4&transport=websocket', headers: { host: '127.0.0.1:8816', connection: 'Upgrade', upgrade: 'websocket', 'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==', 'sec-websocket-version': '13', ...(origin ? { origin } : {}) } });
+      q.on('response', (res) => resolve(res.statusCode));
+      q.on('upgrade', (res, sock) => { sock.destroy(); resolve(res.statusCode); });
+      q.on('error', () => resolve('closed'));
+      q.end();
+    });
+    assert.equal(await upgrade('https://evil.example'), 403);
+    // the server is still up after all of that
+    assert.equal((await call('/api/server')).status, 200);
+  } finally {
+    srv.kill();
+    machine.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+await test('security (v0.19): imported backups are normalised, a settings file cannot repoint the API key, endpoints are judged, Markdown stays inert', async () => {
+  const { cleanImportedShot, cleanImportedBean, cleanImportedReview } = await import('../js/store.js');
+  const { endpointRisk } = await import('../js/ai.js');
+  const evil = '"><img src=x onerror=alert(1)>';
+  const shot = cleanImportedShot({ id: evil, startedAt: '1700000000000', durationSec: evil, finalWeightG: { toString: () => evil }, rating: '4', ratingMax: 9, profileName: { length: evil }, comment: 'x'.repeat(5000), machine: [{ t: 0, w: 1 }, 'junk', null, [1]], portal: { length: evil }, context: { beanName: evil, doseG: 18, nested: { a: 1 }, list: [evil] }, files: evil, machineSource: evil, inProgress: 'yes' });
+  assert.equal(shot.id, evil, 'an id stays a string (and is escaped where it is shown)');
+  assert.equal(shot.startedAt, 1700000000000);
+  assert.ok(!('durationSec' in shot) && !('finalWeightG' in shot) && !('profileName' in shot) && !('files' in shot) && !('machineSource' in shot));
+  assert.equal(shot.rating, 4);
+  assert.deepEqual(shot.machine, [{ t: 0, w: 1 }]);
+  assert.deepEqual(shot.portal, [], 'a portal that is not a list becomes an empty list');
+  assert.deepEqual(shot.context, { beanName: evil, doseG: 18 });
+  assert.equal(shot.comment.length, 2000);
+  assert.equal(shot.inProgress, false);
+  for (const bad of [null, 'x', [], { id: 'a' }, { id: {}, machine: [] }, { machine: [] }]) assert.equal(cleanImportedShot(bad), null);
+  assert.equal(cleanImportedBean({ key: 'k', name: 'Bean', url: { href: evil }, notes: evil, uses: evil }).url, undefined);
+  assert.equal(cleanImportedBean({ key: 'k', name: 'Bean', uses: evil }).uses, 0);
+  assert.equal(cleanImportedBean({ name: 'no key' }), null);
+  const rev = cleanImportedReview({ id: 7, markdown: '# x', title: { a: 1 }, shotIds: [evil, {}, 3], provider: evil.repeat(10) });
+  assert.equal(rev.id, '7');
+  assert.equal(rev.title, 'Review');
+  assert.deepEqual(rev.shotIds, [evil, '3']);
+  assert.ok(rev.provider.length <= 40);
+  assert.equal(cleanImportedReview({ id: 'r', markdown: 5 }), null);
+  // where the key goes
+  for (const fine of ['', 'https://openrouter.ai/api/v1', 'http://localhost:11434/v1', 'http://127.0.0.1:1234/v1', 'http://192.168.1.20:8080/v1', 'http://ollama.local/v1', 'http://nas:8080/v1']) assert.equal(endpointRisk(fine), '', fine);
+  for (const insecure of ['http://api.example.com/v1', 'http://8.8.8.8/v1']) assert.equal(endpointRisk(insecure), 'insecure', insecure);
+  for (const invalid of ['ftp://x', 'javascript:alert(1)', 'not a url']) assert.equal(endpointRisk(invalid), 'invalid', invalid);
+  // the model's report is text: HTML in it is escaped, only http(s) links become links
+  const { renderMarkdown } = await import('../js/review.js');
+  const html = renderMarkdown('## Verdict <img src=x onerror=alert(1)>\n\n<script>alert(1)</script> [ok](https://example.org/a"b) [bad](javascript:alert(1)) `<b>code</b>`\n\n| a | b |\n| --- | --- |\n| <svg onload=1> | 2 |\n');
+  assert.ok(!/<img|<script|<svg|javascript:[^<]*"/.test(html.replace(/&lt;[^&]*&gt;/g, '')), html);
+  assert.ok(!/href="javascript:/i.test(html));
+  assert.match(html, /<a href="https:\/\/example\.org\/a&quot;b" target="_blank" rel="noopener noreferrer">/);
+  // the page never writes a shot's id or file path into markup unescaped
+  const main = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  assert.ok(!/data-id="\$\{(?!esc\(|CSS\.escape\()/.test(main), 'data-id="${…}" always goes through esc()');
+  assert.ok(main.includes("esc('JSON + CSV in the save folder: ' + s.files.json)"), 'the file path in the History tooltip is escaped');
+  for (const f of ['../js/main.js', '../js/machine-panel.js', '../js/charts.js', '../js/review.js']) {
+    const src = readFileSync(new URL(f, import.meta.url), 'utf8');
+    assert.ok(!/\beval\(|new Function\(|document\.write\(|\.insertAdjacentHTML\(|\bon(click|error|load)="/.test(src), `${f}: no eval, document.write, insertAdjacentHTML or inline handlers`);
+    assert.ok(!/target="_blank"(?![^>]*rel="noopener)/.test(src), `${f}: links that open a new tab carry rel="noopener"`);
+  }
+  // the Analysis digest heading: a profile name comes from the machine (and from shared profiles) and reached innerHTML unescaped until 0.19
+  const mainSrc = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  assert.ok(/m\.profile \? `\$\{esc\(m\.profile\)\}/.test(mainSrc) && !/`\$\{m\.profile\}/.test(mainSrc), 'the digest heading escapes the profile name');
+  assert.ok(/await renderSavedReviews\(\); \/\/ a backup carries reviews too/.test(mainSrc), 'a restore refreshes the saved reviews');
+});
+
+await test('dependencies (v0.19): vendor/ is exactly what vendor/manifest.json says, and the workflows do not interpolate inputs into shell', async () => {
+  const { verify, loadManifest, vendorPackageJson, advisoriesFrom, sha256 } = await import('../tools/vendor.mjs');
+  const { readdirSync } = await import('node:fs');
+  assert.deepEqual(verify(), [], 'every vendored file has the recorded SHA-256, vendor/package.json and the README agree');
+  const manifest = loadManifest();
+  assert.deepEqual(Object.keys(manifest.packages).sort(), ['fflate', 'jspdf', 'qrcode-generator', 'socket.io-client', 'uplot']);
+  assert.ok(Number(manifest.packages.jspdf.version.split('.')[0]) >= 4, 'jsPDF 4 or later (2.x and 3.x carry open advisories)');
+  assert.equal(vendorPackageJson(manifest).dependencies.jspdf, manifest.packages.jspdf.version);
+  // a tampered file is noticed
+  const broken = structuredClone(manifest);
+  broken.packages.fflate.files[0].sha256 = sha256('something else');
+  assert.ok(verify(broken).some((p) => /fflate\.esm\.js is not fflate/.test(p)));
+  // the audit report reader
+  const adv = advisoriesFrom({ vulnerabilities: { jspdf: { severity: 'critical', fixAvailable: { name: 'jspdf', version: '4.2.1' }, via: [{ name: 'jspdf', severity: 'high', title: 'DoS', url: 'https://github.com/advisories/GHSA-aaaa-bbbb-cccc', range: '<3.0.1' }, { name: 'jspdf', severity: 'critical', title: 'LFI', url: 'https://github.com/advisories/GHSA-dddd-eeee-ffff', range: '<=3.0.4' }, 'dompurify'] } } });
+  assert.deepEqual(adv.map((a) => [a.id, a.severity, a.fix]), [['GHSA-dddd-eeee-ffff', 'critical', 'jspdf@4.2.1'], ['GHSA-aaaa-bbbb-cccc', 'high', 'jspdf@4.2.1']]);
+  assert.deepEqual(advisoriesFrom({}), []);
+  // workflows: nothing a person types (an input, a tag or branch name) is pasted into a shell script, and the token is read-only unless a job says otherwise
+  const dir = new URL('../.github/workflows/', import.meta.url);
+  for (const f of readdirSync(dir).filter((x) => x.endsWith('.yml'))) {
+    const text = readFileSync(new URL(f, dir), 'utf8');
+    const lines = text.split('\n');
+    let inRun = -1;
+    lines.forEach((line, i) => {
+      const indent = line.search(/\S/);
+      if (inRun >= 0 && indent >= 0 && indent <= inRun) inRun = -1;
+      const m = line.match(/^(\s*)(?:- )?run:\s*(.*)$/);
+      const body = m ? m[2] : inRun >= 0 ? line : '';
+      assert.ok(!/\$\{\{\s*(inputs\.|github\.event\.|github\.ref_name|github\.head_ref|github\.ref\b)/.test(body), `${f}:${i + 1} pastes ${line.trim().slice(0, 60)} into a shell script — pass it through env:`);
+      if (m && /^[|>]/.test(m[2])) inRun = m[1].length + (line.trimStart().startsWith('- ') ? 2 : 0);
+    });
+    assert.match(text, /^permissions:\n  contents: read$/m, `${f}: the workflow's default token is read-only`);
+    assert.ok(!/softprops\//.test(text), `${f}: no third-party action holds the write token`);
+  }
+  assert.ok(readFileSync(new URL('../.github/dependabot.yml', import.meta.url), 'utf8').includes('github-actions'));
+  // upstream projects: commits since the last review are listed, with the file to read them against
+  const { sourcesReport, sourcesMarkdown, loadSources } = await import('../tools/vendor.mjs');
+  const asked = [];
+  const stub = async (url, opts) => {
+    asked.push({ url, auth: opts.headers.authorization || '' });
+    if (url.includes('meticulous-backend')) return { ok: true, status: 200, json: async () => [{ sha: 'abcdef1234567', commit: { message: 'Rename /api/v1/history/last <b>\n\nbody', committer: { date: '2026-12-01T10:00:00Z' } } }] };
+    if (url.includes('Beanconqueror')) return { ok: false, status: 500, json: async () => ({}) };
+    return { ok: true, status: 200, json: async () => [] };
+  };
+  const report = await sourcesReport({ fetchImpl: stub, token: '' });
+  assert.equal(report.length, loadSources().sources.length);
+  assert.ok(asked.every((a) => /^https:\/\/api\.github\.com\/repos\/[\w.-]+\/[\w.-]+\/commits\?since=\d{4}-\d\d-\d\dT/.test(a.url)), asked[0].url);
+  const backend = report.find((r) => r.repo === 'MeticulousHome/meticulous-backend');
+  assert.deepEqual(backend.commits, [{ sha: 'abcdef1', date: '2026-12-01', title: 'Rename /api/v1/history/last <b>' }]);
+  assert.match(report.find((r) => r.repo === 'graphefruit/Beanconqueror').error, /500/);
+  const md = sourcesMarkdown(report);
+  assert.ok(md.includes('MeticulousHome/meticulous-backend') && md.includes('js/meticulous.js') && md.includes('abcdef1') && !md.includes('<b>') && md.includes('sources --record'), md);
+  assert.ok(sourcesMarkdown(report.map((r) => ({ ...r, commits: [], error: null }))).includes('No changes since the last review'));
+  for (const src of loadSources().sources) assert.ok(/^[\w.-]+\/[\w.-]+$/.test(src.repo) && /^\d{4}-\d\d-\d\d$/.test(src.reviewed) && src.what && src.usedIn, src.repo);
 });
 
 await test('packaging: tools/package-macos.sh builds the bundle with two Node runtimes (the path that broke the v0.17.0 release build)', async () => {

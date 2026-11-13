@@ -1,6 +1,6 @@
 # Home Assistant app — https://contributors.home-assistant.io/apps/reference/configuration/
 name: Portal Met Bridge
-version: "0.18.0"
+version: "0.19.0"
 slug: portal_met_bridge
 description: Meticulous & Belka Portal conductivity data visualization & analysis, served on your LAN; files kept in /share
 url: https://github.com/privaterra/portal-met-bridge
@@ -28,12 +28,15 @@ options:
   ssl: self-signed
   certfile: fullchain.pem
   keyfile: privkey.pem
+  allowed_hosts: []
   log_level: info
 schema:
   data_dir: str
   ssl: list(self-signed|home-assistant|off)
   certfile: str
   keyfile: str
+  allowed_hosts:
+    - str
   log_level: list(debug|info|warning|error)
 # Uncomment to install the prebuilt multi-arch image published by
 # .github/workflows/ha-app.yml instead of building on the device:

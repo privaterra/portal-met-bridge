@@ -33,6 +33,28 @@ export const PROVIDERS = {
 const trimSlash = (u) => String(u || '').trim().replace(/\/+$/, '');
 
 /** Base URL for a provider: the user's override (OpenAI-compatible servers, proxies) or the default. */
+/**
+ * What is wrong with a custom endpoint, if anything — the API key is sent to it
+ * with every request. '' = fine (blank, https, or plain http to this computer
+ * or the LAN, e.g. a local model server); 'insecure' = plain http to a host on
+ * the internet (the key would travel unencrypted); 'invalid' = not a URL.
+ */
+export function endpointRisk(baseUrl) {
+  const t = String(baseUrl || '').trim();
+  if (!t) return '';
+  let u;
+  try {
+    u = new URL(t);
+  } catch {
+    return 'invalid';
+  }
+  if (u.protocol === 'https:') return '';
+  if (u.protocol !== 'http:') return 'invalid';
+  const h = u.hostname.replace(/^\[|\]$/g, '');
+  const local = h === 'localhost' || h.endsWith('.localhost') || h === '::1' || !h.includes('.') || /\.(local|lan|home|internal)$/.test(h) || /^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(h);
+  return local ? '' : 'insecure';
+}
+
 export function baseUrlFor(provider, override) {
   const o = trimSlash(override);
   return o || PROVIDERS[provider]?.baseUrl || '';

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.19.0
+
+- **Security release** — matches portal-met-bridge v0.19.0. The app's server now refuses requests that come from another website (before, a page you visited could have reached the app on your LAN, including the machine relay) and answers only to addresses, `homeassistant`, `.local` names and its certificate's names; a new option **`allowed_hosts`** lists any other name you use (a DuckDNS name, a reverse proxy). If the page suddenly says *421*, that is the option to fill in.
+- A profile name containing markup no longer runs in the Analysis tab. The page runs under a Content-Security-Policy; restored backups are normalised; a settings file can no longer change where an API key is sent.
+- The PDF library was replaced by its current version (jsPDF 2.5.2 → 4.2.1, which closes twelve published advisories); every bundled library is now checksummed and checked for advisories before a release.
+- The container upgrades its Alpine packages on every build.
+
 ## 0.18.0
 
 - Matches portal-met-bridge v0.18.0: rating settings (on/off, 1–5 or 1–9 scale, rate when the shot completes or afterwards), switches for where per-shot files and History exports go, *Write a backup now* and *Restore…* ask (the restore picker lists the backups in `/share/portal-met-bridge/backups`), *Export selected* in History, a Beans tab with an editor and a link per coffee; the duplicate Shots block on the left is gone.

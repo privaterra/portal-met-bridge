@@ -48,5 +48,9 @@ esac
 
 bashio::log.info "portal-met-bridge ${version} → http://${host}.local:8787${tls:+ and https://${host}.local:8788} · files in ${data_dir}"
 bashio::log.info "Open it in Chrome on your computer. For the Portal's Bluetooth use the https address (trust its certificate once — the page explains how), or set the chrome://flags exception."
+# Extra names the page is opened by (a public DNS name through a reverse proxy, a tailnet name).
+# IP addresses, single-label and .local/.lan/.home/.internal names and the certificate's names need no listing.
+allowed="$(bashio::config 'allowed_hosts' 2>/dev/null | tr '\n' ',' | sed 's/,$//' || true)"
+[ -n "${allowed}" ] && bashio::log.info "also answering to: ${allowed}"
 cd /opt/app
-exec env HOST=0.0.0.0 PORT=8787 ALLOW_QUIT=1 DATA_DIR="${data_dir}" "${tls[@]}" node serve.mjs
+exec env HOST=0.0.0.0 PORT=8787 ALLOW_QUIT=1 ALLOWED_HOSTS="${allowed}" DATA_DIR="${data_dir}" "${tls[@]}" node serve.mjs

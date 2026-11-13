@@ -1,6 +1,6 @@
 {
   "name": "portal-met-bridge",
-  "version": "0.18.0",
+  "version": "0.19.0",
   "private": true,
   "description": "Meticulous & Belka Portal conductivity data visualization & analysis: visualizes and analyzes the data produced by a Meticulous espresso machine and a Belka Portal, with refractometer-calibrated TDS estimates, AI reviews and a Beanconqueror hand-off.",
   "type": "module",
@@ -9,7 +9,10 @@
     "test": "node tests/run.mjs",
     "test:e2e": "node tests/e2e-portal.mjs",
     "mock": "node tests/mock-meticulous.mjs",
-    "screenshots": "node tools/screenshots.mjs"
+    "screenshots": "node tools/screenshots.mjs",
+    "deps": "node tools/vendor.mjs check",
+    "deps:update": "node tools/vendor.mjs update",
+    "deps:verify": "node tools/vendor.mjs verify"
   },
   "license": "MIT",
   "devDependencies": {

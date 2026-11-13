@@ -11,6 +11,8 @@ Every version is a Git tag (`v0.17.1`). Pushing the tag starts the **Release** w
 | Node on the PATH of the shell you release from | `brew install node`; if Homebrew's Node is installed but `node` is not found, `export PATH=/opt/homebrew/bin:$PATH` (Intel: `/usr/local/bin`) | `tools/bump-version.mjs` and the tests need it (the two shell tools do not) |
 | Commit and tag signing | [docs/SIGNED-COMMITS.md](SIGNED-COMMITS.md) | `tools/publish.sh` and `tools/tag-release.sh` sign what they push; GitHub shows *Verified* |
 | Actions allowed to create releases | github.com → the repository → Settings → Actions → General → *Workflow permissions* → **Read and write permissions** | the workflow creates the draft release with the automatic `GITHUB_TOKEN` |
+| Actions allowed to open pull requests | the same page → *Workflow permissions* → tick **Allow GitHub Actions to create and approve pull requests** | the weekly **Dependency updates** workflow proposes library updates as a pull request (without it, it still pushes the branch `deps/update` and links to it) |
+| Dependabot | Settings → Advanced Security (Code security) → *Dependabot alerts* on (it is), *Dependabot security updates* as you like | alerts for the shipped libraries (through `vendor/package.json`) and weekly pull requests for Actions and dev tools (`.github/dependabot.yml`) |
 | *(optional)* the GitHub CLI | `brew install gh` then `gh auth login` (GitHub.com, HTTPS, browser) | uploading or replacing release assets from the Terminal (section 4); everything in this guide also works in the web UI |
 | *(optional)* Apple signing | PACKAGING.md section 2.3 — the five secrets | the app opens without the right-click → Open step; not needed for an alpha |
 
@@ -21,6 +23,10 @@ Everything happens in your clone, on `main`, with a clean working tree. Replace 
 ```sh
 cd ~/Sites/portal-met-bridge
 git status                               # nothing pending; `git log origin/main..main` shows what is not pushed yet
+
+# 0. the libraries: fetch the latest, see that nothing has an open advisory
+node tools/vendor.mjs update             # newest uPlot, socket.io-client, qrcode-generator, jsPDF, fflate → vendor/ (skip if the weekly pull request was just merged)
+node tools/vendor.mjs check              # newer versions? security advisories for what is in vendor/? (tag-release.sh asks again and refuses on high/critical)
 
 # 1. the version number, in every place that carries it
 node tools/bump-version.mjs 0.17.1       # package.json, the ?v= cache stamps, the About line, the Home Assistant config.yaml
@@ -39,11 +45,13 @@ tools/publish.sh                         # rebases on GitHub if needed, signs, p
 tools/tag-release.sh                     # creates the signed tag v0.17.1 and pushes it → the Release workflow starts
 ```
 
-`tools/tag-release.sh` refuses to tag when the tree is dirty, when `main` is not pushed, when the tag exists, or when `config.yaml`'s version differs from `package.json` — each message says what to do.
+`tools/tag-release.sh` refuses to tag when the tree is dirty, when `main` is not pushed, when the tag exists, when `config.yaml`'s version differs from `package.json`, or when a library in `vendor/` has a high or critical security advisory (or a vendored file is not the one the manifest names) — each message says what to do. The library check needs Node and the network; without either it says so and leaves the check to the Release workflow, which runs it before building. `SKIP_DEP_CHECK=1 tools/tag-release.sh` tags regardless.
+
+If you updated a library in step 0, exercise what it does before committing: the charts (uPlot), the live machine stream (socket.io-client), the Beanconqueror QR code (qrcode-generator), a PDF report and a review PDF (jsPDF), a zip export and a `.docx` review (fflate). `npm run test:e2e` covers all five.
 
 **Then, on GitHub:**
 
-5. **Watch the build.** github.com/privaterra/portal-met-bridge/actions → the run named after the tag (*v0.17.1 Release*). Two jobs: *Unit tests* (Ubuntu, under a minute) and *macOS app* (an Apple-silicon runner; 3–10 minutes, longer when GitHub notes "capacity constraints"). Both must be green. If *macOS app* is red, go to section 5 — do not publish a release without its files.
+5. **Watch the build.** github.com/privaterra/portal-met-bridge/actions → the run named after the tag (*v0.17.1 Release*). Three jobs: *Unit tests* and *Libraries and security advisories* (Ubuntu, under a minute each; the second lists the shipped versions and any advisory in its summary) and *macOS app* (an Apple-silicon runner; 3–10 minutes, longer when GitHub notes "capacity constraints"). Both must be green. If *macOS app* is red, go to section 5 — do not publish a release without its files.
 6. **Open the draft.** github.com/privaterra/portal-met-bridge/releases → the draft at the top, titled *portal-met-bridge 0.17.1 (alpha)* (0.x versions and tags with a suffix are pre-releases, titled *(alpha)*; from 1.0.0 the title is the plain version and the release is a full one). Check its **Assets**:
    - `portal-met-bridge-0.17.1-macos.zip` — the app with Node for Apple silicon *and* Intel (~110 MB);
    - `portal-met-bridge-0.17.1-macos.dmg` — the same app on a disk image with an Applications shortcut;
@@ -104,11 +112,19 @@ Then open the draft on the web and publish it as in step 7. Name files exactly a
    - **Transient** (the macOS runner was not available, a download from nodejs.org timed out, GitHub had an incident): *Re-run failed jobs* on the run's page, nothing else.
    - **The tag does not match** (*tag v0.17.1 but package.json says 0.17.0*): the version was not bumped before tagging. Fix on `main` (bump, commit, `tools/publish.sh`), then move the tag: `git tag -d v0.17.1 && git push origin :refs/tags/v0.17.1 && tools/tag-release.sh`. Fine while nobody has installed that version; the Home Assistant store caches the tag's source, so do not move a tag the store has already offered.
    - **A bug in the build itself** (a script error such as `tools/package-macos.sh: line 80: arch: unbound variable`, which is what stopped v0.17.0): fix it on `main` and **release the next patch version** (0.17.1). A tag points at a commit for good, so re-running the workflow for the broken tag rebuilds the broken script; the right fix is a new tag with the fixed one. The old tag simply has no release — delete it or leave it; the notes of the next release say what happened.
+   - **Libraries and security advisories is red**: a shipped library has a high or critical advisory, or a file in `vendor/` does not match the manifest. The job summary names it and the fixed version. `node tools/vendor.mjs update`, test, commit, publish, and release the next patch version; if the advisory does not apply to how the app uses the library (SECURITY.md lists what is called), record it in `vendor/advisories-accepted.json` with a reason and an end date instead.
    - **403 on the release step**: Settings → Actions → General → *Workflow permissions* → *Read and write permissions*, then *Re-run failed jobs*.
    - **Notarization failed** (only with the Apple secrets): the step prints Apple's log; PACKAGING.md 2.3 lists the usual causes (an expired certificate, a missing entitlement, the wrong Team ID).
 3. While the macOS job is broken, people can still install from source (the `…-source.zip` is not made either, but GitHub's own *Source code (zip)* on the tag always is, and `git clone` works) and Home Assistant users are unaffected: the app installs from the tag, not from the release.
 
 The unit test *packaging: tools/package-macos.sh builds the bundle with two Node runtimes* now runs the script with two small stand-in runtimes on every `node tests/run.mjs`, so a regression in that path fails before it is tagged.
+
+## 5a. Between releases: what GitHub does on its own
+
+- **Every push and pull request** → *CI*: the unit tests and the library report. A red *Libraries and security advisories* on `main` means an advisory was published for something in `vendor/` since the last push — open the run's summary.
+- **Every Monday** → *Dependency updates*: fetches the latest libraries, runs the unit and end-to-end tests, and opens a pull request *Update libraries (date)* when something changed. Read the changelog of anything marked *new major version*, check out the branch (`git fetch && git checkout deps/update`), pull a demo shot, download a PDF and a zip, then **Squash and merge** on GitHub (the squashed commit is signed by GitHub) and `git pull` before your next release. It also opens an issue when an advisory remains that no update fixes, and one when the projects the Portal and machine protocols come from have new commits (`vendor/sources.json`; after reading them: `node tools/vendor.mjs sources --record`).
+- **Dependabot** → weekly pull requests for the GitHub Actions the workflows use, the development tools (Playwright, socket.io) and the Home Assistant base image, and alerts in the Security tab for the shipped libraries. A Dependabot pull request that only edits `vendor/package.json` cannot be merged as it is (the files would not match): run `node tools/vendor.mjs update` instead and close it.
+- Run either workflow by hand from the Actions tab (*Run workflow*) — before a release, say.
 
 ## 6. Undoing a release
 
@@ -118,10 +134,11 @@ The unit test *packaging: tools/package-macos.sh builds the bundle with two Node
 
 ## 7. Checklist (copy into the commit message or an issue)
 
+- [ ] `node tools/vendor.mjs update` and `check` (or the weekly *Update libraries* pull request merged); no open advisory
 - [ ] `main` clean and pushed; `node tools/bump-version.mjs X.Y.Z`
 - [ ] `homeassistant/portal_met_bridge/CHANGELOG.md` entry; `docs/releases/vX.Y.Z.md` written
 - [ ] `node tests/run.mjs` green (`npm run test:e2e` when the change touched the page)
 - [ ] commit → `tools/publish.sh` → `tools/tag-release.sh`
-- [ ] Actions → Release: both jobs green
+- [ ] Actions → Release: all three jobs green
 - [ ] Releases → draft: three assets present, notes read, pre-release ticked for 0.x → **Publish release**
 - [ ] downloaded zip opens on the Mac and About shows X.Y.Z; Home Assistant offers the update

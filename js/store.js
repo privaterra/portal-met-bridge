@@ -315,21 +315,29 @@ export class Store {
   async importAll(json) {
     if (!json || !Array.isArray(json.shots)) throw new Error('Not a portal-met-bridge export.');
     let n = 0;
-    for (const s of json.shots) {
-      if (s && s.id && Array.isArray(s.machine)) {
+    // A backup is a file from somewhere: every record is brought to the shape the app itself writes before it is stored.
+    for (const raw of json.shots) {
+      const s = cleanImportedShot(raw);
+      if (s) {
         await this.putShot(s);
         n++;
       }
     }
     const db = await this.dbp;
     if (Array.isArray(json.beans)) {
-      for (const b of json.beans) if (b && b.key) await tx(db, 'beans', 'readwrite', (s) => s.put(b));
+      for (const raw of json.beans) {
+        const b = cleanImportedBean(raw);
+        if (b) await tx(db, 'beans', 'readwrite', (s) => s.put(b));
+      }
     }
     if (Array.isArray(json.lists)) {
-      for (const l of json.lists) if (l && l.key && LIST_KINDS.includes(l.kind)) await tx(db, 'lists', 'readwrite', (s) => s.put(l));
+      for (const l of json.lists) if (l && typeof l.key === 'string' && LIST_KINDS.includes(l.kind) && typeof l.value === 'string') await tx(db, 'lists', 'readwrite', (s) => s.put({ key: l.key.slice(0, 300), kind: l.kind, value: l.value.slice(0, 200), uses: Number(l.uses) || 0, lastUsed: Number(l.lastUsed) || 0 }));
     }
     if (Array.isArray(json.reviews)) {
-      for (const r of json.reviews) if (r && r.id && typeof r.markdown === 'string') await tx(db, 'reviews', 'readwrite', (s) => s.put(r));
+      for (const raw of json.reviews) {
+        const r = cleanImportedReview(raw);
+        if (r) await tx(db, 'reviews', 'readwrite', (s) => s.put(r));
+      }
     }
     this._changed('import');
     return n;
@@ -375,4 +383,97 @@ export function coffeeKey(name) {
     .normalize('NFC')
     .trim()
     .toLocaleLowerCase();
+}
+
+// ---------------------------------------------------------------- import --
+// Records from a backup file are normalised to the types the app writes itself:
+// ids and names become bounded strings, measurements finite numbers, sample
+// lists arrays of plain objects. Nothing is trusted to be the shape it claims,
+// so a crafted file cannot smuggle an object where the page expects a number.
+
+const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+const text = (v, max = 500) => (typeof v === 'string' ? v.slice(0, max) : typeof v === 'number' && Number.isFinite(v) ? String(v) : undefined);
+const numberOr = (v) => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? undefined : Number(v));
+const NUMBER_FIELDS = ['startedAt', 'endedAt', 'durationSec', 'finalWeightG', 'beverageG', 'profileTargetG', 'profileTemperatureC', 'rating', 'ratingMax', 'lagSec'];
+const TEXT_FIELDS = ['profileName', 'profileId', 'source', 'machineShotId', 'comment', 'beverageSource', 'machineName'];
+
+/** Flat objects of strings/numbers/booleans (a shot's context, its file paths); anything nested is dropped. */
+function cleanFlat(obj, max = 500) {
+  if (!isObj(obj)) return undefined;
+  const out = {};
+  for (const [k, v] of Object.entries(obj).slice(0, 80)) {
+    if (typeof v === 'string') out[k] = v.slice(0, max);
+    else if ((typeof v === 'number' && Number.isFinite(v)) || typeof v === 'boolean') out[k] = v;
+  }
+  return out;
+}
+
+export function cleanImportedShot(raw) {
+  if (!isObj(raw) || !Array.isArray(raw.machine)) return null;
+  const id = text(raw.id, 200);
+  if (!id) return null;
+  const out = { ...raw, id, machine: raw.machine.filter(isObj), portal: Array.isArray(raw.portal) ? raw.portal.filter(isObj) : [] };
+  for (const k of NUMBER_FIELDS) {
+    if (!(k in raw)) continue;
+    const v = numberOr(raw[k]);
+    if (v === undefined) delete out[k];
+    else out[k] = v;
+  }
+  for (const k of TEXT_FIELDS) {
+    if (!(k in raw)) continue;
+    const v = text(raw[k], k === 'comment' ? 2000 : 300);
+    if (v === undefined) delete out[k];
+    else out[k] = v;
+  }
+  if ('context' in raw) out.context = cleanFlat(raw.context, 2000) || {};
+  if ('files' in raw) {
+    const f = cleanFlat(raw.files, 1000);
+    if (f) out.files = f;
+    else delete out.files;
+  }
+  if ('refractometer' in raw) {
+    const r = cleanFlat(raw.refractometer);
+    if (r) out.refractometer = r;
+    else delete out.refractometer;
+  }
+  for (const k of ['inProgress', 'recovered', 'manual']) if (k in raw) out[k] = raw[k] === true;
+  for (const k of ['machineSource', 'reviewProfile', 'checkpoint']) if (k in raw && !isObj(raw[k])) delete out[k];
+  if (!Number.isFinite(out.startedAt)) out.startedAt = 0;
+  return out;
+}
+
+export function cleanImportedBean(raw) {
+  if (!isObj(raw)) return null;
+  const name = text(raw.name, 200);
+  const key = text(raw.key, 300);
+  if (!name || !key) return null;
+  const out = { key, name, uses: Number(raw.uses) || 0, lastUsed: Number(raw.lastUsed) || 0, createdAt: Number(raw.createdAt) || 0 };
+  for (const k of ['roaster', 'origin', 'process', 'roastLevel', 'url', 'notes', 'lastGrind', 'grinderName']) {
+    const v = text(raw[k], k === 'notes' ? 2000 : 500);
+    if (v !== undefined) out[k] = v;
+  }
+  const dose = numberOr(raw.lastDoseG);
+  if (dose !== undefined) out.lastDoseG = dose;
+  return out;
+}
+
+export function cleanImportedReview(raw) {
+  if (!isObj(raw) || typeof raw.markdown !== 'string') return null;
+  const id = text(raw.id, 200);
+  if (!id) return null;
+  return {
+    ...raw,
+    id,
+    markdown: raw.markdown.slice(0, 400000),
+    title: text(raw.title, 300) || 'Review',
+    provider: text(raw.provider, 40) || '',
+    model: text(raw.model, 120) || '',
+    taste: text(raw.taste, 4000) || '',
+    question: text(raw.question, 4000) || '',
+    createdAt: Number(raw.createdAt) || 0,
+    durationMs: Number(raw.durationMs) || 0,
+    shotIds: Array.isArray(raw.shotIds) ? raw.shotIds.map((x) => text(x, 200)).filter(Boolean) : [],
+    shotLabels: Array.isArray(raw.shotLabels) ? raw.shotLabels.map((x) => text(x, 300)).filter(Boolean) : [],
+    digests: Array.isArray(raw.digests) ? raw.digests.filter(isObj) : [],
+  };
 }

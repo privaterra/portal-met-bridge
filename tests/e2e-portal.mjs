@@ -459,7 +459,7 @@ try {
   await page.waitForFunction(() => /Restored \d+ shots from portal-met-bridge-latest\.json/.test(document.querySelector('#toast').textContent), null, { timeout: 10000 });
   check('picking one restores it (merging by id: the shot count is unchanged)', (await page.evaluate(() => window.__pb.state.shots.filter((x) => !x.inProgress).length)) === backupDoc.shots.length, await page.textContent('#toast'));
   const refused = await page.evaluate(async () => { const codes = []; for (const p of ['../x.txt', 'a/.hidden', 'a/..%2Fb', 'bad:name']) codes.push((await fetch(`api/files/${p}`, { method: 'PUT', body: 'x' })).status); return codes; });
-  check('the server refuses paths that leave the data folder or hide files', refused.every((c) => c === 400 || c === 404), refused.join(','));
+  check('the server refuses paths that leave the data folder or hide files', refused.every((c) => c === 400 || c === 404 || c === 405), refused.join(',')); // '../x.txt' is normalised by the browser to /x.txt: a PUT outside api/ is 405
   await page.fill('#set-dir-root', 'portal-met-bridge');
   await page.fill('#set-dir-exports', 'exports');
   await page.click('#settings-save');
@@ -879,6 +879,109 @@ try {
   await page.click('.view-tab[data-view="analysis"]');
   await page.waitForTimeout(300);
   check('a saved review survives a restart and is listed with its title', (await page.evaluate(() => [...document.querySelectorAll('#an-saved-rows tr')].map((tr) => tr.textContent))).some((t) => /Shot review: restart test/.test(t)) && (await page.textContent('#analysis-tab-count')) === '(1)');
+  // ---- Security (v0.19): hostile data stays text everywhere, the policy blocks inline script, a settings file cannot repoint the API key
+  const pol = await page.evaluate(async () => {
+    const d = document.createElement('div');
+    d.innerHTML = '<img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" onerror="window.__inline=1" onload="window.__inline=1"><svg onload="window.__inline=1"></svg>';
+    document.body.appendChild(d);
+    const s = document.createElement('script');
+    s.textContent = 'window.__inline = 2';
+    document.body.appendChild(s);
+    await new Promise((r) => setTimeout(r, 400));
+    d.remove();
+    s.remove();
+    return { meta: !!document.querySelector('meta[http-equiv="Content-Security-Policy"]'), inline: window.__inline, header: (await fetch(location.href)).headers.get('content-security-policy') || '' };
+  });
+  check('the Content-Security-Policy is in force: an injected inline handler and an inline script do not run', pol.meta && pol.inline === undefined && /script-src 'self'/.test(pol.header) && !/unsafe-eval/.test(pol.header) && /frame-ancestors 'none'/.test(pol.header), JSON.stringify(pol).slice(0, 300));
+  const EVIL = `"><img src=x onerror="window.__xss=(window.__xss||0)+1"><script>window.__xss=9</script>'`;
+  const hostileBackup = {
+    app: 'portal-met-bridge', version: 4, exportedAt: EVIL,
+    shots: [0, 1].map((i) => ({
+      id: `evil-${i}${EVIL}`, startedAt: Date.now() - 86400000 * (9 + i), durationSec: EVIL, finalWeightG: 36, beverageG: i ? EVIL : 37.5, profileName: EVIL, profileTargetG: EVIL, source: EVIL, machineShotId: EVIL, comment: EVIL, rating: i ? EVIL : 4, ratingMax: EVIL,
+      context: { beanName: `Evil${i} ${EVIL}`, roaster: EVIL, origin: EVIL, grindSize: EVIL, grinderName: EVIL, note: EVIL, process: EVIL, roastLevel: EVIL, doseG: i ? EVIL : 18, nested: { a: EVIL } },
+      files: { json: EVIL, csv: EVIL }, refractometer: { tdsPct: EVIL, eyPct: EVIL }, machineSource: { id: EVIL, profile: { name: EVIL, final_weight: EVIL, temperature: EVIL, variables: [{ name: EVIL, key: EVIL, type: EVIL, value: EVIL }], stages: [{ name: EVIL, key: EVIL, type: EVIL, dynamics: { over: EVIL, points: [[0, EVIL]] }, exit_triggers: [{ type: EVIL, value: EVIL }], limits: [] }] } },
+      machine: Array.from({ length: 60 }, (_, k) => ({ t: k * 0.5, w: k * 0.6, p: 6, f: 2, stage: EVIL, state: EVIL })).concat([EVIL, null]),
+      portal: i ? { length: EVIL } : Array.from({ length: 60 }, (_, k) => ({ t: k * 0.5, ec: 2 + k / 60, temp: 60 })),
+    })),
+    beans: [{ key: `evil${EVIL}`.toLowerCase(), name: `EvilBean ${EVIL}`, roaster: EVIL, origin: EVIL, process: EVIL, roastLevel: EVIL, url: 'javascript:window.__xss=7', notes: EVIL, lastGrind: EVIL, lastDoseG: EVIL, uses: EVIL }],
+    lists: ['roaster', 'origin', 'grinder'].map((kind) => ({ key: `${kind}:${EVIL}`, kind, value: EVIL, uses: EVIL, lastUsed: EVIL })),
+    reviews: [{ id: `rev${EVIL}`, createdAt: Date.now(), provider: EVIL, model: EVIL, title: EVIL, shotIds: [`evil-0${EVIL}`], shotLabels: [EVIL], taste: EVIL, question: EVIL, markdown: `## Verdict ${EVIL}\n\n${EVIL} [x](javascript:window.__xss=8) [y](https://example.org/"onmouseover="window.__xss=6)\n\n| a | b |\n| --- | --- |\n| ${EVIL} | 2 |\n\n1. ${EVIL}\n`, digests: [EVIL] }],
+  };
+  await page.click('.view-tab[data-view="settings"]');
+  await page.setInputFiles('#backup-import', { name: 'hostile-backup.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(hostileBackup)) });
+  await page.waitForFunction(() => /Restored 2 shots from hostile-backup\.json/.test(document.querySelector('#toast').textContent), null, { timeout: 10000 });
+  const evilIds = await page.evaluate(() => window.__pb.state.shots.filter((x) => String(x.id).startsWith('evil-')).map((x) => x.id));
+  // walk every view that shows shots, beans and reviews with the hostile records on screen
+  await page.click('.view-tab[data-view="history"]');
+  await page.fill('#hist-search', 'Evil');
+  await page.waitForTimeout(300);
+  const histEvil = await page.evaluate(() => document.querySelectorAll('#hist-rows tr').length);
+  for (const n of [1, 2]) await page.check(`#hist-rows tr:nth-child(${n}) input[type="checkbox"]`);
+  await page.click('#hist-compare');
+  await page.waitForTimeout(600);
+  await page.click('#cmp-close');
+  await page.click('#hist-rows tr button[data-act="edit"]');
+  await page.waitForSelector('#shot-dialog[open]');
+  await page.keyboard.press('Escape');
+  await page.click('#hist-rows tr td.rating button');
+  await page.waitForSelector('#rating-dialog[open]');
+  await page.click('#r-later');
+  await page.click('#hist-rows tr button[data-act="open"]');
+  await page.waitForTimeout(700);
+  await page.click('.view-tab[data-view="history"]');
+  for (const n of [1, 2]) await page.check(`#hist-rows tr:nth-child(${n}) input[type="checkbox"]`); // the dialogs re-rendered the rows
+  await page.click('#hist-analyze');
+  await page.waitForTimeout(700);
+  const digestShots = await page.evaluate(() => document.querySelectorAll('#an-digest .an-shot').length); // the panel that wrote the profile name unescaped before 0.19
+  await page.evaluate(() => { const tr = [...document.querySelectorAll('#an-saved-rows tr')].find((r) => String(r.dataset.id).startsWith('rev"')); tr?.querySelector('button[data-act="open"]')?.click(); });
+  await page.waitForTimeout(500);
+  await page.click('.view-tab[data-view="beans"]');
+  await page.fill('#beans-search', 'Evil');
+  await page.waitForTimeout(300);
+  const beanLinks = await page.evaluate(() => [...document.querySelectorAll('#beans-rows a')].map((a) => a.getAttribute('href')));
+  await page.evaluate(() => document.querySelector('#beans-rows button[data-act="edit"]')?.click());
+  await page.waitForSelector('#bean-dialog[open]');
+  await page.click('#b-cancel');
+  await page.fill('#beans-search', '');
+  await page.dispatchEvent('#beans-search', 'input');
+  await page.click('.view-tab[data-view="settings"]');
+  await page.waitForTimeout(400);
+  const hostileData = await page.evaluate(() => ({
+    xss: window.__xss,
+    imgs: document.querySelectorAll('img[src="x"]').length,
+    scripts: document.querySelectorAll('script:not([src])').length,
+    handlers: document.querySelectorAll('[onerror], [onload], [onclick], [onmouseover]').length,
+    jsLinks: [...document.querySelectorAll('a[href]')].filter((a) => /^\s*javascript:/i.test(a.getAttribute('href'))).length,
+    report: (document.querySelector('#an-report')?.textContent || '').includes('<img src=x'),
+    shot: window.__pb.state.shots.find((x) => String(x.id).startsWith('evil-1')),
+  }));
+  check('a backup with markup in every field restores as text: History, Compare, the dialogs, Shots, Analysis, a saved review, Beans and Settings show it and nothing runs or is injected', histEvil === 2 && evilIds.length === 2 && digestShots === 2 && hostileData.xss === undefined && hostileData.imgs === 0 && hostileData.scripts === 0 && hostileData.handlers === 0 && hostileData.jsLinks === 0 && hostileData.report && beanLinks.every((h) => !/javascript/i.test(h || '')), JSON.stringify({ ...hostileData, shot: undefined, histEvil, digestShots, beanLinks }));
+  check('the restore brought the records to the app\'s own types (a portal that was not a list is empty, text where numbers belong is dropped)', Array.isArray(hostileData.shot.portal) && hostileData.shot.portal.length === 0 && !('durationSec' in hostileData.shot) && !('rating' in hostileData.shot) && hostileData.shot.context.nested === undefined && hostileData.shot.machine.every((m) => m && typeof m === 'object'), JSON.stringify({ portal: hostileData.shot.portal, keys: Object.keys(hostileData.shot).join(',') }).slice(0, 300));
+  await page.evaluate(async (ids) => {
+    for (const id of ids) await window.__pb.store.deleteShot(id);
+    for (const r of await window.__pb.store.listReviews({ limit: 1000 })) if (String(r.id).startsWith('rev"')) await window.__pb.store.deleteReview(r.id);
+    for (const b of await window.__pb.store.listBeans({ limit: 1000 })) if (/^EvilBean/.test(b.name)) await window.__pb.store.deleteBean(b.name);
+    await window.__pb.refreshShotList();
+  }, evilIds);
+  await page.click('.view-tab[data-view="history"]');
+  await page.fill('#hist-search', '');
+  await page.dispatchEvent('#hist-search', 'input');
+  // a settings file from someone else: it may not move the endpoint the stored key is sent to, nor set a key
+  await page.click('.view-tab[data-view="settings"]');
+  const beforeImport = await page.evaluate(() => ({ base: window.__pb.settings.aiBaseOpenai, key: window.__pb.settings.aiKeyOpenai }));
+  await page.setInputFiles('#settings-import', { name: 'their-settings.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({ app: 'portal-met-bridge-settings', version: 1, settings: { aiBaseOpenai: 'https://collector.example/v1', aiKeyOpenai: 'sk-planted', aiKeyAnthropic: 'sk-planted', settleSec: 6 } })) });
+  await page.waitForFunction(() => /Imported \d+ settings/.test(document.querySelector('#toast').textContent), null, { timeout: 5000 });
+  const afterImport = await page.evaluate(() => ({ base: window.__pb.settings.aiBaseOpenai, key: window.__pb.settings.aiKeyOpenai, settle: window.__pb.settings.settleSec, toast: document.querySelector('#toast').textContent }));
+  check('importing settings applies the ordinary ones but leaves the OpenAI-compatible endpoint and the API keys alone, and says so', afterImport.base === beforeImport.base && afterImport.key === beforeImport.key && afterImport.settle === 6 && /collector\.example.*was not applied/.test(afterImport.toast), JSON.stringify(afterImport).slice(0, 300));
+  await page.selectOption('#set-ai-provider', 'openai');
+  await page.fill('#set-ai-base-openai', 'http://api.example.com/v1');
+  await page.dispatchEvent('#set-ai-base-openai', 'input');
+  const insecureNote = await page.textContent('#set-ai-base-note');
+  await page.fill('#set-ai-base-openai', beforeImport.base || '');
+  await page.dispatchEvent('#set-ai-base-openai', 'input');
+  await page.evaluate(() => window.__pb.store.setSetting('settleSec', 7).then(() => { window.__pb.settings.settleSec = 7; }));
+  check('a plain-http endpoint on the internet is called out before a key is sent to it', /plain http on the internet/.test(insecureNote), insecureNote);
+
   // ---- Stop (v0.15): one confirmation, then everything stops; the server only when asked
   await page.click('.view-tab[data-view="settings"]'); // the wipe above reset the address to the default
   await page.fill('#meticulous-host', `localhost:${MOCK_PORT}`);
@@ -927,7 +1030,7 @@ try {
   const quitRes = await fetch('http://127.0.0.1:8799/api/quit', { method: 'POST' }).then((r) => r.json());
   const exitCode = await Promise.race([spareExit, new Promise((r) => setTimeout(() => r('timeout'), 4000))]);
   check('POST api/quit stops the server process (what "Also stop the local server" does)', quitRes.stopping === true && exitCode === 0, JSON.stringify({ quitRes, exitCode }));
-  const unexpected = errors.filter((e) => !/bad-model|404 \(Not Found\)|400 \(Bad Request\)/.test(e)); // the deliberate wrong-model request logs a 404, the refused file paths 400s
+  const unexpected = errors.filter((e) => !/bad-model|404 \(Not Found\)|400 \(Bad Request\)|405 \(Method Not Allowed\)|Refused to execute inline|violates the following Content Security Policy directive:? ['"]script-src/.test(e)); // …and the policy check injects inline script on purpose // the deliberate wrong-model request logs a 404, the refused file paths 400s
   check('no page errors', unexpected.length === 0, unexpected.join(' | ').slice(0, 300));
 
   if (headed) await page.waitForTimeout(5000);

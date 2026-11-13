@@ -49,7 +49,7 @@ To build a package without a release (to try it): Actions → Release → *Run w
 2. opens the page in Google Chrome (or Microsoft Edge, or the default browser — only Chrome and Edge can reach the Portal over Bluetooth);
 3. stays in the Dock while it serves; **Quit** from the Dock stops the server. Opening the app while it is already running just brings the page up again.
 
-It writes a log to `~/Library/Logs/portal-met-bridge.log`, and reads `~/Library/Application Support/portal-met-bridge/config` if that file exists, with any of `PORT=`, `DATA_DIR=`, `BROWSER=`, `HOST=` lines (the launcher script at `Contents/Helpers/launcher.sh` documents them).
+It writes a log to `~/Library/Logs/portal-met-bridge.log`, and reads `~/Library/Application Support/portal-met-bridge/config` if that file exists, with any of `PORT=`, `DATA_DIR=`, `BROWSER=`, `HOST=`, `ALLOWED_HOSTS=` lines (the launcher script at `Contents/Helpers/launcher.sh` documents them).
 
 The `.dmg` carries the same app with an *Applications* shortcut, the usual drag-to-install picture.
 
@@ -213,10 +213,20 @@ To switch users to it:
 
 Switching back is a matter of commenting the line out again.
 
+### 3.5 Who the server answers (0.19 and later)
+
+`serve.mjs` has no accounts, so it is strict about two other things, the same in the macOS app, from source and in the container:
+
+- **The name it was opened by.** It answers to IP addresses, `localhost`, single-word names (`homeassistant`), names ending in `.local`, `.lan`, `.home`, `.internal` or `.home.arpa`, the machine's own hostname and the names in its https certificate. Any other name gets *421 — this server does not answer to the name …*. That is what stops DNS rebinding (a public name that is made to point at your LAN). If you do reach the page by a public name — DuckDNS, a reverse proxy, a Tailscale MagicDNS name ending in `.ts.net` — list it: `ALLOWED_HOSTS=coffee.example.org node serve.mjs`, the same line in the macOS app's `config` file, or the Home Assistant option `allowed_hosts`. A reverse proxy must pass the `Host` and `Origin` headers through unchanged (or list the proxy's public name).
+- **Where a request came from.** Requests to `api/…` and `machine/…` (and the relay's WebSocket) that the browser marks as coming from another site are refused with 403. Nothing to configure; `curl` and scripts on the same machine are unaffected.
+
+The container is rebuilt from a current Alpine on every install or update (`apk upgrade` runs first), ships without npm's lockfile or dev tools, and runs `node serve.mjs` only. SECURITY.md has the whole model.
+
 ## 4. Checklist per release
 
 (The long form, with the GitHub screens and the manual upload, is [RELEASING.md](RELEASING.md).)
 
+0. `node tools/vendor.mjs update` and `node tools/vendor.mjs check` (or merge the weekly *Update libraries* pull request and `git pull`).
 1. `node tools/bump-version.mjs X.Y.Z`; update `homeassistant/portal_met_bridge/CHANGELOG.md`; `node tests/run.mjs`; commit; `tools/publish.sh`.
 2. Write `docs/releases/vX.Y.Z.md` (the release notes; commit it with the version) → `tools/tag-release.sh` → wait for **Release** to finish → read the draft and press **Publish release**.
 3. On a Home Assistant machine: Settings → Apps → ⋮ → *Check for updates* → Portal Met Bridge shows the new version → Update → Open Web UI → Settings → About shows the version.
@@ -230,6 +240,9 @@ Switching back is a matter of commenting the line out again.
 | `tools/tag-release.sh: node: command not found` (or the same from `package-macos.sh`) | Fixed after v0.14.0: both scripts read the version with `sed` and need only git, bash, curl and tar. `node tools/bump-version.mjs` and the tests do need Node: `brew install node`, or, if Homebrew's Node is installed but that shell cannot see it, `export PATH=/opt/homebrew/bin:$PATH` (Intel Macs: `/usr/local/bin`). |
 | Release workflow: `tools/package-macos.sh: line 80: arch: unbound variable` (v0.17.0) | A bug in `unpack_node` — one `local` line read `$arch` before assigning it — that only ran when a Node tarball was bundled, i.e. only on the runner. Fixed in 0.17.1 and covered by a unit test that builds the bundle with stand-in runtimes; the broken tag cannot be rebuilt (RELEASING.md section 5), so the fix shipped as the next version. |
 | Release workflow: *tag v0.14.0 but package.json says 0.13.0* | Bump first, then tag. Delete the tag (`git tag -d v0.14.0 && git push origin :refs/tags/v0.14.0`), fix, retag. |
+| `tools/tag-release.sh`: *a library in vendor/ has a security advisory* — or the Release workflow's **Libraries and security advisories** job is red | `node tools/vendor.mjs check` names the library, the advisory and the fixed version. `node tools/vendor.mjs update`, run the tests, commit, publish, tag the next patch version. If the advisory does not touch what the app calls, record it in `vendor/advisories-accepted.json` with a reason and an `until` date (SECURITY.md). |
+| The page says *421* / *This server does not answer to the name …* | It was opened by a name the server does not know (a public DNS name, a proxy). Use the address or the `.local` name, or list the name in `ALLOWED_HOSTS` / the Home Assistant option `allowed_hosts` (§3.5). |
+| A script or another web page gets *403 … cross-site request* from `api/` or `machine/` | Since 0.19 the server refuses requests a browser marks as coming from another site. Call it from the page itself, or without a browser (`curl`). |
 | Release workflow: 403 on the release step | Settings → Actions → General → Workflow permissions → *Read and write permissions*. |
 | The .app opens Terminal-less and nothing happens | Look at `~/Library/Logs/portal-met-bridge.log`. Usually port 8787 is in use (another copy, or `node serve.mjs` in a Terminal): the launcher then only opens the browser. |
 | Want an Apple-silicon-only download | `tools/package-macos.sh --download-node --arch arm64` → `portal-met-bridge-X.Y.Z-macos-arm64.zip` (about half the size); attach it to the release by hand (RELEASING.md section 4). The workflow's universal zip runs on Apple silicon too. |

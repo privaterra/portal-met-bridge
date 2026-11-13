@@ -1,0 +1,42 @@
+# Dependabot: pull requests for the things it can update on its own.
+#
+# The five libraries the app ships are copied into vendor/ (no build step), so a
+# version bump there means new files, not just a number: that is done by
+# tools/vendor.mjs and the "Dependency updates" workflow (weekly), which also
+# runs the tests. vendor/package.json lists those versions so that Dependabot
+# *alerts* (Security tab) still cover them — no version updates are configured
+# for /vendor here on purpose. docs/SECURITY.md has the whole picture.
+version: 2
+updates:
+  # the actions the workflows use
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ['*']
+    commit-message:
+      prefix: ci
+
+  # development tools only (Playwright for the end-to-end tests, socket.io for the mock machine) — never shipped
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      dev-tools:
+        patterns: ['*']
+    commit-message:
+      prefix: dev
+
+  # the Home Assistant app's base image
+  - package-ecosystem: docker
+    directory: /homeassistant/portal_met_bridge
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: ha

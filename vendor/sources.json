@@ -1,0 +1,11 @@
+{
+  "about": "The projects this app's protocol and API knowledge comes from. None of their code is shipped; the app follows what they document or do. `reviewed` is the day someone last read their changes against this app (node tools/vendor.mjs sources lists what is new since then; --record marks them read).",
+  "sources": [
+    { "repo": "variegated-coffee/variegated-rs", "branch": "main", "what": "Belka Portal BLE protocol: service and characteristic UUIDs, packet layout, commands", "usedIn": "js/portal.js", "reviewed": "2026-11-13", "head": "a9cf6e3" },
+    { "repo": "janhcla/Decenza", "branch": "main", "what": "the Portal spec as Decenza reads it, and the mass-weighted EC analysis approach", "usedIn": "js/portal.js, js/analysis.js", "reviewed": "2026-11-13", "head": "9c3cd01" },
+    { "repo": "MeticulousHome/meticulous-backend", "branch": "stable", "what": "the machine's REST API and socket.io events (/api/v1/…: machine, history, profile, action, wifi, settings)", "usedIn": "js/meticulous.js, js/machine-panel.js, tests/mock-meticulous.mjs", "reviewed": "2026-11-13", "head": "96b9ccc" },
+    { "repo": "nickwilsonr/meticulous-addon", "branch": "master", "what": "the port-80 finding and the sensor catalogue", "usedIn": "js/meticulous.js, js/machine-panel.js", "reviewed": "2026-11-13", "head": "ad6c9e4" },
+    { "repo": "hessius/MeticAI", "what": "how profiles and shot records are read for an AI review", "usedIn": "js/review.js", "reviewed": "2026-11-13", "head": null },
+    { "repo": "graphefruit/Beanconqueror", "branch": "develop", "what": "the brew-import contract (the envelope and its beanconqueror:// link)", "usedIn": "js/beanconqueror.js", "reviewed": "2026-11-13", "head": "6ddbb9c" }
+  ]
+}

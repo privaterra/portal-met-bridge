@@ -105,6 +105,7 @@ cat > "$contents/Helpers/launcher.sh" <<'LAUNCHER'
 #   DATA_DIR="$HOME/Documents/portal-met-bridge"  # where the app's files go (Settings → Files and folders → server)
 #   BROWSER="Google Chrome"                    # or "Microsoft Edge", or "" for the default browser
 #   HOST=127.0.0.1                             # 0.0.0.0 makes it reachable from the LAN (read docs/PACKAGING.md first)
+#   ALLOWED_HOSTS=coffee.example.org           # extra names the server answers to (a public DNS name, a reverse proxy); addresses, localhost and .local names always work
 contents="$(cd "$(dirname "$0")/.." && pwd)"
 app="$contents/Resources/app"
 support="$HOME/Library/Application Support/portal-met-bridge"
@@ -116,6 +117,7 @@ BROWSER="${BROWSER-Google Chrome}"
 HOST="${HOST:-127.0.0.1}"
 [ -f "$support/config" ] && . "$support/config"
 export PORT DATA_DIR HOST
+[ -n "${ALLOWED_HOSTS:-}" ] && export ALLOWED_HOSTS
 log="$logdir/portal-met-bridge.log"
 url="http://localhost:$PORT"
 

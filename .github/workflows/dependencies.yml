@@ -1,0 +1,151 @@
+# Keeps the shipped libraries current, every Monday and on demand (Actions → Dependency
+# updates → Run workflow):
+#   1. fetches the latest version of every library in vendor/manifest.json from npm
+#      (tools/vendor.mjs update: integrity-checked download, files copied byte for byte,
+#      manifest and checksums rewritten) and updates the development tools within their ranges;
+#   2. runs the unit tests and the end-to-end suite against the result;
+#   3. if anything changed, pushes the branch deps/update and opens (or refreshes) a pull
+#      request that says what changed and how the tests went — nothing reaches main unreviewed;
+#   4. checks the advisory database for the versions now in vendor/; if an advisory remains
+#      that an update did not fix, opens (or refreshes) an issue listing it;
+#   5. looks at the projects the app's protocol and API knowledge comes from
+#      (vendor/sources.json: the Portal driver, the machine's backend, Beanconqueror …) and, when
+#      one has new commits since it was last read, opens (or refreshes) an issue listing them.
+#
+# One-time setting for step 3: Settings → Actions → General → Workflow permissions →
+# "Allow GitHub Actions to create and approve pull requests". Without it the branch is
+# still pushed and the run's summary links to it. Merge with "Squash and merge" so the
+# commit on main is signed by GitHub.
+name: Dependency updates
+
+on:
+  schedule:
+    - cron: '23 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-updates
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Fetch the latest libraries, test, propose
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the deps/update branch
+      pull-requests: write # open the pull request
+      issues: write # report an advisory no update fixes
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      BRANCH: deps/update
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Fetch the latest versions
+        id: update
+        run: |
+          set -euo pipefail
+          node tools/vendor.mjs update | tee update.log
+          npm update --ignore-scripts --no-audit --no-fund 2>&1 | tail -3 || true
+          if git diff --quiet -- vendor README.md package.json package-lock.json; then echo "changed=false" >> "$GITHUB_OUTPUT"; else echo "changed=true" >> "$GITHUB_OUTPUT"; fi
+          git status --short
+
+      - name: Unit tests
+        id: unit
+        if: steps.update.outputs.changed == 'true'
+        continue-on-error: true
+        run: node tests/run.mjs
+
+      - name: End-to-end tests
+        id: e2e
+        if: steps.update.outputs.changed == 'true'
+        continue-on-error: true
+        run: |
+          npm ci --ignore-scripts
+          npx playwright install --with-deps chromium
+          node tests/e2e-portal.mjs
+
+      - name: Security advisories for what is in vendor/ now
+        id: audit
+        run: |
+          set +e
+          node tools/vendor.mjs check --summary "$GITHUB_STEP_SUMMARY" --json > deps.json
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Pull request
+        if: steps.update.outputs.changed == 'true'
+        env:
+          UNIT: ${{ steps.unit.outcome }}
+          E2E: ${{ steps.e2e.outcome }}
+          AUDIT: ${{ steps.audit.outputs.code }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add -- vendor README.md package.json package-lock.json
+          git commit -q -m "Update libraries" -m "$(grep -E '→|restored' update.log || echo 'development tools')"
+          git push --force origin "$BRANCH"
+          {
+            echo "Fetched by the **Dependency updates** workflow (\`node tools/vendor.mjs update\` and \`npm update\`)."
+            echo
+            echo '```'
+            cat update.log
+            echo '```'
+            echo
+            echo "| Check | Result |"
+            echo "| --- | --- |"
+            echo "| Unit tests | $UNIT |"
+            echo "| End-to-end tests | $E2E |"
+            echo "| Advisories for the new versions | $([ "$AUDIT" = 0 ] && echo none || echo "see the run summary (exit $AUDIT)") |"
+            echo
+            echo "Before merging: read the changelog of anything marked *new major version*, and on your own machine open the branch, pull a demo shot, and download a PDF report and a zip export. Merge with **Squash and merge**. Then release as usual (docs/RELEASING.md)."
+            echo
+            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } > pr.md
+          if [ "$(gh pr list --head "$BRANCH" --state open --json number --jq 'length')" != "0" ]; then
+            gh pr edit "$BRANCH" --body-file pr.md
+            echo "refreshed the open pull request" >> "$GITHUB_STEP_SUMMARY"
+          elif gh pr create --base "${GITHUB_REF_NAME}" --head "$BRANCH" --title "Update libraries ($(date -u +%Y-%m-%d))" --body-file pr.md; then
+            echo "opened a pull request" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::The branch $BRANCH was pushed, but the pull request could not be opened. Allow it once under Settings → Actions → General → Workflow permissions → 'Allow GitHub Actions to create and approve pull requests', or open it by hand: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/$BRANCH?expand=1"
+          fi
+
+      - name: Issue for advisories an update does not fix
+        if: steps.audit.outputs.code == '1'
+        run: |
+          set -euo pipefail
+          title="Security advisories in shipped libraries"
+          node -e "
+            const r = JSON.parse(require('fs').readFileSync('deps.json', 'utf8'));
+            const out = ['The versions in \`vendor/manifest.json\` (after fetching the latest) are affected by:', ''];
+            for (const a of r.advisories) out.push('- **' + a.severity + '** — ' + a.package + ': [' + (a.title || a.id) + '](' + a.url + ') · affects ' + a.range + ' · fix: ' + a.fix);
+            for (const p of r.problems) out.push('- vendor/: ' + p);
+            out.push('', 'What to do: if a fixed version exists, merge the open *Update libraries* pull request (or run \`node tools/vendor.mjs update\`), test and release. If none exists yet, decide whether the advisory applies to how the app uses the library (docs/SECURITY.md lists what is used); if it does not, record it in \`vendor/advisories-accepted.json\` with a reason and an end date.', '', 'Run: ' + process.env.GITHUB_SERVER_URL + '/' + process.env.GITHUB_REPOSITORY + '/actions/runs/' + process.env.GITHUB_RUN_ID);
+            require('fs').writeFileSync('issue.md', out.join('\n'));
+          "
+          n="$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number // empty')"
+          if [ -n "$n" ]; then gh issue comment "$n" --body-file issue.md; else gh issue create --title "$title" --body-file issue.md; fi
+
+      - name: Upstream projects (the Portal protocol, the machine's API, Beanconqueror)
+        run: |
+          set +e
+          node tools/vendor.mjs sources --summary sources.md --fail-changed
+          code=$?
+          set -e
+          [ -f sources.md ] && cat sources.md >> "$GITHUB_STEP_SUMMARY"
+          if [ "$code" = 3 ]; then
+            title="Upstream projects changed since the last review"
+            n="$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number // empty')"
+            if [ -n "$n" ]; then gh issue edit "$n" --body-file sources.md; else gh issue create --title "$title" --body-file sources.md; fi
+          elif [ "$code" != 0 ]; then
+            echo "::warning::the upstream projects could not be read this time (exit $code)"
+          fi

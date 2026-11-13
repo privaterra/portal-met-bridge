@@ -3,10 +3,14 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Only this page's own scripts run: no inline script, no eval, no script from elsewhere — so text that slipped past an
+       escape cannot execute. Connections stay open (the machine on your LAN, the AI provider you chose); serve.mjs sends
+       the same policy as a header and adds frame-ancestors. docs/SECURITY.md explains each directive. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; connect-src 'self' http: https: ws: wss:; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'" />
   <title>portal-met-bridge</title>
   <meta name="description" content="Meticulous & Belka Portal conductivity data visualization & analysis: records, visualizes and analyzes the data produced by a Meticulous espresso machine and a Belka Portal conductivity sensor, shot by shot.">
   <link rel="stylesheet" href="vendor/uPlot.min.css" />
-  <link rel="stylesheet" href="css/app.css?v=0.18.0" />
+  <link rel="stylesheet" href="css/app.css?v=0.19.0" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M4 26 L10 8 L16 20 L22 6 L28 26' fill='none' stroke='%232447B8' stroke-width='3' stroke-linejoin='round'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -363,6 +367,7 @@
             <label class="field"><span>Model</span><div class="row tight"><input id="set-ai-model-openai" type="text" list="ai-models-openai" placeholder="gpt-6.1-sol" spellcheck="false" autocomplete="off" /><datalist id="ai-models-openai"></datalist></div></label>
             <label class="field"><span>OpenAI-compatible endpoint (advanced, optional) — base URL of another server that speaks the OpenAI chat API, e.g. OpenRouter or a local model; blank = api.openai.com</span>
               <input id="set-ai-base-openai" type="url" placeholder="https://" spellcheck="false" autocomplete="off" /></label>
+            <p class="status" id="set-ai-base-note"></p>
           </div>
           <div class="ai-provider" data-provider="google" hidden>
             <label class="field"><span>Gemini API key — <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">create one</a>; press Enter or <em>Save settings</em> after pasting</span>
@@ -1016,6 +1021,6 @@
   </dialog>
 
   <div class="toast" id="toast" hidden></div>
-  <script type="module" src="js/main.js?v=0.18.0"></script>
+  <script type="module" src="js/main.js?v=0.19.0"></script>
 </body>
 </html>

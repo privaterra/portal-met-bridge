@@ -1,0 +1,79 @@
+# Runs on every push to main and on every pull request:
+#   - the unit tests (which include: every file in vendor/ is byte-for-byte the one
+#     vendor/manifest.json names, and the server's security checks);
+#   - the dependency report: newer versions of the shipped libraries, and security
+#     advisories for the versions shipped. Any open advisory fails this job, so a
+#     push that leaves one unaddressed shows a red mark; the job summary lists them
+#     with the fix. An advisory that does not apply to the app is recorded in
+#     vendor/advisories-accepted.json (reason + end date) and then passes.
+#   - on pull requests (and by hand): the end-to-end suite in Chromium.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: node tests/run.mjs
+
+  dependencies:
+    name: Libraries and security advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Vendored files, newer versions, advisories
+        run: |
+          set +e
+          node tools/vendor.mjs check --summary "$GITHUB_STEP_SUMMARY" --json > deps.json
+          code=$?
+          set -e
+          node -e "
+            const r = JSON.parse(require('fs').readFileSync('deps.json', 'utf8'));
+            for (const o of r.outdated) console.log('::notice title=Newer library::' + o.name + ' ' + o.current + ' → ' + o.latest + (o.major ? ' (new major version)' : '') + ' — node tools/vendor.mjs update');
+            for (const a of r.advisories) console.log('::error title=' + a.severity + ' advisory in ' + a.package + '::' + a.title + ' ' + a.url + ' (fix: ' + a.fix + ')');
+            for (const p of r.problems) console.log('::error title=vendor/::' + p);
+            for (const a of r.dev || []) console.log('::warning title=dev tool advisory::' + a.package + ': ' + a.title + ' ' + a.url);
+          " || true
+          if [ "$code" = 2 ]; then echo "::warning::npm could not be reached; advisories were not checked"; exit 0; fi
+          exit "$code"
+
+  e2e:
+    name: End-to-end (Chromium, simulated Portal and machine)
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    # informative for now: the suite is timing-sensitive and has so far been run on a developer machine only
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm ci --ignore-scripts
+      - run: npx playwright install --with-deps chromium
+      - run: node tests/e2e-portal.mjs

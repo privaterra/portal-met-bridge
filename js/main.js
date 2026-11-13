@@ -1,21 +1,21 @@
 // main.js — wires the devices, the recorder, storage, charts and export together.
 
-import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.18.0';
-import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, machineBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.18.0';
-import { MachinePanel } from './machine-panel.js?v=0.18.0';
-import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.18.0';
-import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.18.0';
-import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.18.0';
-import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, profileFinalWeight, setBeveragePreference, grindMicrons, measuredEy, DEFAULTS } from './analysis.js?v=0.18.0';
-import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, approxTokens, reviewProfileOf, ratingOf, ratingMaxOf } from './review.js?v=0.18.0';
-import { PROVIDERS, streamCompletion, listModels, testKey, maskKey, maxTokensFor } from './ai.js?v=0.18.0';
-import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.18.0';
-import { makeDemoShot } from './demo.js?v=0.18.0';
-import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug, loadJsPdf } from './export.js?v=0.18.0';
-import { REVIEW_FORMATS, reviewFile, reviewMarkdownFile } from './review-export.js?v=0.18.0';
-import { log, formatLine } from './log.js?v=0.18.0';
-import { files, Files, FILE_KINDS, DEFAULT_ROOT, cleanDirName } from './files.js?v=0.18.0';
-import { HeatMonitor, HEAT_RULES, HEAT_SENSORS, sensorTemp } from './heat.js?v=0.18.0';
+import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.19.0';
+import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, machineBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.19.0';
+import { MachinePanel } from './machine-panel.js?v=0.19.0';
+import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.19.0';
+import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.19.0';
+import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.19.0';
+import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, profileFinalWeight, setBeveragePreference, grindMicrons, measuredEy, DEFAULTS } from './analysis.js?v=0.19.0';
+import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, approxTokens, reviewProfileOf, ratingOf, ratingMaxOf } from './review.js?v=0.19.0';
+import { PROVIDERS, streamCompletion, listModels, testKey, maskKey, maxTokensFor, endpointRisk } from './ai.js?v=0.19.0';
+import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.19.0';
+import { makeDemoShot } from './demo.js?v=0.19.0';
+import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug, loadJsPdf } from './export.js?v=0.19.0';
+import { REVIEW_FORMATS, reviewFile, reviewMarkdownFile } from './review-export.js?v=0.19.0';
+import { log, formatLine } from './log.js?v=0.19.0';
+import { files, Files, FILE_KINDS, DEFAULT_ROOT, cleanDirName } from './files.js?v=0.19.0';
+import { HeatMonitor, HEAT_RULES, HEAT_SENSORS, sensorTemp } from './heat.js?v=0.19.0';
 import qrcode from '../vendor/qrcode.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -274,9 +274,17 @@ function settingsDocument() {
 async function importSettingsDocument(doc) {
   if (!doc || doc.app !== 'portal-met-bridge-settings' || typeof doc.settings !== 'object') throw new Error('Not a portal-met-bridge settings file.');
   let n = 0;
+  const held = []; // settings a file may not change on its own
   for (const [key, spec] of Object.entries(SETTINGS)) {
     if (!(key in doc.settings)) continue;
+    if (spec.secret) continue; // keys are never read from a file either
     let v = doc.settings[key];
+    // The OpenAI-compatible endpoint is where the stored API key is sent. A settings file from
+    // someone else must not be able to repoint it, so a different endpoint is left for the user to type.
+    if (key === 'aiBaseOpenai' && String(v ?? '').trim() !== String(settings.aiBaseOpenai ?? '').trim()) {
+      if (String(v ?? '').trim()) held.push(String(v).trim().slice(0, 200));
+      continue;
+    }
     if (spec.bool) v = !!v;
     else if (spec.num) {
       v = Number(v);
@@ -295,6 +303,7 @@ async function importSettingsDocument(doc) {
     writeContext(doc.context);
     await store.setSetting('context', readContext());
   }
+  importSettingsDocument.held = held;
   return n;
 }
 
@@ -424,8 +433,8 @@ async function init() {
   await probeAppServer().catch(() => {});
   renderMachineVia();
   renderLogStatus();
-  $('about-version').textContent = 'v0.18.0';
-  log.info('app', `portal-met-bridge v0.18.0 started · ${navigator.userAgent}`);
+  $('about-version').textContent = 'v0.19.0';
+  log.info('app', `portal-met-bridge v0.19.0 started · ${navigator.userAgent}`);
 
   const env = await environmentCheck();
   renderPortalSteps({ secure: env.secure, api: env.api, adapter: env.adapter });
@@ -1288,10 +1297,10 @@ function renderHistory() {
     const inOut = `${c.doseG ? fmt(Number(c.doseG), 1) : '–'} → ${Number.isFinite(bev) ? `${fmt(bev, 1)} g${beverageMarker(s)}` : `<button class="linkish weigh" data-act="weigh" title="Final weight not entered yet — type it">? g</button>`}`;
     const grind = grindMicrons(c);
     const data = [
-      `<span class="tag ${s.portal?.length ? 'on' : 'off'}" title="Portal samples">P ${s.portal?.length || 0}</span>`,
-      `<span class="tag ${s.machine?.length ? 'on' : 'off'}" title="machine samples">M ${s.machine?.length || 0}</span>`,
+      `<span class="tag ${s.portal?.length ? 'on' : 'off'}" title="Portal samples">P ${Number(s.portal?.length) || 0}</span>`,
+      `<span class="tag ${s.machine?.length ? 'on' : 'off'}" title="machine samples">M ${Number(s.machine?.length) || 0}</span>`,
       s.inProgress ? '<span class="tag rec">● recording</span>' : `<span class="tag ${s.machineSource ? 'on' : 'off'}" title="${s.machineSource ? 'machine record attached' : 'machine record not attached'}">⌂</span>`,
-      s.inProgress ? '' : `<span class="tag ${s.files?.json ? 'on' : 'off'}" title="${s.files?.json ? 'JSON + CSV in the save folder: ' + s.files.json : 'files not written to a folder'}">▤</span>`,
+      s.inProgress ? '' : `<span class="tag ${s.files?.json ? 'on' : 'off'}" title="${s.files?.json ? esc('JSON + CSV in the save folder: ' + s.files.json) : 'files not written to a folder'}">▤</span>`,
       s.source === 'demo' ? '<span class="tag off">demo</span>' : '',
       s.recovered ? '<span class="tag off" title="recovered from a checkpoint after the tab closed mid-shot">recovered</span>' : '',
     ].join('');
@@ -1496,7 +1505,7 @@ async function renderCompare() {
   legend.innerHTML = `<thead><tr><th></th><th>Shot</th><th>Coffee</th><th>Profile</th><th class="num">In → out</th><th class="num">Ratio</th><th class="num">Time</th><th class="num">Peak EC</th><th class="num">EC/g</th><th class="num">TDS</th><th></th></tr></thead>` +
     '<tbody>' + rows.map(({ shot, color, analysis, note, tds }) => {
       const c = shot.context || {};
-      return `<tr data-id="${shot.id}" class="${note ? 'excluded' : ''}">` +
+      return `<tr data-id="${esc(shot.id)}" class="${note ? 'excluded' : ''}">` +
         `<td><span class="swatch" style="background:${color}"></span></td>` +
         `<td>${esc(fmtDate(shot.startedAt))}</td>` +
         `<td class="coffee">${esc([c.beanName, c.roaster].filter(Boolean).join(' · ') || '–')}${note ? `<br><small>${esc(note)}</small>` : ''}</td>` +
@@ -3124,8 +3133,9 @@ $('settings-import').addEventListener('change', async (e) => {
   if (!file) return;
   try {
     const n = await importSettingsDocument(JSON.parse(await file.text()));
-    toast(`Imported ${n} settings.`);
-    log.info('settings', `imported ${n} settings from ${file.name}`);
+    const held = importSettingsDocument.held || [];
+    toast(held.length ? `Imported ${n} settings. The OpenAI-compatible endpoint in the file (${held[0]}) was not applied — your API key is sent there, so type it under AI review yourself if you trust it.` : `Imported ${n} settings.`, held.length ? 'warn' : undefined);
+    log.info('settings', `imported ${n} settings from ${file.name}${held.length ? '; endpoint left unchanged' : ''}`);
   } catch (err) {
     toast(err.message || String(err), 'error');
   }
@@ -3277,6 +3287,7 @@ async function restoreBackup(json, label) {
   await refreshBeanLists();
   await refreshShotList();
   renderBeans();
+  await renderSavedReviews(); // a backup carries reviews too; without this they appeared only after a reload
   toast(`Restored ${n} shots from ${label}.`);
   $('backup-note').textContent = `Restored ${n} shots from ${label}.`;
 }
@@ -3467,6 +3478,7 @@ function renderAiSettings() {
   const note = key ? `${label} · ${model}${baseUrl ? ` · ${baseUrl.replace(/^https?:\/\//, '')}` : ''} · key ${maskKey(key)}` : `${label} · no API key yet`;
   setText('set-ai-note', note);
   setText('an-provider-note', note);
+  renderEndpointNote();
   const run = $('an-run');
   if (run) {
     run.textContent = `Review with ${label.replace(/ \(.*\)$/, '')}`;
@@ -3482,6 +3494,17 @@ document.querySelectorAll('button.reveal').forEach((b) =>
     b.textContent = input.type === 'password' ? 'Show' : 'Hide';
   }),
 );
+
+/** Says, under the custom endpoint, where the key will go and warns when that is an unencrypted address on the internet. */
+function renderEndpointNote() {
+  const el = $('set-ai-base-note');
+  if (!el) return;
+  const v = $('set-ai-base-openai').value.trim();
+  const risk = endpointRisk(v);
+  el.dataset.level = risk ? 'bad' : '';
+  el.textContent = !v ? '' : risk === 'invalid' ? 'Not a web address — it must start with https:// (or http:// for a server on this computer or your network).' : risk === 'insecure' ? 'This address is plain http on the internet: the API key and your shot data would travel unencrypted. Use https.' : `Your API key and each review request are sent to ${new URL(v).host}.`;
+}
+$('set-ai-base-openai').addEventListener('input', renderEndpointNote);
 
 /** The key/model typed right now (unsaved edits count), so Test and List work before Save. */
 function aiConfigFromInputs() {
@@ -3558,7 +3581,7 @@ function renderAnalysisList() {
     .map((s) => {
       const on = an.ids.includes(s.id);
       const c = s.context || {};
-      const tags = [s.portal?.length ? `P ${s.portal.length}` : 'no Portal', s.machineShotId ? 'record' : 'live', c.grindSize ? `${esc(c.grindSize)}` : ''].filter(Boolean);
+      const tags = [s.portal?.length ? `P ${Number(s.portal.length) || 0}` : 'no Portal', s.machineShotId ? 'record' : 'live', c.grindSize ? `${esc(c.grindSize)}` : ''].filter(Boolean);
       return `<li class="${on ? 'on' : ''}"><label><input type="checkbox" data-id="${esc(s.id)}" ${on ? 'checked' : ''} /> <span class="when">${esc(fmtDate(s.startedAt))}</span> <span class="what">${esc(c.beanName || 'unnamed coffee')} <small>${esc(s.profileName || '')}</small></span> <span class="tags">${ratingsOn() ? starsHtml(s, { compact: true }) : ''}${tags.map((t) => `<span class="tag">${t}</span>`).join('')}</span></label></li>`;
     })
     .join('');
@@ -3855,7 +3878,7 @@ function renderAnalysisDigest() {
   $('an-digest').innerHTML = items
     .map(({ shot, digest }) => {
       const m = digest.meta;
-      const head = `<h3>${esc(shotLabel(shot))}</h3><p class="hint">${[m.profile ? `${m.profile}${shot.reviewProfile ? ' (profile chosen for this review)' : m.recordedProfile === undefined && !shot.machineSource?.profile ? ' (name only)' : ''}` : 'profile unknown', m.grindUm ? `${fmt(m.grindUm, 0)} µm` : 'no grind recorded', m.doseG ? `${fmt(m.doseG, 1)} g in` : 'no dose', `${fmt(m.beverageG, 1)} g out (${m.beverageSource === 'profile' ? 'profile target' : m.beverageSource === 'weighed' ? 'weighed' : 'scale'})`, m.ratio ? `1 : ${fmt(m.ratio, 2)}` : null, `${fmt(m.durationSec, 1)} s`, m.profileTargetG ? `target ${fmt(m.profileTargetG, 1)} g` : null, m.profileTemperatureC ? `setpoint ${fmt(m.profileTemperatureC, 0)} °C` : null, digest.ec ? `mean EC/g ${fmt(digest.ec.meanEcPerG, 3)}` : null, m.rating ? `rated ${m.rating}/${m.ratingMax || 5}` : 'not rated'].filter(Boolean).join(' · ')}${m.comment ? `<br><em>“${esc(m.comment)}”</em>` : ''}</p>`;
+      const head = `<h3>${esc(shotLabel(shot))}</h3><p class="hint">${[m.profile ? `${esc(m.profile)}${shot.reviewProfile ? ' (profile chosen for this review)' : m.recordedProfile === undefined && !shot.machineSource?.profile ? ' (name only)' : ''}` : 'profile unknown', m.grindUm ? `${fmt(m.grindUm, 0)} µm` : 'no grind recorded', m.doseG ? `${fmt(m.doseG, 1)} g in` : 'no dose', `${fmt(m.beverageG, 1)} g out (${m.beverageSource === 'profile' ? 'profile target' : m.beverageSource === 'weighed' ? 'weighed' : 'scale'})`, m.ratio ? `1 : ${fmt(m.ratio, 2)}` : null, `${fmt(m.durationSec, 1)} s`, m.profileTargetG ? `target ${fmt(m.profileTargetG, 1)} g` : null, m.profileTemperatureC ? `setpoint ${fmt(m.profileTemperatureC, 0)} °C` : null, digest.ec ? `mean EC/g ${fmt(digest.ec.meanEcPerG, 3)}` : null, m.rating ? `rated ${Number(m.rating) || 0}/${Number(m.ratingMax) || 5}` : 'not rated'].filter(Boolean).join(' · ')}${m.comment ? `<br><em>“${esc(m.comment)}”</em>` : ''}</p>`;
       const gaps = digest.gaps.length ? `<ul class="gaps">${digest.gaps.map((g) => `<li>${esc(g)}</li>`).join('')}</ul>` : '';
       return `<div class="an-shot">${head}${gaps}${stageTable(digest)}</div>`;
     })

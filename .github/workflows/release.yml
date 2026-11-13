@@ -21,8 +21,9 @@ on:
         required: false
         default: ''
 
+# The token is read-only by default; only the job that creates the release may write.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   test:
@@ -32,21 +33,50 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: 24
       - run: node tests/run.mjs
 
-  macos:
-    name: macOS app
-    needs: test
-    runs-on: macos-latest
-    env:
-      HAVE_CERT: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
+  # A release is not built on a library with a known serious hole: the versions in
+  # vendor/manifest.json are checked against the advisory database first (docs/SECURITY.md).
+  # An advisory that does not apply is recorded in vendor/advisories-accepted.json.
+  dependencies:
+    name: Libraries and security advisories
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Vendored files, newer versions, advisories
+        run: |
+          if [ ! -f tools/vendor.mjs ]; then echo "this tag predates tools/vendor.mjs — nothing to check"; exit 0; fi
+          set +e
+          node tools/vendor.mjs check --level high --summary "$GITHUB_STEP_SUMMARY"
+          code=$?
+          set -e
+          if [ "$code" = 2 ]; then echo "::warning::npm could not be reached, so advisories were not checked for this build"; exit 0; fi
+          if [ "$code" != 0 ]; then echo "::error::a shipped library has a high or critical advisory (or a vendored file is not what the manifest says) — run: node tools/vendor.mjs update, test, and release the next version"; exit 1; fi
+
+  macos:
+    name: macOS app
+    needs: [test, dependencies]
+    runs-on: macos-latest
+    permissions:
+      contents: write # creates the draft release and uploads its files
+    env:
+      HAVE_CERT: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
+      TAG: ${{ inputs.tag || github.ref_name }} # read in the scripts as "$TAG", never pasted into them
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -54,8 +84,8 @@ jobs:
       - name: Check the tag matches package.json
         if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
         run: |
-          tag="${{ inputs.tag || github.ref_name }}"
-          version="$(node -p "require('./package.json').version")"
+          tag="$TAG"
+          version=""$(node -p "require('./package.json').version")"
           if [ "v$version" != "$tag" ]; then echo "tag $tag but package.json says $version — run: node tools/bump-version.mjs ${tag#v}"; exit 1; fi
 
       - name: Build the app (bundling Node for arm64 and x64)
@@ -154,7 +184,7 @@ jobs:
         id: notes
         run: |
           version="$(node -p "require('./package.json').version")"
-          tag="${{ inputs.tag || github.ref_name }}"
+          tag="$TAG"
           # 0.x and anything with a suffix (v1.0.0-rc.1) is a pre-release; the title says so
           if [[ "$version" == 0.* || "$tag" == *-* ]]; then pre=true; title="portal-met-bridge $version (alpha)"; else pre=false; title="portal-met-bridge $version"; fi
           echo "prerelease=$pre" >> "$GITHUB_OUTPUT"
@@ -165,21 +195,31 @@ jobs:
             echo
             echo "**Portal Met Bridge.app** (zip or dmg): unzip, move to Applications, open. On first launch macOS may ask you to confirm an app from an unidentified developer: right-click → Open, or System Settings → Privacy & Security → Open Anyway. Node is bundled; Chrome or Edge is needed for the Portal's Bluetooth link."
             echo
-            echo "**Home Assistant (Raspberry Pi 5)**: Settings → Apps → Install app → ⋮ → Repositories → add \`https://github.com/${{ github.repository }}\`. See docs/PACKAGING.md."
+            echo "**Home Assistant (Raspberry Pi 5)**: Settings → Apps → Install app → ⋮ → Repositories → add \`https://github.com/$GITHUB_REPOSITORY\`. See docs/PACKAGING.md."
             echo
             echo "**Source**: unzip and run \`start.command\` (macOS) or \`node serve.mjs\`."
             echo
             echo "Changes are listed in README.md (Prompt history) and docs/NOTES.md."
           } > notes.md
 
-      - uses: softprops/action-gh-release@v3
+      # The release is made with the GitHub CLI that ships on the runner, so no third-party
+      # action ever holds the write token. A tag that already has a release (a re-run) gets
+      # its files replaced and keeps its title, notes and state.
+      - name: Draft release with the files
         if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
-        with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
-          name: ${{ steps.notes.outputs.title }}
-          body_path: notes.md
-          draft: true
-          prerelease: ${{ steps.notes.outputs.prerelease == 'true' }}
-          files: |
-            dist/*.zip
-            dist/*.dmg
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TITLE: ${{ steps.notes.outputs.title }}
+          PRERELEASE: ${{ steps.notes.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG exists: replacing its files"
+            gh release upload "$TAG" dist/*.zip dist/*.dmg --clobber
+          else
+            flags=(--draft --verify-tag --title "$TITLE" --notes-file notes.md)
+            if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
+            gh release create "$TAG" "${flags[@]}" dist/*.zip dist/*.dmg
+          fi
+          gh release view "$TAG" --json url,isDraft,isPrerelease,assets --jq '"\(.url)  draft=\(.isDraft) prerelease=\(.isPrerelease)  " + ([.assets[].name] | join(", "))' || true

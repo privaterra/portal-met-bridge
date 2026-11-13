@@ -47,6 +47,7 @@ The page's **Stop** button (top right) finishes a recording, writes pending file
 | `data_dir` | `/share/portal-met-bridge` | Where the app's files go. `/share` is visible to the Samba and File editor apps; `/share/portal-met-bridge/{shots,exports,reports,reviews,backups,logs}/` is the layout (the names are settings in the page; the page's root folder is not repeated because the data folder already bears its name). |
 | `ssl` | `self-signed` | `self-signed`: https on 8788 with a certificate this app makes (trust it once, above). `home-assistant`: https on 8788 with Home Assistant's own certificate from `/ssl` (`certfile`, `keyfile`). `off`: http only. |
 | `certfile`, `keyfile` | `fullchain.pem`, `privkey.pem` | The files under `/ssl` used when `ssl` is `home-assistant`. |
+| `allowed_hosts` | *(empty)* | Extra names the app answers to. Leave it empty unless you open the page by a public name (DuckDNS, a reverse proxy, a `.ts.net` name): addresses, `homeassistant`, `homeassistant.local` and the certificate's names always work. Any other name gets *421 — this server does not answer to the name …*. |
 | `log_level` | `info` | How much the app logs to the Home Assistant log (the app's own debug log is separate, under Settings → Logging and debug in the page). |
 
 In the page, Settings → **Files and folders** shows the destination: *the data folder of the server* is preselected when no folder was picked in Chrome. You can still pick a folder on your own computer instead; then the Pi keeps only the page.
@@ -61,7 +62,13 @@ The app's files are not part of Home Assistant backups unless `/share` is includ
 
 When a new version is published, the store shows an **Update** button; the image is rebuilt from the matching release tag. Your files in `/share`, the certificate in the app's `/data`, and the page's database in your browser are untouched.
 
+## Security
+
+The app has no login: like the espresso machine's own API, anyone on your network can open it, so do not forward ports 8787/8788 to the internet (use Home Assistant's own remote access, or a VPN, to reach the Pi from outside). Two things changed in 0.19. A website you happen to visit can no longer talk to the app behind your back — requests a browser marks as coming from another site are refused, and the app answers only to names that cannot be pointed at your LAN from outside (see `allowed_hosts`). And the container updates its Alpine packages on every build. The repository's SECURITY.md has the details and how to report a problem.
+
 ## Troubleshooting
+
+- **The page shows "421 — this server does not answer to the name …"** — it was opened by a name the app does not know. Use `http://homeassistant.local:8787`, the Pi's address, or add the name to the `allowed_hosts` option and restart the app.
 
 - **"Open page in your Home Assistant" says refused to connect** — that button lives on my.home-assistant.io, which remembers *your* instance address in your browser; it defaults to `http://homeassistant.local:8123`. Press *change* on that page and enter the address you actually use (with its port, and https if that is how you reach Home Assistant), or skip the button and add the repository URL by hand (Install, step 1).
 - **Connect over Bluetooth is disabled** — the page is on plain http from a LAN address. Use the https address after trusting the certificate, or the Chrome flag, exactly as the note under the button says. After trusting the certificate Chrome must be quit and reopened; and the name in the address bar must be one the certificate covers.

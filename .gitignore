@@ -4,3 +4,4 @@ node_modules/
 
 # tools/package-macos.sh output
 dist/
+deps.json

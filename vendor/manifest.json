@@ -1,0 +1,80 @@
+{
+  "about": "What is in vendor/: each library, its version, the file it was copied from inside its npm package and that file's SHA-256. Written by tools/vendor.mjs (update); checked by `node tools/vendor.mjs verify` and by the unit tests. Do not edit by hand.",
+  "packages": {
+    "uplot": {
+      "label": "uPlot",
+      "version": "1.6.32",
+      "license": "MIT",
+      "use": "the charts (js/charts.js, js/machine-panel.js)",
+      "licenseFile": "LICENSE-uPlot",
+      "files": [
+        {
+          "from": "dist/uPlot.esm.js",
+          "to": "uPlot.esm.js",
+          "sha256": "5dd9b3281aa64b461b42d9945f6adb2649d346502b12281a9ae0d46599a80eba"
+        },
+        {
+          "from": "dist/uPlot.min.css",
+          "to": "uPlot.min.css",
+          "sha256": "df630c6a8d6f8eeaff264b50f73ce5b114f646ffd9a0bb74f049b0a00135fa04"
+        }
+      ]
+    },
+    "socket.io-client": {
+      "label": "socket.io-client",
+      "version": "4.8.4",
+      "license": "MIT",
+      "use": "the machine's live status stream (js/meticulous.js)",
+      "licenseFile": "LICENSE-socket.io-client",
+      "files": [
+        {
+          "from": "dist/socket.io.esm.min.js",
+          "to": "socket.io.esm.min.js",
+          "sha256": "771c3872e7d9bf81020615fda67ef0fd2aa61fcaf1990100714a46fa2c39f8a1"
+        }
+      ]
+    },
+    "qrcode-generator": {
+      "label": "qrcode-generator",
+      "version": "2.0.4",
+      "license": "MIT",
+      "use": "the Beanconqueror QR code (js/main.js); its license is in the file header",
+      "files": [
+        {
+          "from": "dist/qrcode.mjs",
+          "to": "qrcode.mjs",
+          "sha256": "ea91d7118a5395289170da848b7c6758b996163bfbccf312591ab65a4911b7c0"
+        }
+      ]
+    },
+    "jspdf": {
+      "label": "jsPDF",
+      "version": "4.2.1",
+      "license": "MIT",
+      "use": "PDF reports and reviews (js/export.js, js/review-export.js), loaded only when a PDF is asked for",
+      "licenseFile": "LICENSE-jsPDF",
+      "files": [
+        {
+          "from": "dist/jspdf.umd.min.js",
+          "to": "jspdf.umd.min.js",
+          "sha256": "e6551fcdc32f09d6853b2c5126d18d01d9447e0da618a41a11ebeee0f6c20d54"
+        }
+      ],
+      "integrity": "sha512-YyAXyvnmjTbR4bHQRLzex3CuINCDlQnBqoSYyjJwTP2x9jDLuKDzy7aKUl0hgx3uhcl7xzg32agn5vlie6HIlQ=="
+    },
+    "fflate": {
+      "label": "fflate",
+      "version": "0.8.3",
+      "license": "MIT",
+      "use": "zip exports and .docx reviews (js/export.js, js/review-export.js)",
+      "licenseFile": "LICENSE-fflate",
+      "files": [
+        {
+          "from": "esm/browser.js",
+          "to": "fflate.esm.js",
+          "sha256": "b7ca4450b19559a1d50eb381adcee94b82449674be4cd17789d9beba7e6122a1"
+        }
+      ]
+    }
+  }
+}

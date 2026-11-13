@@ -1223,6 +1223,18 @@ await test('dependencies (v0.19): vendor/ is exactly what vendor/manifest.json s
   const releaseYml = readFileSync(new URL('release.yml', dir), 'utf8');
   assert.match(releaseYml, /runs-on: \$\{\{ inputs\.runner \|\| 'macos-latest' \}\}/, 'the macOS job runs on the chosen runner, macos-latest by default');
   assert.match(releaseYml, /options: \[macos-latest, macos-26-intel, macos-15-intel\]/, 'an Intel runner can be chosen by hand');
+  // …and falls back to the other pool by itself when the first job never met a runner (v0.19.0 and v0.19.1 both did not)
+  assert.match(releaseYml, /outputs:\n\s+started: \$\{\{ steps\.started\.outputs\.started \}\}/, 'the macOS job reports that a runner started it');
+  assert.match(releaseYml, /steps: &macos_steps\n\s+- name: A runner picked this job up\n\s+id: started\n\s+run: echo "started=true" >> "\$GITHUB_OUTPUT"/, 'its first step sets the marker');
+  const otherPool = releaseYml.slice(releaseYml.indexOf('\n  macos-other-pool:'));
+  assert.ok(otherPool.length > 100 && /needs: \[test, dependencies, macos\]/.test(otherPool), 'a second job waits for the first');
+  assert.match(otherPool, /if: \$\{\{ always\(\) && needs\.test\.result == 'success' && needs\.dependencies\.result == 'success' && needs\.macos\.result != 'success' && needs\.macos\.result != 'skipped' && needs\.macos\.outputs\.started != 'true' \}\}/, 'it runs only when the first never started');
+  assert.match(otherPool, /runs-on: \$\{\{ endsWith\(inputs\.runner, '-intel'\) && 'macos-latest' \|\| 'macos-26-intel' \}\}/, 'on the other runner pool');
+  assert.match(otherPool, /env: \*macos_env\n\s+steps: \*macos_steps\n/, 'with the same steps');
+  assert.ok(!/^\s*<<:/m.test(releaseYml), 'no YAML merge keys: Actions does not support them');
+  assert.match(releaseYml, /name: macos-\$\{\{ runner\.arch \}\}/, 'each job uploads its artifact under its own name');
+  assert.match(releaseYml, /contents\/docs\/releases\/\$tag\.md\?ref=\$GITHUB_SHA/, 'release notes come from the commit the workflow runs from');
+  assert.match(releaseYml, /isDraft[^\n]*\n[^\n]*\n\s+gh release edit "\$TAG" --title "\$TITLE" --notes-file notes\.md/, 'a draft gets its notes refreshed on a re-run');
   // upstream projects: commits since the last review are listed, with the file to read them against
   const { sourcesReport, sourcesMarkdown, loadSources } = await import('../tools/vendor.mjs');
   const asked = [];

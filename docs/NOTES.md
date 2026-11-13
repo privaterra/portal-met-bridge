@@ -69,6 +69,21 @@ Run 43475250954 ended red with *macOS app* cancelled and no steps: GitHub never 
 - No new version: a run started by hand uses the workflow from `main` and checks out the tag, so *Run workflow* → tag `v0.19.0` releases the tag as it is. Only a fault in files the tag itself runs (`tools/…`) needs a new tag.
 - The steps that can run on Linux were run as written from the fixed file (tag check with a right and a wrong tag, the advisory gate, the notes step, the source archive, the weekly workflow's issue writer).
 
+## The v0.19.1 release run, and a second runner pool (13 Nov 2026)
+
+0.19.1 (the same app, version bumped, with the fixed workflow) was tagged an hour after 0.19.0 and its run 43482907197 ended the same way: *macOS app* queued 15 minutes on `macos-latest`, never acquired, cancelled. The release was then built by hand — *Run workflow* from `main`, tag `v0.19.1`, runner `macos-26-intel` (run 43486568288): the Intel runner took the job within seconds and every step passed, which is also the first proof of the by-hand path with a tag, the fixed tag check, the `gh release create` step and the build on an Intel runner.
+
+What changed in `release.yml` so that this needs no hand:
+
+- `macos` marks itself in its first step (`outputs.started`). A new job `macos-other-pool` needs it and runs `if: always() && tests and library check succeeded && needs.macos.result != 'success' && != 'skipped' && needs.macos.outputs.started != 'true'` — i.e. only when the first job produced nothing because no runner ever ran it — on the other pool (`macos-26-intel`, or `macos-latest` when an Intel runner was chosen by hand). A build that started and failed is not repeated: another CPU would fail the same way.
+- Both jobs share one list of steps through a YAML anchor (`steps: &macos_steps` / `steps: *macos_steps`, likewise `env`) — supported by Actions since September 2025; merge keys (`<<:`) are not, and none is used. `actionlint` 1.7.12 accepts it.
+- `always()` rather than `!cancelled()`: whether a job GitHub gives up on counts as a cancelled *run* is not documented, and a fallback that silently does not run is the worse mistake. The price: cancelling a run by hand while the first job is still queued starts the second job; cancel again.
+- Not solved: the run's own conclusion. A cancelled job makes the run red and sends the *Run failed* mail even when the second job made the release. Making the first job `continue-on-error` would turn real failures green; a red run with a green last job was preferred. RELEASING.md step 5 says where to look.
+- The artifact is named per runner architecture (`macos-ARM64` / `macos-X64`), so two jobs in one run cannot collide.
+- Notes: `docs/releases/<tag>.md` is read through the API at the commit the workflow runs from (`GITHUB_SHA`: the tag for a push, the branch for a run by hand), then from the checkout, then the stub; and a re-run refreshes the title and notes of a release that is still a draft. The 0.19.1 tag's own notes named the 0.19.0 files; the draft was corrected by hand.
+
+Untestable from here, and so still unproven: that `needs.macos.outputs.started` is empty and the condition true when GitHub never assigns a runner. If it is not, the by-hand run with the runner choice remains.
+
 ## Security review, tracked libraries, upstream watch (v0.19)
 
 **The model.** No accounts; the server is the only thing with authority (it writes files under `DATA_DIR`, relays to the machine, can stop itself). So everything hangs on *who can make the browser send it a request*. Before 0.19 the answer was "any web page": `fetch('http://localhost:8787/api/quit', {method:'POST', mode:'no-cors'})` from any site stopped it, and `machine/<ip>:80/api/v1/action/start` through the relay started a brew. Two checks in `refusal(req)` close that, on every `api/`, `machine/` and upgrade request:

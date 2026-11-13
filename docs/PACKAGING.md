@@ -7,7 +7,7 @@ portal-met-bridge is a static web page plus a 150-line Node server (`serve.mjs`)
 | **Portal Met Bridge.app** (macOS) | A double-clickable app bundle: a launcher script, the page, and a bundled Node runtime for Apple silicon and Intel. It serves `http://localhost:8787`, keeps the files in `~/Documents/portal-met-bridge`, and opens Chrome. | `.github/workflows/release.yml` on a macOS runner, from `tools/package-macos.sh` | A GitHub **Release**, as a `.zip` and a `.dmg` |
 | **Home Assistant app** (Raspberry Pi 5 and any other Home Assistant machine) | A container that runs the server on the Pi with `HOST=0.0.0.0` and keeps the files in `/share/portal-met-bridge`. | The Pi itself, from `homeassistant/portal_met_bridge/Dockerfile`; optionally `.github/workflows/ha-app.yml` publishes a prebuilt image to GHCR | The **app store** of any Home Assistant that has added this repository |
 
-Both packages are tied to a **version tag** (`v0.14.0`): the release workflow builds the tag it was pushed for, and the Home Assistant Dockerfile downloads the source of the tag that matches its `config.yaml` version. So every release is the same three steps, below, and the rest of this document explains what each package does with them.
+Both packages are tied to a **version tag** (`v0.19.1`): the release workflow builds the tag it was pushed for, and the Home Assistant Dockerfile downloads the source of the tag that matches its `config.yaml` version. So every release is the same three steps, below, and the rest of this document explains what each package does with them.
 
 Home Assistant renamed add-ons to **apps** in 2026; the files and the UI paths here follow the current [contributor documentation](https://contributors.home-assistant.io/apps/). Older guides that say "add-on", `build.yaml` or `{arch}` images still work but are deprecated.
 
@@ -17,17 +17,17 @@ The step-by-step walkthrough — including watching the workflow, publishing the
 
 ```sh
 cd ~/Sites/portal-met-bridge
-node tools/bump-version.mjs 0.14.0      # package.json, cache-busting stamps, About line, and the Home Assistant config.yaml
+node tools/bump-version.mjs 0.19.1      # package.json, cache-busting stamps, About line, and the Home Assistant config.yaml
 node tests/run.mjs                      # the version test fails if anything disagrees
-git commit -am "v0.14.0: …"
+git commit -am "v0.19.1: …"
 tools/publish.sh                        # sign the commit and push main (as for every delivery)
-tools/tag-release.sh                    # create the signed tag v0.14.0 and push it
+tools/tag-release.sh                    # create the signed tag v0.19.1 and push it
 ```
 
 Pushing the tag does two things:
 
-1. GitHub runs **Release** (Actions tab). It builds the macOS app, attaches `portal-met-bridge-0.14.0-macos.zip`, `…-macos.dmg` and `…-source.zip` to a **draft** release. Its notes come from `docs/releases/<tag>.md` when that file exists (write it before tagging — `docs/releases/v0.15.0.md` is the first; the title then follows the pattern *portal-met-bridge 0.15.0 (alpha)*), otherwise from a short generated stub. Versions below 1.0, and any tag with a suffix such as `v1.0.0-rc.1`, are marked **pre-release**. Open github.com/privaterra/portal-met-bridge/releases, read the draft, edit the notes if you like, and press **Publish release**.
-2. Home Assistant machines that have the repository added see version 0.14.0 in the store, with an **Update** button for anyone who already has it installed, because the Supervisor reads `homeassistant/portal_met_bridge/config.yaml` from the repository's default branch and builds the image from the tag with the same number.
+1. GitHub runs **Release** (Actions tab). It builds the macOS app, attaches `portal-met-bridge-0.19.1-macos.zip`, `…-macos.dmg` and `…-source.zip` to a **draft** release. Its notes come from `docs/releases/<tag>.md` when that file exists (write it before tagging — `docs/releases/v0.15.0.md` is the first; the title then follows the pattern *portal-met-bridge 0.15.0 (alpha)*), otherwise from a short generated stub. Versions below 1.0, and any tag with a suffix such as `v1.0.0-rc.1`, are marked **pre-release**. Open github.com/privaterra/portal-met-bridge/releases, read the draft, edit the notes if you like, and press **Publish release**.
+2. Home Assistant machines that have the repository added see version 0.19.1 in the store, with an **Update** button for anyone who already has it installed, because the Supervisor reads `homeassistant/portal_met_bridge/config.yaml` from the repository's default branch and builds the image from the tag with the same number.
 
 Publishing the release also runs **Home Assistant app image** (`ha-app.yml`), which pushes a prebuilt image to GHCR. That image is only used once `image:` is uncommented in `config.yaml` (section 3.4); until then the workflow is a build check.
 
@@ -43,7 +43,7 @@ To build a package without a release (to try it): Actions → Release → *Run w
 
 ### 2.1 What the user gets
 
-`portal-met-bridge-0.14.0-macos.zip` unzips to **Portal Met Bridge.app**. Dragged into Applications and opened, it:
+`portal-met-bridge-0.19.1-macos.zip` unzips to **Portal Met Bridge.app**. Dragged into Applications and opened, it:
 
 1. starts `serve.mjs` with the bundled Node on `http://localhost:8787`, with `DATA_DIR=~/Documents/portal-met-bridge` so the page's Settings → Files and folders offers *the data folder of the server* and preselects it when no folder was picked in Chrome — the files appear in Documents without the folder-picker prompt Chrome otherwise repeats after every restart;
 2. opens the page in Google Chrome (or Microsoft Edge, or the default browser — only Chrome and Edge can reach the Portal over Bluetooth);
@@ -88,7 +88,7 @@ tools/package-macos.sh                          # smaller: no Node bundled, the 
 tools/package-macos.sh --out dist --no-zip      # only the .app
 ```
 
-The workflow (`release.yml`) runs the unit tests on Linux, then on `macos-latest`: checks the tag against `package.json`, runs the script with `--download-node`, signs and notarizes when the secrets exist, zips with `ditto` (which keeps the executable bits and resource forks that `zip` loses), makes the `.dmg` with `hdiutil` (and signs, notarizes and staples it too when the secrets exist), adds a source archive, and hands everything to `softprops/action-gh-release` as a **draft** release named `portal-met-bridge v0.14.0` with generated notes. A draft is visible only to people with write access to the repository; you read it at github.com/privaterra/portal-met-bridge/releases, edit the notes if you want, and press **Publish release** — that is the moment the assets become public, and the moment the *Home Assistant app image* workflow runs (it listens for `release: published`).
+The workflow (`release.yml`) runs the unit tests and the library check on Linux, then on `macos-latest` (or, when no Apple-silicon runner picks the job up, on `macos-26-intel` — the job *macOS app (other runner pool, …)*; the result is the same universal app): checks the tag against `package.json`, runs the script with `--download-node`, signs and notarizes when the secrets exist, zips with `ditto` (which keeps the executable bits and resource forks that `zip` loses), makes the `.dmg` with `hdiutil` (and signs, notarizes and staples it too when the secrets exist), adds a source archive, and creates a **draft** release with the GitHub CLI (`gh release create --draft`), titled *portal-met-bridge 0.19.1 (alpha)*, with `docs/releases/v0.19.1.md` as its notes. A draft is visible only to people with write access to the repository; you read it at github.com/privaterra/portal-met-bridge/releases, edit the notes if you want, and press **Publish release** — that is the moment the assets become public, and the moment the *Home Assistant app image* workflow runs (it listens for `release: published`).
 
 Try the bundle on a Mac without a release: `tools/package-macos.sh --out /tmp/pmb && open "/tmp/pmb/Portal Met Bridge.app"`.
 
@@ -193,7 +193,7 @@ On any machine with Docker (a Mac with Docker Desktop, or the Pi over SSH):
 
 ```sh
 cd ~/Sites/portal-met-bridge/homeassistant/portal_met_bridge
-docker buildx build --platform linux/arm64 --build-arg BUILD_VERSION=0.14.0 -t pmb-test .   # needs the tag v0.14.0 on GitHub
+docker buildx build --platform linux/arm64 --build-arg BUILD_VERSION=0.19.1 -t pmb-test .   # needs the tag v0.19.1 on GitHub
 docker run --rm -p 8787:8787 -v "$PWD/share:/share" pmb-test                                # http://localhost:8787, files in ./share
 ```
 
@@ -239,12 +239,12 @@ The container is rebuilt from a current Alpine on every install or update (`apk 
 | *Add repository to my Home Assistant* badge → *refused to connect* | The badge on my.home-assistant.io opens the instance address that site has stored in the browser (default `http://homeassistant.local:8123`). Press *change* there and enter the address actually used, or add the repository URL by hand in Settings → Apps → Install app → ⋮ → Repositories. |
 | `tools/tag-release.sh: node: command not found` (or the same from `package-macos.sh`) | Fixed after v0.14.0: both scripts read the version with `sed` and need only git, bash, curl and tar. `node tools/bump-version.mjs` and the tests do need Node: `brew install node`, or, if Homebrew's Node is installed but that shell cannot see it, `export PATH=/opt/homebrew/bin:$PATH` (Intel Macs: `/usr/local/bin`). |
 | Release workflow: `tools/package-macos.sh: line 80: arch: unbound variable` (v0.17.0) | A bug in `unpack_node` — one `local` line read `$arch` before assigning it — that only ran when a Node tarball was bundled, i.e. only on the runner. Fixed in 0.17.1 and covered by a unit test that builds the bundle with stand-in runtimes; the broken tag cannot be rebuilt (RELEASING.md section 5), so the fix shipped as the next version. |
-| Release workflow: *tag v0.14.0 but package.json says 0.13.0* | Bump first, then tag. Delete the tag (`git tag -d v0.14.0 && git push origin :refs/tags/v0.14.0`), fix, retag. |
+| Release workflow: *tag v0.19.1 but package.json says 0.19.0* | Bump first, then tag. Delete the tag (`git tag -d v0.19.1 && git push origin :refs/tags/v0.19.1`), fix, retag. |
 | `tools/tag-release.sh`: *a library in vendor/ has a security advisory* — or the Release workflow's **Libraries and security advisories** job is red | `node tools/vendor.mjs check` names the library, the advisory and the fixed version. `node tools/vendor.mjs update`, run the tests, commit, publish, tag the next patch version. If the advisory does not touch what the app calls, record it in `vendor/advisories-accepted.json` with a reason and an `until` date (SECURITY.md). |
 | The page says *421* / *This server does not answer to the name …* | It was opened by a name the server does not know (a public DNS name, a proxy). Use the address or the `.local` name, or list the name in `ALLOWED_HOSTS` / the Home Assistant option `allowed_hosts` (§3.5). |
 | A script or another web page gets *403 … cross-site request* from `api/` or `machine/` | Since 0.19 the server refuses requests a browser marks as coming from another site. Call it from the page itself, or without a browser (`curl`). |
-| Release workflow: *macOS app* cancelled after ~15 minutes, no log; annotation *The job was not acquired by Runner of type hosted even after multiple attempts* | GitHub had no Apple-silicon runner free. *Re-run failed jobs* later, or Actions → Release → *Run workflow* with the tag and the runner `macos-26-intel` (RELEASING.md §5). |
-| Release workflow (v0.19.0 tag): *Check the tag matches package.json* fails with `unexpected EOF while looking for matching` | One stray quote in that step, in the workflow as tagged. Fixed on `main`: Actions → Release → *Run workflow* → branch `main`, tag `v0.19.0` builds the tag with the fixed workflow. The unit tests now parse every workflow step. |
+| Release workflow: *macOS app* cancelled after ~15 minutes, no log; annotation *The job was not acquired by Runner of type hosted even after multiple attempts* (v0.19.0, v0.19.1) | GitHub had no Apple-silicon runner free. From the release after 0.19.1 the workflow's fourth job builds on an Intel runner by itself; the run stays red but the draft is made. For an older tag: Actions → Release → *Run workflow* with the tag and the runner `macos-26-intel` (RELEASING.md §5). |
+| Release workflow (v0.19.0 tag): *Check the tag matches package.json* fails with `unexpected EOF while looking for matching` | One stray quote in that step, in the workflow as tagged. v0.19.0 has no release; **0.19.1** is the same app with the workflow fixed. The unit tests now parse every workflow step. |
 | Release workflow: 403 on the release step | Settings → Actions → General → Workflow permissions → *Read and write permissions*. |
 | The .app opens Terminal-less and nothing happens | Look at `~/Library/Logs/portal-met-bridge.log`. Usually port 8787 is in use (another copy, or `node serve.mjs` in a Terminal): the launcher then only opens the browser. |
 | Want an Apple-silicon-only download | `tools/package-macos.sh --download-node --arch arm64` → `portal-met-bridge-X.Y.Z-macos-arm64.zip` (about half the size); attach it to the release by hand (RELEASING.md section 4). The workflow's universal zip runs on Apple silicon too. |

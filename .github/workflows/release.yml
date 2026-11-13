@@ -80,10 +80,15 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: write # creates the draft release and uploads its files
-    env:
+    outputs:
+      started: ${{ steps.started.outputs.started }} # empty when no runner ever picked the job up
+    env: &macos_env
       HAVE_CERT: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
       TAG: ${{ inputs.tag || github.ref_name }} # read in the scripts as "$TAG", never pasted into them
-    steps:
+    steps: &macos_steps
+      - name: A runner picked this job up
+        id: started
+        run: echo "started=true" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.ref }}
@@ -185,14 +190,19 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: macos
+          name: macos-${{ runner.arch }} # one name per job: the fallback job below uploads too
           path: |
             dist/*.zip
             dist/*.dmg
 
+      # The notes are docs/releases/<tag>.md as the commit this workflow runs from has it: for a tag
+      # push that is the tag itself; for a run started by hand it is the branch (main), so notes
+      # corrected after tagging are the ones used. Then the tag's own copy, then a generated stub.
       - name: Release notes (docs/releases/<tag>.md when it exists, else a generated stub)
         if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
         id: notes
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           version="$(node -p "require('./package.json').version")"
           tag="$TAG"
@@ -200,7 +210,8 @@ jobs:
           if [[ "$version" == 0.* || "$tag" == *-* ]]; then pre=true; title="portal-met-bridge $version (alpha)"; else pre=false; title="portal-met-bridge $version"; fi
           echo "prerelease=$pre" >> "$GITHUB_OUTPUT"
           echo "title=$title" >> "$GITHUB_OUTPUT"
-          if [ -f "docs/releases/$tag.md" ]; then cp "docs/releases/$tag.md" notes.md; echo "using docs/releases/$tag.md"; exit 0; fi
+          if gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/docs/releases/$tag.md?ref=$GITHUB_SHA" > notes.md 2>/dev/null && [ -s notes.md ]; then echo "using docs/releases/$tag.md at $GITHUB_SHA"; exit 0; fi
+          if [ -f "docs/releases/$tag.md" ]; then cp "docs/releases/$tag.md" notes.md; echo "using docs/releases/$tag.md from the tag"; exit 0; fi
           {
             echo "portal-met-bridge v$version"
             echo
@@ -215,7 +226,8 @@ jobs:
 
       # The release is made with the GitHub CLI that ships on the runner, so no third-party
       # action ever holds the write token. A tag that already has a release (a re-run) gets
-      # its files replaced and keeps its title, notes and state.
+      # its files replaced; while that release is still a draft its title and notes are
+      # refreshed too, and once it is published they are left as you wrote them.
       - name: Draft release with the files
         if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
         env:
@@ -228,9 +240,30 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "release $TAG exists: replacing its files"
             gh release upload "$TAG" dist/*.zip dist/*.dmg --clobber
+            if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = "true" ]; then
+              echo "still a draft: refreshing its title and notes"
+              gh release edit "$TAG" --title "$TITLE" --notes-file notes.md
+            fi
           else
             flags=(--draft --verify-tag --title "$TITLE" --notes-file notes.md)
             if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
             gh release create "$TAG" "${flags[@]}" dist/*.zip dist/*.dmg
           fi
           gh release view "$TAG" --json url,isDraft,isPrerelease,assets --jq '"\(.url)  draft=\(.isDraft) prerelease=\(.isPrerelease)  " + ([.assets[].name] | join(", "))' || true
+
+  # GitHub cancels a job that no runner picks up within about 15 minutes ("The job was not acquired
+  # by Runner of type hosted even after multiple attempts") — it happened to v0.19.0 and v0.19.1 when
+  # Apple-silicon runners were short. This job then builds the same universal app on the other pool
+  # (Intel when the first was Apple silicon, and the other way round). It runs only when the first
+  # job never started: a build that started and failed has a fault another runner would repeat.
+  # The run still ends red, because its first job was cancelled; the draft release is there all the same.
+  macos-other-pool:
+    name: macOS app (other runner pool, when the first found no runner)
+    needs: [test, dependencies, macos]
+    if: ${{ always() && needs.test.result == 'success' && needs.dependencies.result == 'success' && needs.macos.result != 'success' && needs.macos.result != 'skipped' && needs.macos.outputs.started != 'true' }}
+    runs-on: ${{ endsWith(inputs.runner, '-intel') && 'macos-latest' || 'macos-26-intel' }}
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    env: *macos_env
+    steps: *macos_steps

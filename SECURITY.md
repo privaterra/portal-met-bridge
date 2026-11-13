@@ -85,7 +85,7 @@ Everything else that is fetched is fetched fresh, and checked:
 
 The workflows themselves: the token is read-only except in the one job that creates the release; nothing typed by a person (a tag name, an input) is pasted into a shell script; the release is made with GitHub's own CLI, so no third-party action holds a write token.
 
-## The review of 13 November 2026 (fixed in 0.19.0)
+## The review of 13 November 2026 (fixed in 0.19.0; first released as 0.19.1)
 
 | # | Severity | Finding | Fix |
 | --- | --- | --- | --- |

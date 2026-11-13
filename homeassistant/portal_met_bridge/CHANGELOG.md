@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.19.0
+## 0.19.1
 
 - **Security release** — matches portal-met-bridge v0.19.0. The app's server now refuses requests that come from another website (before, a page you visited could have reached the app on your LAN, including the machine relay) and answers only to addresses, `homeassistant`, `.local` names and its certificate's names; a new option **`allowed_hosts`** lists any other name you use (a DuckDNS name, a reverse proxy). If the page suddenly says *421*, that is the option to fill in.
 - A profile name containing markup no longer runs in the Analysis tab. The page runs under a Content-Security-Policy; restored backups are normalised; a settings file can no longer change where an API key is sent.

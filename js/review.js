@@ -6,7 +6,7 @@
 //   buildReviewMessages(...)         → { system, user } for any provider
 //   renderMarkdown(md)               → safe HTML for the report pane
 
-import { beverageOf, beverageSource, profileTargetOf, profileFinalWeight, measuredEy, grindMicrons } from './analysis.js?v=0.19.0';
+import { beverageOf, beverageSource, profileTargetOf, profileFinalWeight, measuredEy, grindMicrons } from './analysis.js?v=0.19.1';
 
 const r1 = (v) => (Number.isFinite(v) ? Math.round(v * 10) / 10 : null);
 const r2 = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : null);

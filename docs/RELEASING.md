@@ -29,11 +29,11 @@ node tools/vendor.mjs update             # newest uPlot, socket.io-client, qrcod
 node tools/vendor.mjs check              # newer versions? security advisories for what is in vendor/? (tag-release.sh asks again and refuses on high/critical)
 
 # 1. the version number, in every place that carries it
-node tools/bump-version.mjs 0.17.1       # package.json, the ?v= cache stamps, the About line, the Home Assistant config.yaml
+node tools/bump-version.mjs 0.19.1       # package.json, the ?v= cache stamps, the About line, the Home Assistant config.yaml
 
 # 2. the two texts a release needs
 $EDITOR homeassistant/portal_met_bridge/CHANGELOG.md   # a "## 0.17.1" entry (the unit tests insist on it)
-$EDITOR docs/releases/v0.17.1.md                        # the release notes — copy the previous file and edit (section 2)
+$EDITOR docs/releases/v0.19.1.md                        # the release notes — copy the previous file and edit (section 2)
 
 # 3. check
 node tests/run.mjs                       # all groups pass; the "release:" group fails if a version stamp disagrees

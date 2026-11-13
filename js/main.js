@@ -1,21 +1,21 @@
 // main.js — wires the devices, the recorder, storage, charts and export together.
 
-import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.19.0';
-import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, machineBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.19.0';
-import { MachinePanel } from './machine-panel.js?v=0.19.0';
-import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.19.0';
-import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.19.0';
-import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.19.0';
-import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, profileFinalWeight, setBeveragePreference, grindMicrons, measuredEy, DEFAULTS } from './analysis.js?v=0.19.0';
-import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, approxTokens, reviewProfileOf, ratingOf, ratingMaxOf } from './review.js?v=0.19.0';
-import { PROVIDERS, streamCompletion, listModels, testKey, maskKey, maxTokensFor, endpointRisk } from './ai.js?v=0.19.0';
-import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.19.0';
-import { makeDemoShot } from './demo.js?v=0.19.0';
-import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug, loadJsPdf } from './export.js?v=0.19.0';
-import { REVIEW_FORMATS, reviewFile, reviewMarkdownFile } from './review-export.js?v=0.19.0';
-import { log, formatLine } from './log.js?v=0.19.0';
-import { files, Files, FILE_KINDS, DEFAULT_ROOT, cleanDirName } from './files.js?v=0.19.0';
-import { HeatMonitor, HEAT_RULES, HEAT_SENSORS, sensorTemp } from './heat.js?v=0.19.0';
+import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.19.1';
+import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, machineBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.19.1';
+import { MachinePanel } from './machine-panel.js?v=0.19.1';
+import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.19.1';
+import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.19.1';
+import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.19.1';
+import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, profileFinalWeight, setBeveragePreference, grindMicrons, measuredEy, DEFAULTS } from './analysis.js?v=0.19.1';
+import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, approxTokens, reviewProfileOf, ratingOf, ratingMaxOf } from './review.js?v=0.19.1';
+import { PROVIDERS, streamCompletion, listModels, testKey, maskKey, maxTokensFor, endpointRisk } from './ai.js?v=0.19.1';
+import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.19.1';
+import { makeDemoShot } from './demo.js?v=0.19.1';
+import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug, loadJsPdf } from './export.js?v=0.19.1';
+import { REVIEW_FORMATS, reviewFile, reviewMarkdownFile } from './review-export.js?v=0.19.1';
+import { log, formatLine } from './log.js?v=0.19.1';
+import { files, Files, FILE_KINDS, DEFAULT_ROOT, cleanDirName } from './files.js?v=0.19.1';
+import { HeatMonitor, HEAT_RULES, HEAT_SENSORS, sensorTemp } from './heat.js?v=0.19.1';
 import qrcode from '../vendor/qrcode.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -433,8 +433,8 @@ async function init() {
   await probeAppServer().catch(() => {});
   renderMachineVia();
   renderLogStatus();
-  $('about-version').textContent = 'v0.19.0';
-  log.info('app', `portal-met-bridge v0.19.0 started · ${navigator.userAgent}`);
+  $('about-version').textContent = 'v0.19.1';
+  log.info('app', `portal-met-bridge v0.19.1 started · ${navigator.userAgent}`);
 
   const env = await environmentCheck();
   renderPortalSteps({ secure: env.secure, api: env.api, adapter: env.adapter });

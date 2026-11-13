@@ -1,6 +1,8 @@
 # Build the macOS app and attach it to a GitHub Release.
 #
-# Runs when a version tag is pushed (v0.14.0 …) or by hand from the Actions tab.
+# Runs when a version tag is pushed (v0.14.0 …) or by hand from the Actions tab. By hand with a tag,
+# it uses THIS file from the branch chosen in "Run workflow" (main) and the app's code from the tag:
+# that is how a tag whose own copy of this workflow was broken, or met no runner, still gets its release.
 # What it produces, as release assets:
 #   portal-met-bridge-<version>-macos.zip   "Portal Met Bridge.app" with Node bundled for Apple silicon and Intel
 #   portal-met-bridge-<version>-macos.dmg   the same app on a disk image with an Applications shortcut
@@ -20,6 +22,14 @@ on:
         description: Existing tag to build (leave empty for the current commit, no release is created then)
         required: false
         default: ''
+      # GitHub cancels a job that no runner picks up within about 15 minutes ("The job was not acquired
+      # by Runner of type hosted even after multiple attempts"), which happens when Apple-silicon runners
+      # are short. The Intel runners are a separate pool and build the same universal app.
+      runner:
+        description: macOS runner (pick an Intel one if the job was cancelled waiting for an Apple-silicon runner)
+        type: choice
+        default: macos-latest
+        options: [macos-latest, macos-26-intel, macos-15-intel]
 
 # The token is read-only by default; only the job that creates the release may write.
 permissions:
@@ -40,7 +50,7 @@ jobs:
       - run: node tests/run.mjs
 
   # A release is not built on a library with a known serious hole: the versions in
-  # vendor/manifest.json are checked against the advisory database first (docs/SECURITY.md).
+  # vendor/manifest.json are checked against the advisory database first (SECURITY.md).
   # An advisory that does not apply is recorded in vendor/advisories-accepted.json.
   dependencies:
     name: Libraries and security advisories
@@ -66,7 +76,8 @@ jobs:
   macos:
     name: macOS app
     needs: [test, dependencies]
-    runs-on: macos-latest
+    runs-on: ${{ inputs.runner || 'macos-latest' }} # a tag push has no inputs: macos-latest
+    timeout-minutes: 45
     permissions:
       contents: write # creates the draft release and uploads its files
     env:
@@ -85,7 +96,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
         run: |
           tag="$TAG"
-          version=""$(node -p "require('./package.json').version")"
+          version="$(node -p "require('./package.json').version")"
           if [ "v$version" != "$tag" ]; then echo "tag $tag but package.json says $version — run: node tools/bump-version.mjs ${tag#v}"; exit 1; fi
 
       - name: Build the app (bundling Node for arm64 and x64)

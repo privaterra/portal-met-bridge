@@ -1184,6 +1184,45 @@ await test('dependencies (v0.19): vendor/ is exactly what vendor/manifest.json s
     assert.ok(!/softprops\//.test(text), `${f}: no third-party action holds the write token`);
   }
   assert.ok(readFileSync(new URL('../.github/dependabot.yml', import.meta.url), 'utf8').includes('github-actions'));
+  // every shell step parses (bash -n) and every github-script step is valid JavaScript. The v0.19.0 tag carried
+  // `version=""$(…)"` in release.yml's tag check: one stray quote, a syntax error only the macOS runner would have met.
+  const { spawnSync } = await import('node:child_process');
+  const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+  let shellSteps = 0;
+  let scriptSteps = 0;
+  for (const f of readdirSync(dir).filter((x) => x.endsWith('.yml'))) {
+    const lines = readFileSync(new URL(f, dir), 'utf8').split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(/^(\s*)(?:- )?(run|script):\s*(.*)$/);
+      if (!m) continue;
+      const keyIndent = m[1].length + (lines[i].trimStart().startsWith('- ') ? 2 : 0);
+      let body = m[3];
+      if (/^[|>][+-]?\s*$/.test(body)) {
+        const block = [];
+        for (let j = i + 1; j < lines.length; j++) {
+          const indent = lines[j].search(/\S/);
+          if (indent >= 0 && indent <= keyIndent) break;
+          block.push(lines[j]);
+        }
+        const pad = Math.min(...block.filter((l) => l.trim()).map((l) => l.search(/\S/)));
+        body = block.map((l) => l.slice(pad)).join('\n');
+      }
+      body = body.replace(/\$\{\{[^}]*\}\}/g, 'x'); // an expression is replaced by its value before the step runs
+      if (m[2] === 'run') {
+        const r = spawnSync('bash', ['-n'], { input: body, encoding: 'utf8' });
+        assert.equal(r.status, 0, `${f}:${i + 1} the shell step does not parse — ${(r.stderr || '').trim().split('\n')[0]}`);
+        shellSteps++;
+      } else {
+        assert.doesNotThrow(() => new AsyncFunction('github', 'context', 'core', 'require', body), `${f}:${i + 1} the github-script step is not valid JavaScript`);
+        scriptSteps++;
+      }
+    }
+  }
+  assert.ok(shellSteps >= 20, `the check read the workflows' steps (${shellSteps} shell, ${scriptSteps} script)`);
+  // the release can be rebuilt for an existing tag on another runner when Apple-silicon runners are short
+  const releaseYml = readFileSync(new URL('release.yml', dir), 'utf8');
+  assert.match(releaseYml, /runs-on: \$\{\{ inputs\.runner \|\| 'macos-latest' \}\}/, 'the macOS job runs on the chosen runner, macos-latest by default');
+  assert.match(releaseYml, /options: \[macos-latest, macos-26-intel, macos-15-intel\]/, 'an Intel runner can be chosen by hand');
   // upstream projects: commits since the last review are listed, with the file to read them against
   const { sourcesReport, sourcesMarkdown, loadSources } = await import('../tools/vendor.mjs');
   const asked = [];

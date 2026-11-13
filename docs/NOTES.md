@@ -60,6 +60,15 @@ Source: [graphefruit/Beanconqueror](https://github.com/graphefruit/Beanconqueror
 - No background mode: notifications stop when the tab is discarded, so keep the tab open during a shot.
 - `tests/fake-bluetooth.js` is a minimal stand-in for `navigator.bluetooth` that covers exactly this surface, useful for any other Portal tool written for the browser.
 
+## The v0.19.0 release run (13 Nov 2026)
+
+Run 43475250954 ended red with *macOS app* cancelled and no steps: GitHub never assigned a runner (*The job was not acquired by Runner of type hosted even after multiple attempts*; arm64 macOS capacity was short), and gave up after 15 minutes. Looking at why turned up a second, real fault that the missing runner had hidden: the 0.19 edit that moved the tag into `env: TAG` left `version=""$(node -p …)"` in *Check the tag matches package.json* — an unbalanced quote, `unexpected EOF` in bash, so the job would have failed at its third step on any runner. Neither `actionlint` (without shellcheck) nor the YAML parse nor the Linux jobs see it.
+
+- Fixed the quote. `tests/run.mjs` now extracts every `run:` block of every workflow, replaces `${{ … }}` with a word and runs `bash -n` on it (and compiles any `script:` block as an async function); it fails on the tagged file with `release.yml:86 the shell step does not parse`.
+- `workflow_dispatch` gained `runner` (`macos-latest` | `macos-26-intel` | `macos-15-intel`); the job is `runs-on: ${{ inputs.runner || 'macos-latest' }}` with a 45-minute limit. `tools/package-macos.sh` builds the same universal launcher (`cc -arch arm64 -arch x86_64`) and bundles both Node runtimes on either CPU. An automatic fall-back job was considered and left out: it needs the workflow to start itself (`actions: write`) on a condition — a job cancelled by GitHub rather than by a person — that cannot be told apart reliably or tested from here.
+- No new version: a run started by hand uses the workflow from `main` and checks out the tag, so *Run workflow* → tag `v0.19.0` releases the tag as it is. Only a fault in files the tag itself runs (`tools/…`) needs a new tag.
+- The steps that can run on Linux were run as written from the fixed file (tag check with a right and a wrong tag, the advisory gate, the notes step, the source archive, the weekly workflow's issue writer).
+
 ## Security review, tracked libraries, upstream watch (v0.19)
 
 **The model.** No accounts; the server is the only thing with authority (it writes files under `DATA_DIR`, relays to the machine, can stop itself). So everything hangs on *who can make the browser send it a request*. Before 0.19 the answer was "any web page": `fetch('http://localhost:8787/api/quit', {method:'POST', mode:'no-cors'})` from any site stopped it, and `machine/<ip>:80/api/v1/action/start` through the relay started a brew. Two checks in `refusal(req)` close that, on every `api/`, `machine/` and upgrade request:

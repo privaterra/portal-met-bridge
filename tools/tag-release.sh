@@ -26,7 +26,7 @@ if [ "$(git rev-list --count "$remote/$branch..HEAD")" -gt 0 ]; then echo "HEAD 
 ha="$(sed -n 's/^version: "\(.*\)"$/\1/p' homeassistant/portal_met_bridge/config.yaml)"
 if [ "$ha" != "$version" ]; then echo "homeassistant/portal_met_bridge/config.yaml says $ha, package.json $version — run node tools/bump-version.mjs $version" >&2; exit 1; fi
 # Libraries: a release is not tagged while a shipped library has a known high or critical
-# advisory, and newer versions are pointed out (tools/vendor.mjs; docs/SECURITY.md).
+# advisory, and newer versions are pointed out (tools/vendor.mjs; SECURITY.md).
 # Needs Node; without it the Release workflow still runs the same check before building.
 if [ "${SKIP_DEP_CHECK:-0}" = "1" ]; then
   echo "(SKIP_DEP_CHECK=1: not checking the libraries)"

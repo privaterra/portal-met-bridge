@@ -5,7 +5,7 @@
 # tools/vendor.mjs and the "Dependency updates" workflow (weekly), which also
 # runs the tests. vendor/package.json lists those versions so that Dependabot
 # *alerts* (Security tab) still cover them — no version updates are configured
-# for /vendor here on purpose. docs/SECURITY.md has the whole picture.
+# for /vendor here on purpose. SECURITY.md has the whole picture.
 version: 2
 updates:
   # the actions the workflows use

@@ -129,7 +129,7 @@ jobs:
             const out = ['The versions in \`vendor/manifest.json\` (after fetching the latest) are affected by:', ''];
             for (const a of r.advisories) out.push('- **' + a.severity + '** — ' + a.package + ': [' + (a.title || a.id) + '](' + a.url + ') · affects ' + a.range + ' · fix: ' + a.fix);
             for (const p of r.problems) out.push('- vendor/: ' + p);
-            out.push('', 'What to do: if a fixed version exists, merge the open *Update libraries* pull request (or run \`node tools/vendor.mjs update\`), test and release. If none exists yet, decide whether the advisory applies to how the app uses the library (docs/SECURITY.md lists what is used); if it does not, record it in \`vendor/advisories-accepted.json\` with a reason and an end date.', '', 'Run: ' + process.env.GITHUB_SERVER_URL + '/' + process.env.GITHUB_REPOSITORY + '/actions/runs/' + process.env.GITHUB_RUN_ID);
+            out.push('', 'What to do: if a fixed version exists, merge the open *Update libraries* pull request (or run \`node tools/vendor.mjs update\`), test and release. If none exists yet, decide whether the advisory applies to how the app uses the library (SECURITY.md lists what is used); if it does not, record it in \`vendor/advisories-accepted.json\` with a reason and an end date.', '', 'Run: ' + process.env.GITHUB_SERVER_URL + '/' + process.env.GITHUB_REPOSITORY + '/actions/runs/' + process.env.GITHUB_RUN_ID);
             require('fs').writeFileSync('issue.md', out.join('\n'));
           "
           n="$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number // empty')"

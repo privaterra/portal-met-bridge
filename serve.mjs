@@ -69,7 +69,7 @@ let tlsServer = null;
 // The server has no accounts: whoever can reach it can use it. That is the
 // point on localhost and acceptable on a home LAN, but a *web page* the user
 // happens to visit must not be able to use it through their browser. Three
-// checks see to that (docs/SECURITY.md has the reasoning):
+// checks see to that (SECURITY.md has the reasoning):
 //   1. hostAllowed():  the Host header must be a name this server answers to,
 //      which stops DNS rebinding (evil.example re-pointed at 127.0.0.1);
 //   2. crossSite():    api/ and machine/ requests that a browser marks as coming

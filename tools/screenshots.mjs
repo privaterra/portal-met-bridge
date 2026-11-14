@@ -79,6 +79,14 @@ async function seed(page) {
     dry.portal = []; // the Portal was not connected for this one
     await put(dry);
     await put(mk(32, 0.5 * day, { beanName: 'Revolver SO Bali', roaster: 'Revolver', origin: 'Indonesia, Kintamani', doseG: 18, grindSize: '70 µm', roastLevel: 'medium', process: 'washed' }, { targetG: 40, durationSec: 31, ecScale: 1.04 }));
+    // the temperatures and power kept with five of those brews (History → Temperatures and power)
+    const { makeDemoThermalRows, buildRecord } = await import(`./js/thermal.js?v=${v}`);
+    for (const [id, seed] of [['seed-11', 9], ['seed-12', 7], ['seed-13', 5], ['seed-21', 8], ['seed-22', 6]]) {
+      const s = await window.__pb.store.getShot(id);
+      const brew = { startWall: s.startedAt, endWall: s.startedAt + s.durationSec * 1000 };
+      await window.__pb.store.putThermal(buildRecord({ rows: makeDemoThermalRows({ startedAt: s.startedAt, durationSec: s.durationSec, targetC: 92, seed, profile: s.profileName }), brew, info: { shotId: id, profile: s.profileName, coffee: s.context.beanName, roaster: s.context.roaster, doseG: s.context.doseG, grind: s.context.grindSize, machine: 'Meticulous', rule: 'held · the status temperature · ± 1.0 °C · hold 10 s' } }));
+    }
+    await window.__pb.refreshThermalList();
     await window.__pb.store.seedListsFromHistory();
     await window.__pb.store.putBean({ name: 'Geishify Espresso Blend', roaster: 'Cafe Unido', origin: 'Panama, Boquete', process: 'washed', roastLevel: 'light', url: 'https://cafeunido.example/geishify', notes: 'Geisha-led blend, roasted for espresso. Best 10–30 days off roast.' });
     await window.__pb.store.putBean({ name: 'Supernova', roaster: 'Hatch', origin: 'Brazil, Cerrado', process: 'natural', roastLevel: 'light', url: 'https://hatch.example/supernova', notes: 'Yellow bourbon, 1 100 m.' });
@@ -212,6 +220,35 @@ try {
   await page.waitForTimeout(300);
   await shot(page, 'compare');
   await page.click('#cmp-close');
+
+  // ---- Temperatures and power (v0.22): the kept records, three of them compared and analysed, one on the Shots tab
+  await page.click('#hist-brews-panel summary');
+  await page.click('#hist-thermal-panel summary');
+  await page.waitForTimeout(300);
+  for (const id of ['tp-seed-11', 'tp-seed-12', 'tp-seed-13']) await page.check(`#tp-rows tr[data-id="${id}"] input[type="checkbox"]`);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(200);
+  await page.locator('#hist-thermal-panel').screenshot({ path: join(docs, 'screenshot-temperatures-history.png') });
+  console.log('  wrote docs/screenshot-temperatures-history.png');
+  await page.click('#tp-compare');
+  await page.waitForTimeout(500);
+  await page.locator('#tp-compare-panel').screenshot({ path: join(docs, 'screenshot-temperatures-compare.png') });
+  console.log('  wrote docs/screenshot-temperatures-compare.png');
+  await page.click('#tp-analyze');
+  await page.waitForTimeout(400);
+  await page.locator('#tp-analysis-panel').screenshot({ path: join(docs, 'screenshot-temperatures-analysis.png') });
+  console.log('  wrote docs/screenshot-temperatures-analysis.png');
+  await page.click('#tp-an-close');
+  await page.click('#tp-cmp-close');
+  await page.click('#tp-rows tr[data-id="tp-seed-12"] button[data-act="open"]');
+  await page.waitForTimeout(700);
+  await page.evaluate(() => { document.querySelector('#toast').hidden = true; });
+  await page.locator('#temps-panel').screenshot({ path: join(docs, 'screenshot-temperatures.png') });
+  console.log('  wrote docs/screenshot-temperatures.png');
+  await page.click('.view-tab[data-view="history"]');
+  await page.click('#hist-thermal-panel summary');
+  await page.click('#hist-brews-panel summary');
+  await page.waitForTimeout(200);
 
   // ---- Analysis: two Bali shots (one without Portal data) reviewed by the mock endpoint
   await page.setViewportSize({ width: 1440, height: 1360 });

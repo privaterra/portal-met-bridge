@@ -11,7 +11,7 @@
 // with a general version for any other refractometer.
 // Pure — no DOM, no storage — so it is unit-tested.
 
-import { fitForCoffee, predictTds, extractionYield, beverageOf } from './analysis.js?v=0.21.0';
+import { fitForCoffee, predictTds, extractionYield, beverageOf } from './analysis.js?v=0.22.0';
 
 /** A brew counts as "just taken place" for this long (Settings can change it): the sample should be fresh. */
 export const CALIBRATION_WINDOW_MIN = 30;

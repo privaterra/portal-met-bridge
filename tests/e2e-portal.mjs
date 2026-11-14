@@ -231,6 +231,13 @@ try {
   });
   check('live shot is checkpointed to IndexedDB while recording', ckpt.found && ckpt.inProgress && ckpt.machine > 3, JSON.stringify(ckpt).slice(0, 200));
   check('live shot picks up the profile\'s target weight from the machine\'s profile list at the start', ckpt.target === 38 && /target 38\.0 g/.test(ckpt.sub), JSON.stringify({ target: ckpt.target, sub: ckpt.sub }));
+  // v0.22: Temperatures and power is on the Shots tab and follows the brew as it runs
+  const tpLive = await page.evaluate(() => {
+    const { tp, machinePanel } = window.__pb;
+    const x = machinePanel.tempChart.data[0];
+    return { mode: tp.mode, view: machinePanel.view.mode, onShots: !!document.querySelector('#view-shots #chart-temps') && !document.querySelector('#view-machine #chart-temps'), visible: document.querySelector('#chart-temps').offsetParent !== null, n: x.length, last: x[x.length - 1], marks: machinePanel.marks, live: document.querySelector('#tp-live').getAttribute('aria-pressed'), note: document.querySelector('#temps-note').textContent, series: machinePanel.tempChart.series.map((q) => q.label).join(','), status: machinePanel.tempChart.data[1].filter((v) => v != null).length };
+  });
+  check('Temperatures and power is on the Shots tab and draws live during the shot, counted from the start of the brew', tpLive.mode === 'live' && tpLive.view === 'live' && tpLive.onShots && tpLive.visible && tpLive.n > 10 && tpLive.status > 10 && tpLive.marks?.from === 0 && tpLive.marks.to > 1 && tpLive.last > 1 && tpLive.last < 28 && tpLive.live === 'true' && /^Live: the last 5 minutes/.test(tpLive.note) && tpLive.series === 'time,Status,Target,External 1,External 2,Bar up,Bar mid,Bar down,Tube,Motor', JSON.stringify(tpLive));
   const writes = await page.evaluate(() => window.__fakePortalWrites || []);
   const dbg = await page.evaluate(() => ({ autoGraph: window.__pb.settings.autoGraph, connected: window.__pb.portal.connected, cmd: !!window.__pb.portal.command, log: window.__pb.log.ring.filter((e) => /graph|command/i.test(e.msg)).map((e) => e.msg) }));
   check('show-graph command written at shot start (40 00 01 2D)', JSON.stringify(writes).includes('[64,0,1,45]'), JSON.stringify(writes) + ' ' + JSON.stringify(dbg));
@@ -251,6 +258,20 @@ try {
   check('profile target kept from the attached record; beverage defaults to it, not the scale', sel.target === 38 && sel.recordTarget === 38 && Math.abs(sel.scale - 40) < 0.3 && /38\.0 g out \(profile target; machine 40\.0 g\)/.test(sel.sub), JSON.stringify({ target: sel.target, recordTarget: sel.recordTarget, scale: sel.scale, sub: sel.sub }));
   check('analysis status ok with ≥ 85 % coverage', sel.status === 'ok' && sel.coverage >= 0.85, `${sel.status}, coverage ${(sel.coverage * 100).toFixed(0)} %`);
   check('mean EC and peak are plausible', sel.meanEc > 0.5 && sel.peak > sel.meanEc, `mean ${sel.meanEc.toFixed(3)} peak ${sel.peak.toFixed(3)}`);
+  // v0.22: the brew's temperatures and power stay under the shot; Save to History keeps them.
+  // (This page connected some seconds into the mock's scripted shot — about 4 s here, 12 s on a slow CI runner — so the record
+  // starts mid-brew: no warm-up, no reading at the start. How late it starts is the rig's timing, not the app's.)
+  const tpShot = await page.evaluate(() => {
+    const { tp, machinePanel, state } = window.__pb;
+    const r = tp.record;
+    return { mode: tp.mode, view: machinePanel.view.mode, mine: r?.shotId === state.selected.id && r?.id === `tp-${state.selected.id}`, brewSec: r?.brewSec, dur: state.selected.durationSec, first: r?.cols.t[0], last: r?.cols.t[r.cols.t.length - 1], n: r?.n, brewing: r?.cols.brewing.filter(Boolean).length, target: r?.targetC, profile: r?.profile, coffee: r?.coffee, s: r?.summary, drawn: machinePanel.tempChart.data[0].length, marks: machinePanel.marks, kept: tp.list.length, note: document.querySelector('#temps-note').textContent, info: document.querySelector('#heat-brew-info').textContent, save: document.querySelector('#tp-save').textContent, saveOff: document.querySelector('#tp-save').disabled, brewBtn: document.querySelector('#tp-brew').getAttribute('aria-pressed'), windowHidden: document.querySelector('#tp-window-field').hidden };
+  });
+  check('after the brew its temperatures and power stay under the shot: time from the brew start, the brew marked, not kept until asked', tpShot.mode === 'brew' && tpShot.view === 'record' && tpShot.mine && Math.abs(tpShot.brewSec - tpShot.dur) < 0.01 && tpShot.first >= 0 && tpShot.first < tpShot.brewSec - 8 && tpShot.last > tpShot.brewSec + 3 && tpShot.brewing > 30 && tpShot.drawn === tpShot.n && tpShot.marks.from === 0 && tpShot.marks.to === tpShot.brewSec && tpShot.kept === 0 && /E2E coffee · Blooming Espresso[^—]* — not kept yet$/.test(tpShot.note) && tpShot.save === 'Save to History' && !tpShot.saveOff && tpShot.brewBtn === 'true' && tpShot.windowHidden, JSON.stringify({ ...tpShot, s: undefined }));
+  check('the record carries the profile, its target and the numbers of the brew', /^Blooming Espresso/.test(tpShot.profile) && tpShot.coffee === 'E2E coffee' && (tpShot.target === 92 || tpShot.target === 93) && tpShot.s.targetC === tpShot.target && tpShot.s.brewMeanC > 80 && tpShot.s.brewMinC <= tpShot.s.brewMaxC && tpShot.s.heaterBrewPct > 5 && tpShot.s.motorPowerMeanPct > 10 && tpShot.s.pistonTravel > 10 && /in the brew \d+\.\d °C on average, \d+\.\d–\d+\.\d °C · heater \d+ %/.test(tpShot.info), JSON.stringify({ s: tpShot.s, info: tpShot.info, target: tpShot.target }));
+  await page.evaluate(() => document.querySelector('#tp-save').click()); // the rating dialog is open over the page at this point
+  await page.waitForFunction(() => window.__pb.tp.list.length === 1, null, { timeout: 5000 });
+  const tpKept = await page.evaluate(async () => ({ note: document.querySelector('#temps-note').textContent, save: document.querySelector('#tp-save').textContent, saveOff: document.querySelector('#tp-save').disabled, stored: (await window.__pb.store.listThermal()).map((r) => `${r.id}:${r.n}:${r.shotId === window.__pb.state.selected.id}`), count: document.querySelector('#tp-count').textContent, light: !('cols' in window.__pb.tp.list[0]), toast: document.querySelector('#toast').textContent }));
+  check('Save to History keeps the record: it is in the database, listed, and the button says so', /kept in History$/.test(tpKept.note) && tpKept.save === 'Saved ✓' && tpKept.saveOff && tpKept.stored.length === 1 && /^tp-.*:\d+:true$/.test(tpKept.stored[0]) && tpKept.count === '(1)' && tpKept.light && /History → Temperatures and power/.test(tpKept.toast), JSON.stringify(tpKept));
   const finalRows = await page.evaluate(async () => (await window.__pb.store.listShots()).map((r) => ({ id: r.id, inProgress: !!r.inProgress, files: r.files?.json || null })));
   check('checkpoint replaced by the final record (no in-progress rows left)', finalRows.length === 1 && !finalRows[0].inProgress, JSON.stringify(finalRows));
   const shotFiles = await page.evaluate(() => Object.keys(window.__fakeFolderFiles || {}).filter((f) => /portal-met-bridge\/shots\//.test(f)));
@@ -989,29 +1010,159 @@ try {
   check('the piston was checked after the brew: it travelled, came back to rest, all operating OK', pistonUi.last?.ok === true && pistonUi.last.returned && pistonUi.last.brewSec > 3 && pistonUi.badge === 'all operating OK' && /All operating OK/.test(pistonUi.text), JSON.stringify(pistonUi));
   const backupMaint = await page.evaluate(async () => (await window.__pb.store.exportAll()).maintenance);
   check('the cleaning dates travel in a backup', backupMaint.weekly.length === 1 && backupMaint.monthly.length === 1 && backupMaint.deep.length === 0, JSON.stringify(backupMaint));
-  // heating graph: off by default, then three files through the browser
-  const heat0 = await page.evaluate(() => ({ on: window.__pb.settings.heatSaveGraph, tools: document.querySelector('#heat-save-tools').hidden, window: window.__pb.machinePanel.windowSec, note: document.querySelector('#temps-note').textContent }));
-  check('saving the heating graph is off by default: no buttons, five minutes of history', heat0.on === false && heat0.tools && heat0.window === 300 && /Last 5 minutes/.test(heat0.note), JSON.stringify(heat0));
+  // ---- v0.22: Temperatures and power — the Shots panel, History's two folding sections, compare / analyze / export / delete
   await page.click('.view-tab[data-view="settings"]');
-  await page.check('#set-heat-save');
   await page.uncheck('#set-maintenance');
   await page.waitForTimeout(200);
   await page.click('.view-tab[data-view="machine"]');
-  await page.waitForTimeout(1500);
-  const heat1 = await page.evaluate(() => ({ tools: !document.querySelector('#heat-save-tools').hidden, window: window.__pb.machinePanel.windowSec, note: document.querySelector('#temps-note').textContent, info: document.querySelector('#heat-brew-info').textContent, maint: document.querySelector('#maint-panel').hidden && document.querySelector('#maint-reminder').hidden }));
-  check('switched on: the buttons appear, the graph keeps 30 minutes and says which brew it will be saved with; the maintenance part can be switched off', heat1.tools && heat1.window === 1800 && /Last 30 minutes/.test(heat1.note) && /Saved with the graph: Blooming Espresso · target 92\.0 °C/.test(heat1.info) && heat1.maint, JSON.stringify(heat1));
+  await page.waitForTimeout(300);
+  const mach = await page.evaluate(() => ({ temps: !!document.querySelector('#view-machine #temps-panel'), pointer: !!document.querySelector('#view-machine [data-goto="shots"][data-open="temps"]'), maint: document.querySelector('#maint-panel').hidden && document.querySelector('#maint-reminder').hidden, keep: window.__pb.settings.heatKeep }));
+  check('the Machine tab no longer holds the graphs and points to the Shots tab; the maintenance part can be switched off; keeping every brew is off by default', !mach.temps && mach.pointer && mach.maint && mach.keep === false, JSON.stringify(mach));
+  await page.click('#view-machine [data-goto="shots"][data-open="temps"]');
+  await page.waitForTimeout(300);
+  check('the pointer opens the Shots tab', await page.isVisible('#view-shots #temps-panel'));
+  // two more records, as two brews an hour apart would leave them
+  const tp0 = await page.evaluate(async () => {
+    const v = document.querySelector('script[src*="main.js"]').src.split('v=')[1];
+    const { makeDemoThermalRows, buildRecord } = await import('./js/thermal.js?v=' + v);
+    const { store, refreshThermalList, tp } = window.__pb;
+    const before = tp.list.length;
+    const t0 = Date.now() - 3 * 3600e3;
+    for (const [seed, at, dur, target, coffee] of [[9, t0, 26, 93, 'Thermal A'], [5, t0 + 3600e3, 34, 94, 'Thermal B']]) {
+      await store.putThermal(buildRecord({ rows: makeDemoThermalRows({ startedAt: at, durationSec: dur, targetC: target, seed, profile: 'Blooming Espresso' }), brew: { startWall: at, endWall: at + dur * 1000 }, id: `tp-e2e-${seed}`, info: { coffee, roaster: 'E2E roaster', profile: 'Blooming Espresso', machine: 'Mock' } }));
+    }
+    await refreshThermalList();
+    return { before, after: tp.list.length };
+  });
+  await page.click('.view-tab[data-view="history"]');
+  await page.waitForTimeout(200);
+  const hist0 = await page.evaluate(() => ({ sections: [...document.querySelectorAll('#view-history details.hist-section')].map((d) => `${d.dataset.hist}:${d.open}:${d.querySelector('h2').textContent.trim()}`), brewRows: document.querySelectorAll('#hist-rows tr').length, tools: document.querySelector('#hist-compare').checkVisibility() }));
+  check('History has two folding sections: Brews (open) and Temperatures and power (folded)', hist0.sections.length === 2 && /^brews:true:Brews/.test(hist0.sections[0]) && new RegExp(`^thermal:false:Temperatures and power \\(${tp0.after}\\)$`).test(hist0.sections[1]) && hist0.brewRows >= 1 && hist0.tools, JSON.stringify(hist0));
+  await page.click('#hist-brews-panel summary');
+  await page.click('#hist-thermal-panel summary');
+  await page.waitForTimeout(300);
+  const hist1 = await page.evaluate(async () => ({ brewsOpen: document.querySelector('details[data-hist="brews"]').open, toolsHidden: !document.querySelector('#hist-compare').checkVisibility(), thermalOpen: document.querySelector('details[data-hist="thermal"]').open, rows: [...document.querySelectorAll('#tp-rows tr')].map((tr) => tr.dataset.id), saved: await window.__pb.store.getSetting('histOpen'), buttons: ['tp-compare', 'tp-analyze', 'tp-export', 'tp-delete-selected'].map((id) => `${document.querySelector('#' + id).textContent}:${document.querySelector('#' + id).disabled}`).join('|'), first: document.querySelector('#tp-rows tr[data-id="tp-e2e-5"]').textContent }));
+  check('each section folds and unfolds, and the choice is remembered', !hist1.brewsOpen && hist1.toolsHidden && hist1.thermalOpen && hist1.saved.brews === false && hist1.saved.thermal === true, JSON.stringify(hist1.saved));
+  check('the kept records are listed, newest brew first, with the four buttons waiting for a selection', hist1.rows.length === tp0.after && tp0.after === tp0.before + 2 && hist1.rows.indexOf('tp-e2e-5') < hist1.rows.indexOf('tp-e2e-9') && hist1.buttons === 'Compare selected:true|Analyze selected:true|Export selected:true|Delete selected:true' && /Thermal B.*Blooming Espresso.*94\.0 °C.*93\.6 °C.*-0\.4.*6 min 20 s.*no brew record/.test(hist1.first.replace(/\s+/g, ' ')), JSON.stringify(hist1));
+  await page.click('#hist-brews-panel summary');
+  await page.check('#tp-rows tr[data-id="tp-e2e-9"] input[type="checkbox"]');
+  const one = await page.evaluate(() => ['tp-compare', 'tp-analyze', 'tp-export', 'tp-delete-selected'].map((id) => `${document.querySelector('#' + id).textContent}:${document.querySelector('#' + id).disabled}`).join('|'));
+  check('one ticked record can be analysed, exported or deleted; comparing needs two', one === 'Compare selected (1):true|Analyze selected (1):false|Export selected (1):false|Delete selected (1):false', one);
+  await page.check('#tp-rows tr[data-id="tp-e2e-5"] input[type="checkbox"]');
+  await page.click('#tp-compare');
+  await page.waitForTimeout(500);
+  const cmp1 = await page.evaluate(() => {
+    const { tpTempChart, tpPowerChart } = window.__pb;
+    const x = tpTempChart.u.data[0];
+    return { shown: !document.querySelector('#tp-compare-panel').hidden, count: document.querySelector('#tp-cmp-count').textContent, temp: tpTempChart.u.series.map((q) => q.label), power: tpPowerChart.u.series.length, min: x[0], max: x[x.length - 1], zero: x.includes(0), yAxis: tpTempChart.u.axes[1].label, pAxis: tpPowerChart.u.axes[1].label, legend: [...document.querySelectorAll('#tp-cmp-legend tbody tr')].map((tr) => tr.textContent.replace(/\s+/g, ' ')), opts: [...document.querySelectorAll('#tp-cmp-temp option')].length + [...document.querySelectorAll('#tp-cmp-power option')].length };
+  });
+  check('Compare selected overlays the records lined up at the start of each brew: the same zero, a minute before to the end of the longest', cmp1.shown && cmp1.count === '(2)' && cmp1.temp.length === 3 && /Thermal A/.test(cmp1.temp[1]) && /Thermal B/.test(cmp1.temp[2]) && cmp1.power === 3 && cmp1.min === -60 && cmp1.max === 46 && cmp1.zero && /Status temperature/.test(cmp1.yAxis) && /Heater power \(%\)/.test(cmp1.pAxis) && cmp1.opts === 11, JSON.stringify({ ...cmp1, legend: undefined }));
+  check('the comparison table gives each record its target, start and brew temperatures, heater and warm-up', cmp1.legend.length === 2 && /Thermal A · E2E roaster.*93\.0 °C.*93\.6 °C.*\+0\.6 °C.*6 min 20 s/.test(cmp1.legend[0]) && /Thermal B.*94\.0 °C.*-0\.4 °C/.test(cmp1.legend[1]), JSON.stringify(cmp1.legend));
+  await page.selectOption('#tp-cmp-range', 'all');
+  await page.selectOption('#tp-cmp-temp', 'ext2');
+  await page.selectOption('#tp-cmp-power', 'motorPos');
+  await page.waitForTimeout(300);
+  const cmp2 = await page.evaluate(() => ({ min: window.__pb.tpTempChart.u.data[0][0], y: window.__pb.tpTempChart.u.axes[1].label, p: window.__pb.tpPowerChart.u.axes[1].label }));
+  check('the span can take in the warm-up, and any probe or the piston can be compared', cmp2.min === -420 && /External 2/.test(cmp2.y) && /Piston position/.test(cmp2.p), JSON.stringify(cmp2));
+  const viaWas = await page.evaluate(() => { const v = window.__pb.settings.exportsVia; window.__pb.settings.exportsVia = 'browser'; return v; });
+  const cj = await dl('#tp-cmp-jpeg');
+  check('the comparison downloads as one JPEG', cj.bytes > 20000 && /^temperatures-comparison-.*\.jpg$/.test(cj.name), `${cj.name} ${cj.bytes} B`);
+  // analyze
+  await page.click('#tp-analyze');
+  await page.waitForTimeout(400);
+  const an1 = await page.evaluate(() => ({ shown: !document.querySelector('#tp-analysis-panel').hidden, count: document.querySelector('#tp-an-count').textContent, cols: document.querySelectorAll('#tp-an-table thead th').length, rows: [...document.querySelectorAll('#tp-an-table tbody tr')].map((tr) => [...tr.children].map((c) => c.textContent.trim()).join(' ')), marked: document.querySelectorAll('#tp-an-table td.lo').length + document.querySelectorAll('#tp-an-table td.hi').length, findings: [...document.querySelectorAll('#tp-an-findings li')].map((li) => li.textContent), ai: document.querySelector('#tp-an-ai').textContent, reportHidden: document.querySelector('#tp-an-report').hidden }));
+  check('Analyze selected puts the numbers side by side, one column per record, lowest and highest marked', an1.shown && an1.count === '(2)' && an1.cols === 3 && an1.rows.some((r) => /^Target 93\.0 °C 94\.0 °C$/.test(r)) && an1.rows.some((r) => /^Start vs target \+0\.6 °C -0\.4 °C$/.test(r)) && an1.rows.some((r) => /^Warm-up 6 min 20 s 6 min 20 s$/.test(r)) && an1.rows.some((r) => /^Brew 26\.0 s 34\.0 s$/.test(r)) && an1.marked >= 6, JSON.stringify(an1.rows));
+  check('…and says what stands out, record by record and between them', an1.findings.length >= 5 && an1.findings.some((f) => /Thermal A.*the brew started at 93\.6 °C, 0\.6 °C above the 93\.0 °C target/.test(f)) && an1.findings.some((f) => /^The brews have different targets \(93\.0 °C, 94\.0 °C\)/.test(f)) && an1.findings.some((f) => /^Start vs target: from -0\.4 °C .* to 0\.6 °C .* — 1\.0 °C apart\.$/.test(f)) && an1.findings.some((f) => /^Warm-up: the same in all 2 brews \(6 min 20 s\)\.$/.test(f)) && /^Ask OpenAI…$/.test(an1.ai) && an1.reportHidden, JSON.stringify(an1.findings));
+  const ac = await dl('#tp-an-csv');
+  const acText = readFileSync(ac.path, 'utf8').split('\n');
+  check('the analysis table downloads as CSV, one row per record', /^temperatures-analysis-.*\.csv$/.test(ac.name) && acText.length >= 3 && /^brew_started_iso,saved_iso,profile,coffee,roaster,machine,shot_id,target_c,start_status_c,start_vs_target_c,/.test(acText[0]) && /,Blooming Espresso,Thermal A,E2E roaster,Mock,,93,93\.6,0\.6\d?,/.test(acText[1]), acText.slice(0, 2).join(' / '));
+  await page.click('#tp-an-ai');
+  await page.waitForFunction(() => !window.__pb.tp.an.running && window.__pb.tp.an.markdown.length > 50, null, { timeout: 20000 });
+  const ai1 = await page.evaluate(async (port) => { const last = (await (await fetch(`http://127.0.0.1:${port}/mock/dial`)).json()).lastAiRequest; return { model: last.model, sys: /temperature and power logs from a Meticulous/.test(last.system), user: last.user.slice(0, 200), tables: /Before the brew \(every 30 s\)/.test(last.user) && /During the brew \(every 2 s\)/.test(last.user) && /## Record 2: .*Thermal B/.test(last.user), chars: last.user.length, report: !document.querySelector('#tp-an-report').hidden && document.querySelector('#tp-an-report').textContent.length > 50, status: document.querySelector('#tp-an-status').textContent, stopHidden: document.querySelector('#tp-an-stop').hidden }; }, MOCK_PORT);
+  check('Ask the AI… sends the numbers and coarse readings of the selected records — nothing else — and shows the answer', ai1.model === 'mock-gpt-2' && ai1.sys && ai1.tables && ai1.chars < 14000 && /^# Temperatures and power/.test(ai1.user) && ai1.report && /^OpenAI · mock-gpt-2/.test(ai1.status) && ai1.stopHidden, JSON.stringify({ ...ai1, user: ai1.user.slice(0, 80) }));
+  // export
+  const tz = await dl('#tp-export');
+  await page.waitForFunction(() => /2 records exported/.test(document.querySelector('#tp-progress').textContent), null, { timeout: 30000 });
+  const tzNames = await page.evaluate(async (bytes) => {
+    const v = document.querySelector('script[src*="main.js"]').src.split('v=')[1];
+    const { unzipSync } = await import('./vendor/fflate.esm.js');
+    const files = unzipSync(new Uint8Array(bytes));
+    const csvName = Object.keys(files).find((n) => /readings\.csv$/.test(n));
+    return { names: Object.keys(files).sort(), sizes: Object.fromEntries(Object.entries(files).map(([n, b]) => [n, b.length])), head: new TextDecoder().decode(files[csvName]).split('\n')[0], back: !document.querySelector('#view-history').hidden, v };
+  }, [...readFileSync(tz.path)]).catch((e) => ({ error: String(e) }));
+  check('Export selected downloads a zip: a summary, and per record its readings, the record and its graphs', /^portal-met-bridge-temperatures-2-records-.*\.zip$/.test(tz.name) && !tzNames.error && tzNames.names.length === 8 && tzNames.names.includes('temperatures-summary.csv') && tzNames.names.includes('README.txt') && tzNames.names.filter((n) => /^temperatures-.*-blooming-espresso(-2)?\/(readings\.csv|record\.json|graphs\.jpg)$/.test(n)).length === 6 && Object.entries(tzNames.sizes).filter(([n]) => /graphs\.jpg$/.test(n)).every(([, b]) => b > 20000) && /^time_iso,t_from_brew_start_s,brewing,status_temp_c,target_c,/.test(tzNames.head) && tzNames.back, JSON.stringify(tzNames).slice(0, 600));
+  check('none of it was written to the data folder: these go through the browser', !onDisk().some((f) => /temperatures-/.test(f)));
+  await page.evaluate((v) => { window.__pb.settings.exportsVia = v; }, viaWas);
+  // open a record from History: its graphs on the Shots tab
+  await page.click('#tp-rows tr[data-id="tp-e2e-9"] button[data-act="open"]');
+  await page.waitForTimeout(500);
+  const opened9 = await page.evaluate(() => { const { tp, machinePanel } = window.__pb; return { shots: !document.querySelector('#view-shots').hidden, mode: tp.mode, id: tp.record?.id, drawn: machinePanel.tempChart.data[0].length, n: tp.record?.n, first: machinePanel.tempChart.data[0][0], marks: machinePanel.marks, note: document.querySelector('#temps-note').textContent, save: document.querySelector('#tp-save').textContent, info: document.querySelector('#heat-brew-info').textContent }; });
+  check('Open shows a kept record on the Shots tab: its warm-up, the brew shaded, its numbers in a line', opened9.shots && opened9.mode === 'brew' && opened9.id === 'tp-e2e-9' && opened9.drawn === opened9.n && opened9.first === -420 && opened9.marks.to === 26 && /Thermal A · Blooming Espresso — kept in History$/.test(opened9.note) && opened9.save === 'Saved ✓' && /^Brew started at 93\.6 °C \(target 93\.0 °C, \+0\.6 °C\) · in the brew .* · heater \d+ % · warm-up 6 min 20 s$/.test(opened9.info), JSON.stringify(opened9));
   const hj = await dl('#heat-save-jpeg');
-  check('the heating graph downloads as a JPEG', hj.bytes > 20000 && /^heating-.*-blooming-espresso\.jpg$/.test(hj.name), `${hj.name} ${hj.bytes} B`);
+  check('the shown record downloads as a JPEG', hj.bytes > 20000 && /^temperatures-.*-blooming-espresso\.jpg$/.test(hj.name), `${hj.name} ${hj.bytes} B`);
   const hp = await dl('#heat-save-pdf');
   const hpText = readFileSync(hp.path, 'latin1');
-  check('…as a PDF with the brew it belongs to', hp.bytes > 20000 && /^%PDF/.test(hpText) && /^heating-.*\.pdf$/.test(hp.name), `${hp.name} ${hp.bytes} B`);
+  check('…as a PDF with the brew it belongs to', hp.bytes > 20000 && /^%PDF/.test(hpText) && /^temperatures-.*\.pdf$/.test(hp.name), `${hp.name} ${hp.bytes} B`);
   const hc = await dl('#heat-save-csv');
   const hcText = readFileSync(hc.path, 'utf8').split('\n');
-  check('…and its data as CSV: one row per reading with the state, the profile and its target', hcText[0].trim() === 'time_iso,t_s,external_1_c,external_2_c,bar_up_c,bar_mid_c,bar_down_c,tube_c,motor_c,status_temp_c,target_c,ready,heater_power_pct,motor_power_pct,piston_position,state,stage,profile' && hcText.length > 10 && /,92,(yes|no),.*,Blooming Espresso\s*$/.test(hcText[hcText.length - 2] || hcText[hcText.length - 1]), `${hcText.length} lines · ${hcText[1]}`);
-  check('none of them was written to the data folder: they go through the browser', !onDisk().some((f) => /heating-/.test(f)));
+  check('…and its data as CSV: one row per reading, time from the brew start, the stage beside it', hcText[0].trim() === 'time_iso,t_from_brew_start_s,brewing,status_temp_c,target_c,external_1_c,external_2_c,bar_up_c,bar_mid_c,bar_down_c,tube_c,motor_c,heater_power_pct,motor_power_pct,piston_position,ready,state,stage' && hcText.length === opened9.n + 1 + (hcText[hcText.length - 1] === '' ? 1 : 0) && /^[^,]+,-420,no,\d+\.\d+,93,.*,no,heating,heating\s*$/.test(hcText[1]) && hcText.some((l) => /^[^,]+,0,yes,.*,brewing,Bloom\s*$/.test(l)), `${hcText.length} lines · ${hcText[1]}`);
+  // back to live: the machine now, a longer span, and Save to History for what is on screen
+  await page.click('#tp-live');
+  await page.selectOption('#tp-window', '900');
+  await page.waitForTimeout(1200);
+  const live2 = await page.evaluate(async () => { const { tp, machinePanel, store } = window.__pb; const x = machinePanel.tempChart.data[0]; return { mode: tp.mode, view: machinePanel.view.mode, window: machinePanel.windowSec, saved: await store.getSetting('tpWindow'), note: document.querySelector('#temps-note').textContent, n: x.length, span: x[x.length - 1] - x[0], save: document.querySelector('#tp-save').textContent, saveOff: document.querySelector('#tp-save').disabled, info: document.querySelector('#heat-brew-info').textContent, brewBtn: document.querySelector('#tp-brew').disabled, tiles: document.querySelector('#ms-boiler').textContent }; });
+  check('Live shows the machine now — the span can be 5, 15 or 30 minutes and is remembered — with the loaded profile and the ready-to-brew state', live2.mode === 'live' && live2.view === 'live' && live2.window === 900 && live2.saved === 900 && /^Live: the last 15 minutes$/.test(live2.note) && live2.n > 300 && live2.span > 60 && live2.save === 'Save to History' && !live2.saveOff && /^Blooming Espresso · .*target 92\.0 °C/.test(live2.info) && !/target.*target/.test(live2.info) && !live2.brewBtn && /^\d+\.\d/.test(live2.tiles), JSON.stringify(live2));
+  const nBefore = await page.evaluate(() => window.__pb.tp.list.length);
+  await page.click('#tp-save');
+  await page.waitForFunction((n) => window.__pb.tp.list.length === n + 1, nBefore, { timeout: 5000 });
+  const liveKept = await page.evaluate(() => { const r = window.__pb.tp.list[0]; return { id: r.id, span: r.summary.spanSec, n: r.n, brew: r.brewSec, shot: r.shotId, profile: r.profile, target: r.targetC, sorted: window.__pb.tp.list.every((x, i, a) => i === 0 || a[i - 1].at >= x.at) }; });
+  check('Save to History in Live keeps what is on screen as a record of its own', liveKept.span > 60 && liveKept.span <= 901 && liveKept.n > 60 && /^tp-\d+-\d+$/.test(liveKept.id) && liveKept.profile === 'Blooming Espresso' && (liveKept.target === 92 || liveKept.target === 93) && liveKept.sorted, JSON.stringify(liveKept));
+  await page.selectOption('#tp-window', '300');
+  await page.click('#tp-brew');
+  await page.waitForTimeout(200);
+  check('"This brew" returns to the record that was shown', (await page.evaluate(() => `${window.__pb.tp.mode}:${window.__pb.tp.record?.id}:${window.__pb.machinePanel.view.mode}`)) === 'brew:tp-e2e-9:record');
+  // a backup carries the records; restoring brings them back cleaned
+  const tpBackup = await page.evaluate(async () => { const { store, refreshThermalList, tp } = window.__pb; const b = await store.exportAll(); const n = b.thermal.length; await store.deleteThermal('tp-e2e-5'); b.thermal.find((r) => r.id === 'tp-e2e-5').note = { evil: 1 }; b.thermal.push({ id: 'junk', cols: { t: 'x' } }); await store.importAll(JSON.parse(JSON.stringify(b))); await refreshThermalList(); const back = await store.getThermal('tp-e2e-5'); return { n, list: tp.list.length, coffee: back?.coffee, note: back?.note, readings: back?.n, summary: back?.summary?.targetC, junk: !!(await store.getThermal('junk')) }; });
+  check('a backup carries the kept records; a restore brings them back, checked field by field', tpBackup.n === nBefore + 1 && tpBackup.list === tpBackup.n && tpBackup.coffee === 'Thermal B' && tpBackup.note === '' && tpBackup.readings > 400 && tpBackup.summary === 94 && !tpBackup.junk, JSON.stringify(tpBackup));
+  // delete: one from its row, the rest of the test's records with Delete selected — the brews stay
+  await page.click('.view-tab[data-view="history"]');
+  await page.waitForTimeout(200);
+  const shotsBefore = await page.evaluate(() => window.__pb.state.shots.length);
+  await page.click(`#tp-rows tr[data-id="${liveKept.id}"] button[data-act="delete"]`);
+  await page.waitForSelector('#confirm-dialog[open]');
+  const tpDelText = await page.evaluate(() => `${document.querySelector('#confirm-title').textContent} | ${document.querySelector('#confirm-body').textContent} | ${document.querySelector('#confirm-go').textContent}`);
+  await page.click('#confirm-cancel');
+  await page.waitForTimeout(150);
+  check('Delete asks first, says the brew itself stays, and Cancel keeps the record', /^Delete these temperatures and power\? \| .*The brew itself stays under Brews.* \| Delete record$/.test(tpDelText) && (await page.evaluate(() => window.__pb.tp.list.length)) === nBefore + 1, tpDelText);
+  await page.click(`#tp-rows tr[data-id="${liveKept.id}"] button[data-act="delete"]`);
+  await page.click('#confirm-go');
+  await page.waitForFunction((n) => window.__pb.tp.list.length === n, nBefore, { timeout: 5000 });
+  await page.fill('#tp-search', 'thermal');
+  await page.waitForTimeout(150);
+  const found = await page.evaluate(() => ({ rows: [...document.querySelectorAll('#tp-rows tr')].map((tr) => tr.dataset.id).sort().join(','), count: document.querySelector('#tp-count').textContent }));
+  check('the list can be searched by coffee, roaster, profile or note', found.rows === 'tp-e2e-5,tp-e2e-9' && new RegExp(`^\\(2 of ${nBefore}\\)$`).test(found.count), JSON.stringify(found));
+  await page.check('#tp-select-all');
+  check('"select all" ticks what is shown', /^Delete selected \(2\)$/.test(await page.textContent('#tp-delete-selected')));
+  await page.click('#tp-delete-selected');
+  await page.waitForSelector('#confirm-dialog[open]');
+  await page.click('#confirm-go');
+  await page.waitForFunction((n) => window.__pb.tp.list.length === n - 2, nBefore, { timeout: 5000 });
+  await page.fill('#tp-search', '');
+  await page.waitForTimeout(200);
+  const afterDel = await page.evaluate(async () => ({ list: window.__pb.tp.list.length, stored: (await window.__pb.store.listThermal()).length, shots: window.__pb.state.shots.length, cmp: document.querySelector('#tp-compare-panel').hidden, an: document.querySelector('#tp-analysis-panel').hidden, mode: window.__pb.tp.mode, buttons: document.querySelector('#tp-delete-selected').textContent + ':' + document.querySelector('#tp-delete-selected').disabled }));
+  check('Delete selected removes the ticked records from the database and closes their comparison and analysis; the brews are untouched', afterDel.list === nBefore - 2 && afterDel.stored === afterDel.list && afterDel.shots === shotsBefore && afterDel.cmp && afterDel.an && afterDel.buttons === 'Delete selected:true', JSON.stringify(afterDel));
+  // Settings → Heating: keep every brew's temperatures and power
   await page.click('.view-tab[data-view="settings"]');
   await page.check('#set-maintenance');
-  await page.uncheck('#set-heat-save');
+  await page.check('#set-heat-keep');
+  await page.waitForTimeout(200);
+  await page.click('.view-tab[data-view="shots"]');
+  await page.click('#tp-live');
+  await page.waitForTimeout(200);
+  check('Settings → Heating can keep every brew\'s temperatures and power; the panel says so', (await page.evaluate(() => window.__pb.settings.heatKeep)) === true && /every brew is kept in History$/.test(await page.textContent('#temps-note')), await page.textContent('#temps-note'));
+  await page.click('.view-tab[data-view="settings"]');
+  await page.uncheck('#set-heat-keep');
+  await page.evaluate(() => { for (const d of document.querySelectorAll('#view-history details.hist-section')) d.open = d.dataset.hist === 'brews'; });
   await page.click('.view-tab[data-view="shots"]');
 
   // ---- v0.21: Settings → Refractometer — the calibration that follows a brew, the procedure, the history

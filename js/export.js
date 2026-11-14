@@ -3,9 +3,9 @@
 // loaded lazily from vendor/ only when a PDF is asked for.
 
 import { zipSync, strToU8 } from '../vendor/fflate.esm.js';
-import { beverageOf, beverageSource, profileTargetOf, measuredEy } from './analysis.js?v=0.21.0';
-import { pdfWriter } from './review-export.js?v=0.21.0';
-import { ratingOf, ratingMaxOf } from './review.js?v=0.21.0';
+import { beverageOf, beverageSource, profileTargetOf, measuredEy } from './analysis.js?v=0.22.0';
+import { pdfWriter } from './review-export.js?v=0.22.0';
+import { ratingOf, ratingMaxOf } from './review.js?v=0.22.0';
 
 const APP = 'portal-met-bridge';
 
@@ -344,8 +344,8 @@ export const slug = (s) => (s || '').toString().toLowerCase().replace(/[^a-z0-9]
 const round = (x, d) => (Number.isFinite(x) ? Number(x.toFixed(d)) : '');
 
 // ---------------------------------------------------------- heating graph --
-// The Machine tab's "Temperatures and power" graphs, saved with the brew they
-// belong to (Settings → Heating → Save the heating graph and its data).
+// The Shots tab's "Temperatures and power" graphs, saved with the brew they
+// belong to. The readings themselves are a record (js/thermal.js).
 
 const HEAT_FONT = '"Avenir Next", Avenir, "Helvetica Neue", Helvetica, Arial, sans-serif';
 
@@ -428,22 +428,10 @@ function fitText(ctx, text, width) {
   return `${t}…`;
 }
 
-export const HEATING_COLUMNS = ['time_iso', 't_s', 'external_1_c', 'external_2_c', 'bar_up_c', 'bar_mid_c', 'bar_down_c', 'tube_c', 'motor_c', 'status_temp_c', 'target_c', 'ready', 'heater_power_pct', 'motor_power_pct', 'piston_position', 'state', 'stage', 'profile'];
-
-/** The heating graph's samples as CSV: one row per reading, with the machine's state and the profile's target beside it. */
-export function heatingCsv(rows) {
-  const r1 = (v) => (Number.isFinite(v) ? Math.round(v * 10) / 10 : '');
-  const out = [HEATING_COLUMNS];
-  for (const x of rows || []) {
-    out.push([Number.isFinite(x.wall) ? new Date(x.wall).toISOString() : '', Number.isFinite(x.t) ? Math.round(x.t * 10) / 10 : '', r1(x.ext1), r1(x.ext2), r1(x.barUp), r1(x.barMid), r1(x.barDown), r1(x.tube), r1(x.motor), r1(x.status), r1(x.target), x.ready === true ? 'yes' : x.ready === false ? 'no' : '', r1(x.heater), r1(x.motorPower), Number.isFinite(x.motorPos) ? Math.round(x.motorPos * 100) / 100 : '', x.state || '', x.stage || '', x.profile || '']);
-  }
-  return rowsToCsv(out);
-}
-
 /**
  * The heating graph as a one-page PDF: title, the brew information, the
  * picture from heatingJpeg(), then the readings and the stage changes.
- * @param {object} r { title, subtitle, image: {dataUrl,width,height}, info: [[k,v]], readings: [[k,v]], events: string[] }
+ * @param {object} r { title, subtitle, image: {dataUrl,width,height}, info: [[k,v]], readings: [[k,v]], readingsTitle, events: [[when, stage]] }
  */
 export async function heatingPdf(r) {
   const jsPDF = await loadJsPdf();
@@ -501,15 +489,15 @@ export async function heatingPdf(r) {
     doc.addImage(r.image.dataUrl, 'JPEG', margin, y, w, h);
     y += h + 10;
   }
-  table('Readings when this was saved', r.readings);
-  if (r.events?.length) table('Machine stages in the graph', r.events.map((e) => [e[0], e[1]]));
+  table(r.readingsTitle || 'Readings', r.readings);
+  if (r.events?.length) table('Machine stages (seconds from the start of the brew)', r.events.map((e) => [e[0], e[1]]));
   const pages = doc.getNumberOfPages();
   for (let i = 1; i <= pages; i++) {
     doc.setPage(i);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8);
     doc.setTextColor(130);
-    doc.text(pdfSafe(`${APP} · heating graph · page ${i} of ${pages}`), margin, pageH - 20);
+    doc.text(pdfSafe(`${APP} · temperatures and power · page ${i} of ${pages}`), margin, pageH - 20);
   }
   return doc.output('blob');
 }

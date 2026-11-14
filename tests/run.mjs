@@ -1582,20 +1582,13 @@ await test('piston check (v0.20): after a brew the piston must have travelled an
   assert.equal(cleanPistonResult('nope'), null);
 });
 
-await test('heating graph (v0.20): the CSV has one row per reading with the state, the profile and its target; Settings is made of folding sections', () => {
-  const csv = exportMod.heatingCsv([
-    { t: 12.34, wall: Date.UTC(2026, 10, 14, 13, 0, 0), ext1: 102.94, ext2: 103.4, barUp: 84, barMid: 88.1, barDown: 85.1, tube: 86.3, motor: 29.3, status: 91.26, target: 93, ready: false, heater: 55.4, motorPower: 0, motorPos: 0, state: 'brewing', stage: 'heating', profile: '=cmd|x' },
-    { t: 13, wall: NaN, ext1: null, status: 93.01, target: 93, ready: true, state: 'brewing', stage: 'click to start', profile: 'Blooming, "Espresso"' },
-  ]).split('\n');
-  assert.equal(csv[0], exportMod.HEATING_COLUMNS.join(','));
-  assert.equal(csv[1], "2026-11-14T13:00:00.000Z,12.3,102.9,103.4,84,88.1,85.1,86.3,29.3,91.3,93,no,55.4,0,0,brewing,heating,'=cmd|x", 'rounded; a formula-looking profile name is defused');
-  assert.equal(csv[2], ',13,,,,,,,,93,93,yes,,,,brewing,click to start,"Blooming, ""Espresso"""');
+await test('settings (v0.20): Settings is made of folding sections with the options where they were moved to', () => {
   // the page: every settings section folds, in the order asked for, with the options where they were moved to
   const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
   const sections = [...html.matchAll(/<details class="set-section" data-section="([a-z]+)">\s*<summary class="panel-head"><h2>([^<]+)<\/h2>/g)].map((m) => `${m[1]}:${m[2]}`);
   assert.deepEqual(sections, ['machine:Machine', 'heating:Heating', 'recording:Recording', 'files:Files and folders', 'estimates:Estimates', 'refractometer:Refractometer', 'ai:AI review', 'prep:Brew Prep.', 'backup:Backup and restore', 'logging:Logging and debug', 'startover:Start over', 'about:About']);
   const within = (id, section) => { const a = html.indexOf(`data-section="${section}"`); const b = html.indexOf('</details>\n      </section>', a); const i = html.indexOf(`id="${id}"`); return i > a && i < b; };
-  assert.ok(within('set-heat-rule', 'heating') && within('set-heat-save', 'heating') && !within('set-heat-rule', 'machine'), 'Ready to brew moved to Heating');
+  assert.ok(within('set-heat-rule', 'heating') && within('set-heat-keep', 'heating') && !within('set-heat-rule', 'machine'), 'Ready to brew moved to Heating');
   assert.ok(within('list-roaster', 'prep') && within('set-prep-rdt', 'prep') && within('set-water', 'prep'), 'Pick-lists, Grind Prep and Water under Brew Prep.');
   assert.ok(within('set-community', 'ai') && within('set-sec-verdict', 'ai') && within('set-ai-edit-query', 'ai') && within('set-maintenance', 'machine'));
   assert.ok(within('refcal-start', 'refractometer') && within('ref-guide', 'refractometer') && within('ref-history', 'refractometer') && within('set-ref-window', 'refractometer'), 'Refractometer: portal calibration, detail and history (v0.21)');
@@ -1603,7 +1596,7 @@ await test('heating graph (v0.20): the CSV has one row per reading with the stat
   assert.deepEqual(refHeads, ['Portal calibration', 'Detail', 'History']);
   const checked = (id) => new RegExp(`id="${id}"[^>]*\\bchecked\\b`).test(html);
   assert.deepEqual(['set-prep-rdt', 'set-prep-wdt', 'set-prep-distribution', 'set-prep-screen', 'set-prep-tamper', 'set-prep-single-dose'].map(checked), [true, true, true, false, true, true], 'Grind Prep defaults');
-  assert.ok(checked('set-community') && ['coffee', 'roaster', 'grinder', 'espresso', 'pourover', 'profiles'].every((k) => checked(`set-community-${k}`)) && !checked('set-heat-save') && !checked('set-ai-edit-query'));
+  assert.ok(checked('set-community') && ['coffee', 'roaster', 'grinder', 'espresso', 'pourover', 'profiles'].every((k) => checked(`set-community-${k}`)) && !checked('set-heat-keep') && !checked('set-ai-edit-query'));
   // every setting main.js binds has its input in the page
   const main = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
   const bound = [...main.slice(main.indexOf('const SETTINGS = {'), main.indexOf('const settings = {};')).matchAll(/el: '([^']+)'/g)].map((m) => m[1]);
@@ -1729,6 +1722,151 @@ await test('refractometer (v0.21): the history lists every reading with what was
   assert.ok(Math.abs(sn.k - (0.9 * 8.7 + 0.95 * 9.2) / (0.9 * 0.9 + 0.95 * 0.95)) < 1e-3);
   assert.deepEqual(coffeeCalibrations([], []), []);
   setBeveragePreference('profile');
+});
+
+// ------------------------------------------------------------------ v0.22 --
+const thermal = await import('../js/thermal.js');
+
+await test('temperatures and power (v0.22): readings become a record counted from the start of the brew, with the numbers it is judged by', () => {
+  const { makeDemoThermalRows, buildRecord, brewSpans, matchShot, summarizeRecord, statsOf, valueAt, stageAt, THERMAL_KEYS, MAX_READINGS } = thermal;
+  const startedAt = Date.UTC(2026, 10, 14, 9, 0, 0);
+  const rows = makeDemoThermalRows({ startedAt, durationSec: 30, targetC: 93, seed: 7 }); // seed 7: starts 0.1 °C above target, ready 70 s before the brew
+  // the brew is found in the readings, and the shot it belongs to by its start time
+  const spans = brewSpans(rows);
+  assert.equal(spans.length, 1);
+  assert.deepEqual([spans[0].startWall, spans[0].endWall], [startedAt, startedAt + 30000]);
+  assert.equal(matchShot([{ id: 'a', startedAt: startedAt - 60000 }, { id: 'b', startedAt: startedAt + 4000 }, { id: 'c', startedAt: startedAt + 2000, inProgress: true }], spans[0]).id, 'b');
+  assert.equal(matchShot([{ id: 'a', startedAt: startedAt - 60000 }], spans[0]), null);
+  assert.deepEqual(brewSpans([]), []);
+  const rec = buildRecord({ rows, brew: spans[0], info: { shotId: 'shot-1', coffee: '  Supernova ', roaster: 'Roaster', doseG: 18.04, profile: 'Blooming', machine: 'Meticulous', rule: 'held', source: 'live' }, savedAt: startedAt + 60000 });
+  assert.equal(rec.id, 'tp-shot-1', 'a brew has one record: keeping it again replaces it');
+  assert.deepEqual([rec.kind, rec.at, rec.t0Wall, rec.brewStartedAt, rec.brewEndedAt, rec.brewSec, rec.shotId, rec.coffee, rec.doseG, rec.targetC, rec.source], ['thermal', startedAt, startedAt, startedAt, startedAt + 30000, 30, 'shot-1', 'Supernova', 18, 93, 'live']);
+  // columns of equal length; time runs from the brew start; one reading a second outside the brew, five a second in it
+  const t = rec.cols.t;
+  assert.ok(THERMAL_KEYS.every((k) => rec.cols[k].length === t.length) && rec.cols.target.length === t.length && rec.cols.ready.length === t.length && rec.cols.brewing.length === t.length && rec.n === t.length);
+  assert.ok(t[0] === -420 && t[t.length - 1] === 42 && t.every((x, i) => i === 0 || x > t[i - 1]));
+  const stepAt = (at) => { const i = t.findIndex((x) => x >= at); return Math.round((t[i + 1] - t[i]) * 10) / 10; };
+  assert.deepEqual([stepAt(-300), stepAt(10), stepAt(39)], [1, 0.2, 1]);
+  assert.equal(rec.cols.brewing.filter(Boolean).length, 151, 'the brew is marked, reading by reading');
+  assert.deepEqual([rec.cols.ready[0], rec.cols.ready[t.indexOf(-10)], rec.cols.ready[t.length - 1]], [0, 1, null]);
+  // the machine's stages, as changes
+  assert.deepEqual(rec.events.map((e) => e.name), ['heating', 'click to start', 'Bloom', 'Ramp', 'Decline', 'retracting', 'idle']);
+  assert.deepEqual([stageAt(rec, -200).name, stageAt(rec, 0).name, stageAt(rec, 20).name], ['heating', 'Bloom', 'Decline']);
+  // the numbers
+  const s = rec.summary;
+  assert.deepEqual([s.readings, s.spanSec, s.leadSec, s.brewSec, s.tailSec, s.targetC], [t.length, 462, 420, 30, 12, 93]);
+  assert.ok(Math.abs(s.startStatusC - 93.1) < 0.15 && Math.abs(s.startOffsetC - 0.1) < 0.15, `${s.startStatusC}`);
+  assert.ok(s.brewMinC < s.brewMeanC && s.brewMeanC < s.brewMaxC && s.brewDropC > 1.2 && s.brewDropC < 2 && Math.abs(s.brewSwingC - (s.brewMaxC - s.brewMinC)) < 0.11, JSON.stringify(s));
+  assert.ok(Math.abs(s.brewMeanOffsetC - (s.brewMeanC - 93)) < 0.011);
+  assert.deepEqual([s.warmupSec, s.readyWaitSec], [350, 70], 'heating until the rule was met, then standing ready');
+  assert.ok(s.heaterBrewPct > 55 && s.heaterBrewPct < 70 && s.heaterLeadPct > 40 && s.heaterMaxPct === 100 && s.motorPowerMeanPct > 20 && s.pistonTravel > 50 && s.motorRiseC > 0.8);
+  assert.ok(Math.abs(s.startExt1C - (s.startStatusC + 9.5)) < 0.3 && Number.isFinite(s.startBarC) && Number.isFinite(s.startTubeC));
+  assert.deepEqual(summarizeRecord(rec), s, 'the summary is a function of the record');
+  assert.equal(valueAt(rec, 'status', 500), null, 'no reading near that moment');
+  assert.equal(statsOf(rec, 'status', 100, 200).n, 0);
+  // a brew's warm-up starts where the brew before it ended
+  const cut = buildRecord({ rows, brew: spans[0], fromWall: startedAt - 100000 });
+  assert.equal(cut.cols.t[0], -100);
+  assert.ok(/^tp-\d+-\d+$/.test(cut.id) && cut.shotId === null && cut.profile === 'Blooming Espresso (demo)' && cut.targetC === 93, 'without a shot: the profile and target the readings carried');
+  assert.equal(cut.summary.warmupSec, 30, 'the heating that is in the record');
+  // readings without a brew: counted from the first reading, no brew numbers
+  const idle = buildRecord({ rows: rows.filter((r) => r.wall < startedAt - 100000), info: {} });
+  assert.deepEqual([idle.brewSec, idle.brewStartedAt, idle.cols.t[0], idle.at], [0, null, 0, startedAt - 420000]);
+  assert.deepEqual([idle.summary.brewMeanC, idle.summary.startOffsetC, idle.summary.brewSec], [null, null, 0]);
+  assert.ok(idle.summary.minC < idle.summary.maxC && idle.summary.heaterMeanPct > 50);
+  // nothing to keep
+  assert.equal(buildRecord({ rows: [] }), null);
+  assert.equal(buildRecord({ rows: [rows[0]] }), null);
+  // a very long stretch is cut to its newest readings
+  const long = Array.from({ length: MAX_READINGS + 500 }, (_, i) => ({ wall: startedAt + i * 1000, status: 90, heater: 10 }));
+  assert.equal(buildRecord({ rows: long }).n, MAX_READINGS);
+});
+
+await test('temperatures and power (v0.22): records line up at the brew start for comparison, are analysed side by side and exported as tables', () => {
+  const { makeDemoThermalRows, buildRecord, seriesOf, compareRange, analyzeRecords, thermalCsvRows, thermalSummaryRows, thermalDigest, fmtSummary, fmtSpan, SUMMARY_FIELDS, THERMAL_COLUMNS, THERMAL_SERIES, TEMP_KEYS, POWER_KEYS, resample } = thermal;
+  const mk = (seed, startedAt, durationSec, targetC, info = {}) => buildRecord({ rows: makeDemoThermalRows({ startedAt, durationSec, targetC, seed }), brew: { startWall: startedAt, endWall: startedAt + durationSec * 1000 }, info: { shotId: `s${seed}`, ...info } });
+  const t0 = Date.UTC(2026, 10, 14, 9, 0, 0);
+  const a = mk(7, t0, 30, 93, { coffee: 'Supernova', profile: 'Blooming' });
+  const b = mk(9, t0 + 3600e3, 26, 93, { coffee: 'Supernova', profile: 'Blooming' }); // seed 9: starts 0.6 °C above target, ready 40 s before the brew
+  const c = mk(5, t0 + 7200e3, 34, 94, { coffee: '=cmd|x', profile: 'Turbo, "fast"' }); // seed 5: starts 0.4 °C below target
+  // one reading over time, counted from each brew's start
+  const sa = seriesOf(a, 'status', { from: -60, to: 45 });
+  assert.ok(sa.xs[0] === -60 && sa.xs[sa.xs.length - 1] === 42 && sa.xs.length === sa.ys.length && sa.xs.includes(0));
+  assert.deepEqual(compareRange([a, b, c], 'brew'), { from: -60, to: 49 }, 'a minute before, to a little after the longest brew');
+  assert.deepEqual(compareRange([a, b], 'all'), { from: -Infinity, to: Infinity });
+  assert.equal(seriesOf(a, 'heater').xs.length, a.n);
+  assert.deepEqual(seriesOf({ cols: { t: [0, 1, 2], status: [1, null, 3] } }, 'status'), { xs: [0, 2], ys: [1, 3] }, 'moments without a value are left out');
+  assert.deepEqual([TEMP_KEYS.length, POWER_KEYS.length, THERMAL_SERIES.status.kind, THERMAL_SERIES.heater.unit], [8, 3, 'temp', '%']);
+  // side by side
+  const an = analyzeRecords([a, b, c], { labelOf: (r) => r.shotId });
+  assert.deepEqual(an.rows.map((r) => r.label), ['s7', 's9', 's5']);
+  assert.equal(an.fields, SUMMARY_FIELDS);
+  const text = an.findings.join('\n');
+  assert.ok(/s7: the brew started at 93\.\d °C, on the 93\.0 °C target; it fell 1\.\d °C during the brew/.test(text), text);
+  assert.ok(/s9: the brew started at 93\.\d °C, 0\.\d °C above the 93\.0 °C target/.test(text) && /s5: the brew started at 93\.\d °C, 0\.\d °C below the 94\.0 °C target/.test(text), text);
+  assert.ok(text.includes('The brews have different targets (93.0 °C, 94.0 °C)') && /Temperature at brew start: from 93\.\d °C \(s7\) to 93\.\d °C \(s\d\)/.test(text) && /Start vs target: from -0\.\d °C \(s5\) to 0\.\d °C \(s9\)/.test(text), text);
+  assert.ok(/Warm-up: from 5 min 50 s \(s7\) to 6 min 20 s \(s9\) — 30 s apart\./.test(text) && text.includes('Drop during the brew: the same in all 3 brews (1.6 °C).'), text);
+  assert.ok(/the warm-up took 5 min 50 s, then the machine stood ready for 70 s/.test(text));
+  // a record without a brew is said to be one; a single record gets no comparison
+  const idle = buildRecord({ rows: makeDemoThermalRows({ startedAt: t0, seed: 7 }).filter((r) => r.wall < t0 - 100000), info: {} });
+  const one = analyzeRecords([idle], { labelOf: () => 'idle' });
+  assert.ok(one.findings.length === 1 && /^idle: no brew in this record — 5 min 19 s of readings, status temperature \d+\.\d °C to \d+\.\d °C\.$/.test(one.findings[0]), one.findings[0]);
+  assert.deepEqual(analyzeRecords([]).findings, []);
+  // values as text
+  const F = Object.fromEntries(SUMMARY_FIELDS.map((f) => [f.key, f]));
+  assert.deepEqual([fmtSummary(F.startOffsetC, 0.62), fmtSummary(F.startOffsetC, -0.4), fmtSummary(F.targetC, 93), fmtSummary(F.warmupSec, 250), fmtSummary(F.heaterBrewPct, 61.4), fmtSummary(F.pistonTravel, 57.04), fmtSummary(F.brewMeanC, null)], ['+0.6 °C', '-0.4 °C', '93.0 °C', '4 min 10 s', '61 %', '57.0', '–']);
+  assert.deepEqual([fmtSpan(45), fmtSpan(95), fmtSpan(NaN)], ['45 s', '1 min 35 s', '–']);
+  // a record as a table: one row per reading, the stage beside it; spreadsheet formulas in names are defused by the CSV writer
+  const rowsA = thermalCsvRows(a);
+  assert.deepEqual(rowsA[0], THERMAL_COLUMNS);
+  assert.equal(rowsA.length, a.n + 1);
+  const at0 = rowsA.find((r) => r[1] === 0);
+  assert.deepEqual([at0[0], at0[2], at0[4], at0[15], at0[16], at0[17]], ['2026-11-14T09:00:00.000Z', 'yes', 93, '', 'brewing', 'Bloom']);
+  assert.deepEqual([rowsA[1][0], rowsA[1][1], rowsA[1][2], rowsA[1][15], rowsA[1][17]], ['2026-11-14T08:53:00.000Z', -420, 'no', 'no', 'heating']);
+  const sum = thermalSummaryRows([a, c]);
+  assert.equal(sum[0].length, 7 + SUMMARY_FIELDS.length + 1);
+  assert.deepEqual([sum[1][0], sum[1][2], sum[1][3], sum[1][6], sum[1][7]], ['2026-11-14T09:00:00.000Z', 'Blooming', 'Supernova', 's7', 93]);
+  const csv = exportMod.rowsToCsv(sum).split('\n');
+  assert.ok(csv[2].includes(`"Turbo, ""fast""",'=cmd|x`), csv[2]);
+  // the digest for an AI model: the numbers, coarse readings, the findings — and nothing else
+  const digest = thermalDigest([a, c], { labelOf: (r) => r.shotId });
+  assert.ok(digest.includes('## Record 1: s7') && digest.includes('Before the brew (every 30 s): t | Status | External 1 | External 2 | Tube | Heater | Motor power') && digest.includes('During the brew (every 2 s)') && digest.includes('## What the numbers show'));
+  assert.ok(digest.length < 12000, `${digest.length} characters for two records`);
+  assert.deepEqual(resample({ cols: { t: [0, 1, 2, 3, 10], status: [1, 3, 5, 7, 9] } }, 'status', { from: 0, to: 12, step: 4 }), [4, null, 9]);
+});
+
+await test('temperatures and power (v0.22): a record from a backup is checked reading by reading; the page has the panel on Shots and History in two folding sections', async () => {
+  const { makeDemoThermalRows, buildRecord, cleanImportedThermal, MAX_READINGS } = thermal;
+  const t0 = Date.UTC(2026, 10, 14, 9, 0, 0);
+  const rec = buildRecord({ rows: makeDemoThermalRows({ startedAt: t0, seed: 7 }), brew: { startWall: t0, endWall: t0 + 30000 }, info: { shotId: 's7', coffee: 'Supernova' } });
+  const back = cleanImportedThermal(JSON.parse(JSON.stringify(rec)));
+  assert.deepEqual(back, rec, 'what the app writes comes back unchanged');
+  const evil = '<img src=x onerror=alert(1)>';
+  const dirty = cleanImportedThermal({ ...JSON.parse(JSON.stringify(rec)), id: `  ${'x'.repeat(400)}`, coffee: { toString: () => evil }, profile: 'p'.repeat(900), note: 5, targetC: '93', doseG: -4, source: evil, summary: { startStatusC: 1e9, evil }, events: [{ t: 1, name: evil.repeat(9), state: 3 }, 'junk', { t: 'x' }, { t: -5, name: 'heating' }], cols: { ...rec.cols, status: rec.cols.status.map((v, i) => (i === 3 ? evil : i === 4 ? Infinity : v)), ready: rec.cols.ready.map(() => evil), brewing: rec.cols.brewing.map((v) => (v ? 'yes' : '')), extra: [evil] } });
+  assert.equal(dirty.id.length, 200);
+  assert.deepEqual([dirty.coffee, dirty.profile.length, dirty.note, dirty.targetC, dirty.doseG, dirty.source], ['', 200, '', null, null, 'live']);
+  assert.deepEqual([dirty.cols.status[3], dirty.cols.status[4], dirty.cols.status[5], dirty.cols.ready[0], dirty.cols.brewing.filter(Boolean).length, 'extra' in dirty.cols], [null, null, rec.cols.status[5], null, 151, false]);
+  assert.deepEqual(dirty.events.map((e) => [e.t, e.name.length, e.state]), [[-5, 7, ''], [1, 80, '']]);
+  assert.ok(Math.abs(dirty.summary.startStatusC - rec.summary.startStatusC) < 0.01 && !('evil' in dirty.summary), 'the summary is worked out again, not believed');
+  for (const bad of [null, 'x', [], {}, { id: 'a' }, { id: 'a', cols: {} }, { id: 'a', cols: { t: [0] } }, { id: '', cols: { t: [0, 1] } }, { id: 'a', cols: { t: [0, 'x'] } }, { id: 'a', cols: { t: [3, 1, 2] } }]) assert.equal(cleanImportedThermal(bad), null);
+  assert.equal(cleanImportedThermal({ id: 'a', cols: { t: Array.from({ length: MAX_READINGS + 10 }, (_, i) => i) } }).n, MAX_READINGS);
+  // the page
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  const view = (name) => { const a = html.indexOf(`id="view-${name}"`); return html.slice(a, html.indexOf('</main>', a)); };
+  const shots = view('shots');
+  const machine = view('machine');
+  const history = view('history');
+  for (const id of ['temps-panel', 'chart-temps', 'chart-power', 'tp-live', 'tp-brew', 'tp-window', 'tp-save', 'heat-save-jpeg', 'heat-save-pdf', 'heat-save-csv', 'ms-boiler', 'ms-heater']) assert.ok(shots.includes(`id="${id}"`) && !machine.includes(`id="${id}"`), `${id} is on the Shots tab`);
+  assert.ok(shots.indexOf('id="temps-panel"') > shots.indexOf('id="chart-mass"') && machine.includes('data-goto="shots" data-open="temps"'), 'after the conductivity graph; the Machine tab points to it');
+  const sections = [...history.matchAll(/<details class="set-section hist-section" data-hist="([a-z]+)"( open)?>\s*<summary class="panel-head"><h2>([^<]+?) <span/g)].map((m) => `${m[1]}:${m[3]}:${m[2] ? 'open' : 'closed'}`);
+  assert.deepEqual(sections, ['brews:Brews:open', 'thermal:Temperatures and power:closed']);
+  const part = (name) => { const a = history.indexOf(`data-hist="${name}"`); return history.slice(a, history.indexOf('</details>', a)); };
+  assert.deepEqual([...part('brews').matchAll(/<button id="(hist-[a-z-]+)"[^>]*>([^<]+)</g)].map((m) => m[2]), ['Compare selected', 'Analyze selected', 'Export selected', 'Delete selected']);
+  assert.deepEqual([...part('thermal').matchAll(/<button id="(tp-[a-z-]+)"[^>]*>([^<]+)</g)].map((m) => `${m[1]}:${m[2]}`), ['tp-compare:Compare selected', 'tp-analyze:Analyze selected', 'tp-export:Export selected', 'tp-delete-selected:Delete selected']);
+  for (const id of ['tp-rows', 'tp-select-all', 'tp-search', 'tp-compare-panel', 'tp-cmp-chart-temp', 'tp-cmp-chart-power', 'tp-cmp-range', 'tp-analysis-panel', 'tp-an-table', 'tp-an-findings', 'tp-an-ai']) assert.ok(history.includes(`id="${id}"`), id);
+  // the store keeps the records and a backup carries them
+  const storeSrc = readFileSync(new URL('../js/store.js', import.meta.url), 'utf8');
+  assert.ok(/const DB_VERSION = 5;/.test(storeSrc) && storeSrc.includes("createObjectStore('thermal', { keyPath: 'id' })") && /exportedAt: [^}]*\bthermal\b/.test(storeSrc) && storeSrc.includes('cleanImportedThermal(raw)'));
 });
 
 console.log(`\n${passed} test group(s) passed in total${process.exitCode ? ', with failures' : ''}.`);

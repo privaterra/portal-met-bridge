@@ -10,7 +10,7 @@
   <title>portal-met-bridge</title>
   <meta name="description" content="Meticulous & Belka Portal conductivity data visualization & analysis: records, visualizes and analyzes the data produced by a Meticulous espresso machine and a Belka Portal conductivity sensor, shot by shot.">
   <link rel="stylesheet" href="vendor/uPlot.min.css" />
-  <link rel="stylesheet" href="css/app.css?v=0.21.0" />
+  <link rel="stylesheet" href="css/app.css?v=0.22.0" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M4 26 L10 8 L16 20 L22 6 L28 26' fill='none' stroke='%232447B8' stroke-width='3' stroke-linejoin='round'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -249,9 +249,9 @@
             <label class="field narrow"><span>Settled: moves less than (°C)</span><input id="set-heat-settle" type="number" min="0.1" max="2" step="0.1" value="0.3" /></label>
           </div>
           <p class="hint" id="heat-live">Connect the machine to see the readings here.</p>
-          <h3>Heating graph</h3>
-          <label class="check"><input type="checkbox" id="set-heat-save" /> <span>Save the heating graph and its data — adds <em>Graph (JPEG)</em>, <em>Report (PDF)</em> and <em>Data (CSV)</em> buttons to <em>Temperatures and power</em> on the <button class="linkish" data-goto="machine">Machine</button> tab</span></label>
-          <p class="hint">Off by default. The files are downloaded through the browser and carry the brew they belong to: the loaded profile and its temperature, the machine's state, the ready-to-brew rule and when it was met, the coffee under <em>This coffee</em>, and the readings at that moment. While this is on, the Machine tab keeps the last 30 minutes of temperatures instead of five, so a whole warm-up fits in one graph.</p>
+          <h3>Temperatures and power</h3>
+          <label class="check"><input type="checkbox" id="set-heat-keep" /> <span>Keep the temperatures and power of every brew — saved to <button class="linkish" data-goto="history" data-open="thermal">History → Temperatures and power</button> when the brew ends</span></label>
+          <p class="hint">Off by default: <em>Save to History</em> on the <button class="linkish" data-goto="shots">Shots</button> tab keeps a brew's readings when you ask for them. A record holds the warm-up (up to 30 minutes), the brew and the seconds after it: the status temperature against the profile's target, the probes, the heater and motor power and the piston — about 150 kB each, so a few hundred fit comfortably. Kept records are part of <em>Back up all</em>.</p>
         </div>
         </details>
       </section>
@@ -296,7 +296,7 @@
             <button id="demo-load" class="btn small">Add a demo shot</button>
             <button id="demo-replay" class="btn small">Replay a demo live</button>
           </div>
-          <p class="hint">A demo shot is a made-up Meticulous shot with a Portal trace, marked as such; the live replay plays one through the recorder so you can watch the page work without a machine. Delete them from History when you are done.</p>
+          <p class="hint">A demo shot is a made-up Meticulous shot with a Portal trace, marked as such; the live replay plays one through the recorder so you can watch the page work without a machine. A demo shot comes with made-up temperatures and power (History → Temperatures and power). Delete both from History when you are done.</p>
           <h3>Saving</h3>
           <p class="hint">Every shot is written to this browser's database while it is being recorded (a checkpoint every two seconds) and finalised when the pump stops, so a closed tab or a crash loses at most the last two seconds. The machine's own record is attached afterwards, and any shot still missing it is completed the next time the machine connects. Where the files go is set under <em>Files and folders</em>, below.</p>
         </div>
@@ -765,7 +765,7 @@
       <section class="panel">
         <div class="panel-head">
           <h2>Machine status</h2>
-          <span class="panel-note">Live from the machine's status and sensors streams.</span>
+          <span class="panel-note">Live from the machine's status and sensors streams. The temperature probes, the heater and their graphs are under <button class="linkish" data-goto="shots" data-open="temps">Shots → Temperatures and power</button>.</span>
         </div>
         <div class="metrics">
           <div class="metric"><div class="v" id="ms-state">–</div><div class="k">state</div></div>
@@ -801,30 +801,6 @@
           <div id="maint-extra"></div>
         </details>
         <p class="hint" id="maint-source"></p>
-      </section>
-
-      <section class="panel" id="temps-panel">
-        <div class="panel-head">
-          <h2>Temperatures and power</h2>
-          <span class="panel-note" id="temps-note">Last five minutes. Toggle series in the legend.</span>
-          <div class="panel-tools" id="heat-save-tools" hidden>
-            <button id="heat-save-jpeg" class="btn small" title="Both graphs as one picture, with the brew they belong to">Graph (JPEG)</button>
-            <button id="heat-save-pdf" class="btn small" title="The graphs, the brew information and the readings as a one-page PDF">Report (PDF)</button>
-            <button id="heat-save-csv" class="btn small" title="Every reading in the graph, one row per sample">Data (CSV)</button>
-          </div>
-        </div>
-        <p class="hint" id="heat-brew-info" hidden></p>
-        <div class="metrics small">
-          <div class="metric"><div class="v" id="ms-boiler">–<small>°C</small></div><div class="k">external 1 (boiler side)</div></div>
-          <div class="metric"><div class="v" id="ms-head">–<small>°C</small></div><div class="k">external 2 (brew head)</div></div>
-          <div class="metric"><div class="v" id="ms-bar">–<small>°C</small></div><div class="k">heater bar (mean)</div></div>
-          <div class="metric"><div class="v" id="ms-tube">–<small>°C</small></div><div class="k">tube</div></div>
-          <div class="metric"><div class="v" id="ms-motor">–<small>°C</small></div><div class="k">motor</div></div>
-          <div class="metric"><div class="v" id="ms-heater">–<small>%</small></div><div class="k">heater power</div></div>
-          <div class="metric"><div class="v" id="ms-water">–</div><div class="k">water tank</div></div>
-        </div>
-        <div class="chart" id="chart-temps"></div>
-        <div class="chart short" id="chart-power"></div>
       </section>
 
       <section class="panel">
@@ -864,14 +840,14 @@
     </main>
 
     <main class="main" id="view-history" hidden>
-      <section class="panel">
-        <div class="panel-head">
-          <h2>History <span class="count" id="hist-count"></span></h2>
-          <div class="panel-tools">
-            <button id="dl-summary" class="btn small">Summary CSV</button>
-            <button id="dl-zip" class="btn small">Everything (zip)</button>
-            <span class="inline-note" id="dl-progress"></span>
-          </div>
+      <section class="panel hist-panel" id="hist-brews-panel">
+        <details class="set-section hist-section" data-hist="brews" open>
+        <summary class="panel-head"><h2>Brews <span class="count" id="hist-count"></span></h2> <span class="panel-note" id="hist-brews-note">Every recorded shot: search, sort, compare, review, export.</span></summary>
+        <div class="hist-body">
+        <div class="hist-toolbar hist-files">
+          <button id="dl-summary" class="btn small">Summary CSV</button>
+          <button id="dl-zip" class="btn small">Everything (zip)</button>
+          <span class="inline-note" id="dl-progress"></span>
         </div>
         <div class="hist-toolbar">
           <input id="hist-search" type="search" placeholder="Search bean, roaster, origin, grinder, profile, note…" autocomplete="off" />
@@ -912,6 +888,8 @@
           <p class="hint hist-empty" id="hist-empty" hidden>Nothing recorded yet. Connect the machine and pull a shot, or add a demo shot from the Shots tab.</p>
         </div>
         <p class="hint">Tick two or more shots and press <em>Compare selected</em> to overlay their graphs below. Click a row to select it, <em>Open</em> (or double-click) to show it on the Shots tab. <b>TDS</b> in bold is a refractometer reading; in italics it is the estimate. <b>Data</b> shows how many Portal and machine samples the shot holds, whether the machine's own record is attached (⌂) and whether its files are in the save folder (▤). The summary CSV has one row per shot with the EC metrics, reading and estimate; the zip adds every shot's CSV, JSON, graphs and PDF report.</p>
+        </div>
+        </details>
       </section>
 
       <section class="panel" id="compare-panel" hidden>
@@ -941,6 +919,90 @@
         <table class="cmp-legend" id="cmp-legend"></table>
         <p class="hint" id="cmp-note"></p>
         <p class="hint">Hover the chart to read every shot at the same point; drag to zoom, double-click to reset. <em>Brew ratio</em> puts cup mass over dose on the x-axis so shots with different doses line up; shots without a dose are left out of that view.</p>
+      </section>
+
+      <section class="panel hist-panel" id="hist-thermal-panel">
+        <details class="set-section hist-section" data-hist="thermal">
+        <summary class="panel-head"><h2>Temperatures and power <span class="count" id="tp-count"></span></h2> <span class="panel-note" id="hist-thermal-note">The temperatures, heater and motor power kept with a brew.</span></summary>
+        <div class="hist-body">
+        <div class="hist-toolbar">
+          <input id="tp-search" type="search" placeholder="Search coffee, roaster, profile, note…" autocomplete="off" />
+          <button id="tp-compare" class="btn small primary" disabled title="Overlay the ticked records, lined up at the moment each brew started (2–8)">Compare selected</button>
+          <button id="tp-analyze" class="btn small" disabled title="The ticked records' numbers side by side, and what stands out">Analyze selected</button>
+          <button id="tp-export" class="btn small" disabled title="A zip with the ticked records' readings (CSV, JSON), graphs and a summary CSV">Export selected</button>
+          <button id="tp-delete-selected" class="btn small danger" disabled>Delete selected</button>
+          <span class="inline-note" id="tp-progress"></span>
+        </div>
+        <div class="hist-wrap">
+          <table class="hist" id="tp-table">
+            <thead>
+              <tr>
+                <th class="sel"><input type="checkbox" id="tp-select-all" aria-label="Select all shown" /></th>
+                <th data-sort="at" aria-sort="descending">Brew started</th>
+                <th data-sort="coffee">Coffee</th>
+                <th data-sort="profile">Profile</th>
+                <th data-sort="targetC" class="num" title="the profile's temperature">Target</th>
+                <th data-sort="startStatusC" class="num" title="status temperature when the brew started, and how far from the target">At start</th>
+                <th data-sort="brewMeanC" class="num" title="status temperature during the brew: mean, and lowest–highest">In the brew</th>
+                <th data-sort="heaterBrewPct" class="num" title="mean heater power during the brew">Heater</th>
+                <th data-sort="warmupSec" class="num" title="from the first heating stage until the ready-to-brew rule was met">Warm-up</th>
+                <th data-sort="spanSec" class="num" title="how much the record holds: its length and number of readings">Record</th>
+                <th title="whether the brew these readings belong to is still under Brews">Belongs to</th>
+                <th class="actions"></th>
+              </tr>
+            </thead>
+            <tbody id="tp-rows"></tbody>
+          </table>
+          <p class="hint hist-empty" id="tp-empty">Nothing kept yet. After a brew, press <em>Save to History</em> under <button class="linkish" data-goto="shots" data-open="temps">Shots → Temperatures and power</button>, or keep every brew's readings under <button class="linkish" data-goto="settings" data-open="heating">Settings → Heating</button>.</p>
+        </div>
+        <p class="hint">Tick records and use the buttons above. <em>Compare</em> overlays them with time counted from each brew's start; <em>Analyze</em> puts their numbers side by side; <em>Export</em> writes a zip. <em>Open</em> (or a double-click) shows a record's graphs on the Shots tab. Deleting a record leaves its brew under <em>Brews</em> untouched.</p>
+        </div>
+        </details>
+      </section>
+
+      <section class="panel" id="tp-compare-panel" hidden>
+        <div class="panel-head">
+          <h2>Compare temperatures and power <span class="count" id="tp-cmp-count"></span></h2>
+          <div class="panel-tools">
+            <label class="inline-field">Temperature
+              <select id="tp-cmp-temp"></select>
+            </label>
+            <label class="inline-field">Power
+              <select id="tp-cmp-power"></select>
+            </label>
+            <label class="inline-field">Span
+              <select id="tp-cmp-range">
+                <option value="brew" selected>the brew (from 1 min before)</option>
+                <option value="all">everything, with the warm-up</option>
+              </select>
+            </label>
+            <button id="tp-cmp-jpeg" class="btn small" title="Both comparison graphs as one picture">Graph (JPEG)</button>
+            <button id="tp-cmp-close" class="btn small">Close</button>
+          </div>
+        </div>
+        <div class="chart" id="tp-cmp-chart-temp"></div>
+        <div class="chart" id="tp-cmp-chart-power"></div>
+        <table class="cmp-legend" id="tp-cmp-legend"></table>
+        <p class="hint">Every record is lined up at the moment its brew started (0 s); the warm-up runs to the left. Hover to read all records at the same moment; drag to zoom, double-click to reset. A record without a brew is drawn from its first reading.</p>
+      </section>
+
+      <section class="panel" id="tp-analysis-panel" hidden>
+        <div class="panel-head">
+          <h2>Temperatures and power — analysis <span class="count" id="tp-an-count"></span></h2>
+          <div class="panel-tools">
+            <button id="tp-an-ai" class="btn small" title="Send these numbers to the AI provider chosen in Settings and show its reading of them">Ask the AI…</button>
+            <button id="tp-an-stop" class="btn small" hidden>Stop</button>
+            <button id="tp-an-copy" class="btn small" title="The table and the findings as text">Copy</button>
+            <button id="tp-an-csv" class="btn small" title="The table as a CSV file">Table (CSV)</button>
+            <button id="tp-an-close" class="btn small">Close</button>
+          </div>
+        </div>
+        <div class="hist-wrap"><table class="hist tp-analysis" id="tp-an-table"></table></div>
+        <h3>What stands out</h3>
+        <ul class="tp-findings" id="tp-an-findings"></ul>
+        <p class="hint">Worked out in this browser from the kept readings; nothing is sent anywhere. Temperatures are the machine's status temperature unless a probe is named. <em>Ask the AI…</em> sends this table, the findings and each record's readings at coarse steps (no other shot data) to the provider under <button class="linkish" data-goto="settings" data-open="ai">Settings → AI review</button>.</p>
+        <p class="inline-note" id="tp-an-status"></p>
+        <article class="md" id="tp-an-report" hidden></article>
       </section>
     </main>
 
@@ -984,6 +1046,43 @@
         <div class="chart" id="chart-mass"></div>
         <div class="metrics" id="metrics"></div>
         <p class="status" id="analysis-status"></p>
+      </section>
+
+      <section class="panel" id="temps-panel">
+        <div class="panel-head">
+          <h2>Temperatures and power</h2>
+          <span class="panel-note" id="temps-note">Live: the last five minutes.</span>
+          <div class="panel-tools">
+            <span class="seg" role="group" aria-label="What the graphs show">
+              <button id="tp-live" class="btn small" aria-pressed="true" title="The machine's readings now">Live</button>
+              <button id="tp-brew" class="btn small" aria-pressed="false" title="The readings of a brew: the shot shown above, or the record opened from History" disabled>This brew</button>
+            </span>
+            <label class="inline-field" id="tp-window-field">Show
+              <select id="tp-window">
+                <option value="300" selected>last 5 minutes</option>
+                <option value="900">last 15 minutes</option>
+                <option value="1800">last 30 minutes</option>
+              </select>
+            </label>
+            <button id="tp-save" class="btn small primary" title="Keep these readings: they are listed under History → Temperatures and power" disabled>Save to History</button>
+            <button id="heat-save-jpeg" class="btn small" title="Both graphs as one picture, with the brew they belong to">Graph (JPEG)</button>
+            <button id="heat-save-pdf" class="btn small" title="The graphs, the brew information and the numbers as a PDF">Report (PDF)</button>
+            <button id="heat-save-csv" class="btn small" title="Every reading in the graphs, one row per reading">Data (CSV)</button>
+          </div>
+        </div>
+        <p class="hint" id="heat-brew-info"></p>
+        <div class="metrics small" id="tp-tiles">
+          <div class="metric"><div class="v" id="ms-boiler">–<small>°C</small></div><div class="k">external 1 (boiler side)</div></div>
+          <div class="metric"><div class="v" id="ms-head">–<small>°C</small></div><div class="k">external 2 (brew head)</div></div>
+          <div class="metric"><div class="v" id="ms-bar">–<small>°C</small></div><div class="k">heater bar (mean)</div></div>
+          <div class="metric"><div class="v" id="ms-tube">–<small>°C</small></div><div class="k">tube</div></div>
+          <div class="metric"><div class="v" id="ms-motor">–<small>°C</small></div><div class="k">motor</div></div>
+          <div class="metric"><div class="v" id="ms-heater">–<small>%</small></div><div class="k">heater power</div></div>
+          <div class="metric"><div class="v" id="ms-water">–</div><div class="k">water tank</div></div>
+        </div>
+        <div class="chart" id="chart-temps"></div>
+        <div class="chart short" id="chart-power"></div>
+        <p class="hint">Time counts from the start of the brew: the warm-up is to the left of zero and the brew is shaded. Toggle a line in the legend; drag to zoom, double-click to reset. <em>Save to History</em> keeps what is shown — the warm-up, the brew and what followed — so brews can be <button class="linkish" data-goto="history" data-open="thermal">listed, compared and analysed</button> later.</p>
       </section>
 
       <section class="panel split">
@@ -1310,6 +1409,6 @@
   </dialog>
 
   <div class="toast" id="toast" hidden></div>
-  <script type="module" src="js/main.js?v=0.21.0"></script>
+  <script type="module" src="js/main.js?v=0.22.0"></script>
 </body>
 </html>

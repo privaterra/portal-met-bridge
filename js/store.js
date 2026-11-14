@@ -3,6 +3,8 @@
 // context so calibration can be rebuilt from the shot list alone; the beans
 // store is the pick-list of coffees you have entered before.
 
+import { mergeMaintenanceLogs, cleanMaintenanceLog } from './maintenance.js?v=0.20.0';
+
 const DB_NAME = 'portal-met-bridge';
 const DB_VERSION = 4;
 
@@ -172,7 +174,7 @@ export class Store {
 
   // ------------------------------------------------------------ pick-lists --
 
-  /** Remember a value for a kind ('roaster' | 'origin' | 'grinder'); counts uses. */
+  /** Remember a value for a kind ('roaster' | 'origin' | 'grinder' | 'water'); counts uses. */
   async rememberValue(kind, value) {
     const v = (value || '').trim();
     if (!v || !LIST_KINDS.includes(kind)) return null;
@@ -309,7 +311,9 @@ export class Store {
 
   async exportAll() {
     const [shots, beans, reviews, ...lists] = await Promise.all([this.listShots({ limit: 100000 }), this.listBeans({ limit: 100000 }), this.listReviews({ limit: 100000 }), ...LIST_KINDS.map((k) => this.listValues(k))]);
-    return { app: 'portal-met-bridge', version: 4, exportedAt: new Date().toISOString(), shots, beans, reviews, lists: lists.flat() };
+    // the cleaning dates are kept as a setting, but they are a record like the shots: a backup carries them
+    const maintenance = cleanMaintenanceLog(await this.getSetting('maintenance', null));
+    return { app: 'portal-met-bridge', version: 4, exportedAt: new Date().toISOString(), shots, beans, reviews, lists: lists.flat(), maintenance };
   }
 
   async importAll(json) {
@@ -339,6 +343,7 @@ export class Store {
         if (r) await tx(db, 'reviews', 'readwrite', (s) => s.put(r));
       }
     }
+    if (isObj(json.maintenance)) await this.setSetting('maintenance', mergeMaintenanceLogs(await this.getSetting('maintenance', null), json.maintenance));
     this._changed('import');
     return n;
   }
@@ -375,7 +380,7 @@ export function deleteAllDatabases() {
   );
 }
 
-export const LIST_KINDS = ['roaster', 'origin', 'grinder'];
+export const LIST_KINDS = ['roaster', 'origin', 'grinder', 'water'];
 
 /** Shots calibrate per coffee; the key is the normalised bean name. */
 export function coffeeKey(name) {
@@ -395,7 +400,7 @@ const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const text = (v, max = 500) => (typeof v === 'string' ? v.slice(0, max) : typeof v === 'number' && Number.isFinite(v) ? String(v) : undefined);
 const numberOr = (v) => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? undefined : Number(v));
 const NUMBER_FIELDS = ['startedAt', 'endedAt', 'durationSec', 'finalWeightG', 'beverageG', 'profileTargetG', 'profileTemperatureC', 'rating', 'ratingMax', 'lagSec'];
-const TEXT_FIELDS = ['profileName', 'profileId', 'source', 'machineShotId', 'comment', 'beverageSource', 'machineName'];
+const TEXT_FIELDS = ['profileName', 'profileId', 'source', 'machineShotId', 'comment', 'beverageSource', 'machineName', 'water'];
 
 /** Flat objects of strings/numbers/booleans (a shot's context, its file paths); anything nested is dropped. */
 function cleanFlat(obj, max = 500) {

@@ -1,21 +1,23 @@
 // main.js — wires the devices, the recorder, storage, charts and export together.
 
-import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.19.1';
-import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, machineBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.19.1';
-import { MachinePanel } from './machine-panel.js?v=0.19.1';
-import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.19.1';
-import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.19.1';
-import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.19.1';
-import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, profileFinalWeight, setBeveragePreference, grindMicrons, measuredEy, DEFAULTS } from './analysis.js?v=0.19.1';
-import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, approxTokens, reviewProfileOf, ratingOf, ratingMaxOf } from './review.js?v=0.19.1';
-import { PROVIDERS, streamCompletion, listModels, testKey, maskKey, maxTokensFor, endpointRisk } from './ai.js?v=0.19.1';
-import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.19.1';
-import { makeDemoShot } from './demo.js?v=0.19.1';
-import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug, loadJsPdf } from './export.js?v=0.19.1';
-import { REVIEW_FORMATS, reviewFile, reviewMarkdownFile } from './review-export.js?v=0.19.1';
-import { log, formatLine } from './log.js?v=0.19.1';
-import { files, Files, FILE_KINDS, DEFAULT_ROOT, cleanDirName } from './files.js?v=0.19.1';
-import { HeatMonitor, HEAT_RULES, HEAT_SENSORS, sensorTemp } from './heat.js?v=0.19.1';
+import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.20.0';
+import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, machineBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.20.0';
+import { MachinePanel, WINDOW_SEC, WINDOW_SEC_SAVING } from './machine-panel.js?v=0.20.0';
+import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.20.0';
+import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.20.0';
+import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.20.0';
+import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, profileFinalWeight, setBeveragePreference, grindMicrons, measuredEy, DEFAULTS } from './analysis.js?v=0.20.0';
+import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, approxTokens, reviewProfileOf, ratingOf, ratingMaxOf, REVIEW_SECTIONS, PREP_STEPS } from './review.js?v=0.20.0';
+import { PROVIDERS, streamCompletion, listModels, testKey, maskKey, maxTokensFor, endpointRisk, isConnectorRejection } from './ai.js?v=0.20.0';
+import { COMMUNITY, subjectKey, communityMode, communityHow, communitySubjects, gatherCommunity, communityInstructions, communityMention, communityBlock, communityConnector, mcpCall } from './community.js?v=0.20.0';
+import { MAINTENANCE_SOURCE, MAINTENANCE_TASKS, MAINTENANCE_ROUTINE, MAINTENANCE_WARNINGS, MAINTENANCE_GREASE, cleanMaintenanceLog, recordMaintenance, undoMaintenance, mergeMaintenanceLogs, maintenanceStatus, maintenanceReminder, daysText, PistonMonitor, cleanPistonResult } from './maintenance.js?v=0.20.0';
+import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.20.0';
+import { makeDemoShot } from './demo.js?v=0.20.0';
+import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug, loadJsPdf, heatingJpeg, heatingCsv, heatingPdf } from './export.js?v=0.20.0';
+import { REVIEW_FORMATS, reviewFile, reviewMarkdownFile } from './review-export.js?v=0.20.0';
+import { log, formatLine } from './log.js?v=0.20.0';
+import { files, Files, FILE_KINDS, DEFAULT_ROOT, cleanDirName } from './files.js?v=0.20.0';
+import { HeatMonitor, HEAT_RULES, HEAT_SENSORS, sensorTemp } from './heat.js?v=0.20.0';
 import qrcode from '../vendor/qrcode.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -32,16 +34,22 @@ const machinePanel = new MachinePanel($('view-machine'));
 
 const VIEWS = ['shots', 'history', 'analysis', 'beans', 'machine', 'settings'];
 
-function showView(name) {
+function showView(name, { open = null } = {}) {
   if (!VIEWS.includes(name)) name = 'shots';
   if (name !== 'settings' && !$('view-settings').hidden && dirtySettings().length) {
     // Leaving Settings with edits still in the inputs: keep them rather than lose them.
     saveAllSettings({ quiet: true }).catch(() => {});
   }
+  const enteringSettings = name === 'settings' && $('view-settings').hidden;
   for (const v of VIEWS) $(`view-${v}`).hidden = v !== name;
+  // Settings opens the way the user chose (compact, detailed, or as left); a link to one section opens that section.
+  if (enteringSettings) applySettingsLayout().then(() => open && openSettingsSection(open));
+  else if (name === 'settings' && open) openSettingsSection(open);
   document.querySelectorAll('.view-tab').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.view === name)));
-  if (name === 'machine') machinePanel.onShown();
-  else if (name === 'history') renderHistory();
+  if (name === 'machine') {
+    machinePanel.onShown();
+    renderMaintenance();
+  } else if (name === 'history') renderHistory();
   else if (name === 'analysis') renderAnalysis();
   else if (name === 'beans') renderBeans();
   else if (name === 'shots') {
@@ -77,6 +85,9 @@ const SETTINGS = {
   autoAttach: { def: true, el: 'set-autoattach', bool: true },
   attachDelaySec: { def: 4, el: 'set-attach-delay', num: true, min: 1, max: 60 },
   machineVia: { def: 'auto', el: 'set-machine-via' },
+  maintenanceShow: { def: true, el: 'set-maintenance', bool: true },
+  settingsLayout: { def: 'compact', el: 'set-layout' },
+  heatSaveGraph: { def: false, el: 'set-heat-save', bool: true },
   heatRule: { def: 'hold', el: 'set-heat-rule' },
   heatSensor: { def: 'status', el: 'set-heat-sensor' },
   heatToleranceC: { def: 1, el: 'set-heat-tol', num: true, min: 0.2, max: 5 },
@@ -111,8 +122,39 @@ const SETTINGS = {
   aiKeyOpenai: { def: '', el: 'set-ai-key-openai', secret: true },
   aiModelOpenai: { def: '', el: 'set-ai-model-openai' },
   aiBaseOpenai: { def: '', el: 'set-ai-base-openai' },
+  aiKeyXai: { def: '', el: 'set-ai-key-xai', secret: true },
+  aiModelXai: { def: '', el: 'set-ai-model-xai' },
   aiKeyGoogle: { def: '', el: 'set-ai-key-google', secret: true },
   aiModelGoogle: { def: '', el: 'set-ai-model-google' },
+  communityEnabled: { def: true, el: 'set-community', bool: true },
+  communityCoffee: { def: true, el: 'set-community-coffee', bool: true },
+  communityRoaster: { def: true, el: 'set-community-roaster', bool: true },
+  communityGrinder: { def: true, el: 'set-community-grinder', bool: true },
+  communityEspresso: { def: true, el: 'set-community-espresso', bool: true },
+  communityPourOver: { def: true, el: 'set-community-pourover', bool: true },
+  communityProfiles: { def: true, el: 'set-community-profiles', bool: true },
+  communityVia: { def: 'auto', el: 'set-community-via' },
+  secVerdict: { def: true, el: 'set-sec-verdict', bool: true },
+  secCompared: { def: true, el: 'set-sec-compared', bool: true },
+  secStages: { def: true, el: 'set-sec-stages', bool: true },
+  secStandsOut: { def: true, el: 'set-sec-stands-out', bool: true },
+  secHelped: { def: true, el: 'set-sec-helped', bool: true },
+  secCommunity: { def: true, el: 'set-sec-community', bool: true },
+  secChanges: { def: true, el: 'set-sec-changes', bool: true },
+  secQuestions: { def: true, el: 'set-sec-questions', bool: true },
+  secSources: { def: true, el: 'set-sec-sources', bool: true },
+  sendProfile: { def: true, el: 'set-send-profile', bool: true },
+  sendTrace: { def: true, el: 'set-send-trace', bool: true },
+  sendRating: { def: true, el: 'set-send-rating', bool: true },
+  aiEditQuery: { def: false, el: 'set-ai-edit-query', bool: true },
+  prepRdt: { def: true, el: 'set-prep-rdt', bool: true },
+  prepWdt: { def: true, el: 'set-prep-wdt', bool: true },
+  prepDistribution: { def: true, el: 'set-prep-distribution', bool: true },
+  prepScreen: { def: false, el: 'set-prep-screen', bool: true },
+  prepTamper: { def: true, el: 'set-prep-tamper', bool: true },
+  prepSingleDose: { def: true, el: 'set-prep-single-dose', bool: true },
+  water: { def: '', el: 'set-water', max: 120 },
+  waterDefault: { def: true, el: 'set-water-default', bool: true },
   aiGrindStepUm: { def: 5, el: 'set-ai-grind-step', num: true, min: 1, max: 100 },
   aiDrink: { def: 'espresso', el: 'set-ai-drink' },
   aiNotes: { def: '', el: 'set-ai-notes' },
@@ -156,6 +198,7 @@ async function settingChanged(key) {
     el.value = v;
   }
   if (typeof v === 'string') v = v.trim();
+  if (typeof v === 'string' && spec.max) v = v.slice(0, spec.max);
   if ('dir' in spec) {
     v = cleanDirName(v, spec.dir);
     el.value = v;
@@ -248,26 +291,53 @@ function applySetting(key, v) {
     case 'aiProvider':
     case 'aiKeyAnthropic':
     case 'aiKeyOpenai':
+    case 'aiKeyXai':
     case 'aiKeyGoogle':
     case 'aiModelAnthropic':
     case 'aiModelOpenai':
+    case 'aiModelXai':
     case 'aiModelGoogle':
     case 'aiBaseOpenai':
       renderAiSettings();
+      renderCommunity();
+      break;
+    case 'settingsLayout':
+      if (!$('view-settings').hidden) applySettingsLayout();
+      break;
+    case 'maintenanceShow':
+      renderMaintenance();
+      break;
+    case 'heatSaveGraph':
+      applyHeatSave();
+      break;
+    case 'water':
+      if (v) store.rememberValue('water', v).then(() => refreshBeanLists()).catch(() => {});
+      renderPrep();
+      queryChanged();
+      break;
+    default:
+      if (/^(community|sec[A-Z]|send[A-Z]|prep[A-Z]|waterDefault|aiEditQuery|aiGrindStepUm|aiDrink|aiNotes)/.test(key)) {
+        // anything that changes what a review asks for or contains
+        renderCommunity();
+        renderPrep();
+        queryChanged();
+      }
       break;
     case 'reviewFormat':
       if ($('an-format')) $('an-format').value = v;
       renderSavedReviews();
       break;
-    default:
-      break;
   }
 }
+
+const isSelectSetting = (spec) => $(spec.el)?.tagName === 'SELECT';
+const selectHas = (spec, v) => [...$(spec.el).options].some((o) => o.value === v);
 
 /** Settings as a portable JSON document (no file handles, no shots). */
 function settingsDocument() {
   const out = { app: 'portal-met-bridge-settings', version: 1, exportedAt: new Date().toISOString(), settings: {}, context: readContext() };
   for (const [key, spec] of Object.entries(SETTINGS)) if (!spec.secret) out.settings[key] = settings[key]; // API keys never leave the browser's database
+  out.maintenance = cleanMaintenanceLog(maintLog); // the dates of the weekly, monthly and deep cleaning
   return out;
 }
 
@@ -291,6 +361,8 @@ async function importSettingsDocument(doc) {
       if (!Number.isFinite(v)) continue;
       v = Math.min(spec.max, Math.max(spec.min, v));
     } else v = String(v ?? spec.def);
+    if (!spec.bool && !spec.num && spec.max) v = v.slice(0, spec.max);
+    if (isSelectSetting(spec) && !selectHas(spec, v)) continue; // a value this version does not offer
     if ('dir' in spec) v = cleanDirName(v, spec.dir);
     settings[key] = v;
     await store.setSetting(key, v);
@@ -302,6 +374,11 @@ async function importSettingsDocument(doc) {
   if (doc.context && typeof doc.context === 'object') {
     writeContext(doc.context);
     await store.setSetting('context', readContext());
+  }
+  if (doc.maintenance && typeof doc.maintenance === 'object') {
+    maintLog = mergeMaintenanceLogs(maintLog, doc.maintenance);
+    await store.setSetting('maintenance', maintLog);
+    renderMaintenance();
   }
   importSettingsDocument.held = held;
   return n;
@@ -326,6 +403,13 @@ const SETTING_LABELS = {
   dirReviews: 'reviews folder', dirBackups: 'backups folder', dirLogs: 'logs folder', autoBackup: 'automatic backup',
   aiProvider: 'AI provider', aiKeyAnthropic: 'Anthropic key', aiModelAnthropic: 'Claude model', aiKeyOpenai: 'OpenAI key', aiModelOpenai: 'OpenAI model', aiBaseOpenai: 'OpenAI endpoint',
   aiKeyGoogle: 'Gemini key', aiModelGoogle: 'Gemini model', aiGrindStepUm: 'grinder step', aiDrink: 'usual drink', aiNotes: 'standing notes', reviewFormat: 'review file format',
+  aiKeyXai: 'xAI key', aiModelXai: 'Grok model', settingsLayout: 'how Settings opens', maintenanceShow: 'cleaning & maintenance', heatSaveGraph: 'save the heating graph',
+  communityEnabled: 'Meticulous Community', communityCoffee: 'Community: coffee', communityRoaster: 'Community: roaster', communityGrinder: 'Community: grinder', communityEspresso: 'Community: brews by origin and process',
+  communityPourOver: 'Community: pour-over brews', communityProfiles: 'Community: brew profiles', communityVia: 'how Community reaches the AI',
+  secVerdict: 'report: Verdict', secCompared: 'report: Shots compared', secStages: 'report: Stages', secStandsOut: 'report: What stands out', secHelped: 'report: What helped', secCommunity: 'report: Community comparison',
+  secChanges: 'report: Suggested changes', secQuestions: 'report: Open questions', secSources: 'report: Sources', sendProfile: 'send the brewed profile', sendTrace: 'send the trace', sendRating: 'send rating and comment',
+  aiEditQuery: 'edit the query before sending', prepRdt: 'RDT', prepWdt: 'WDT', prepDistribution: 'distribution tool', prepScreen: 'filter screen', prepTamper: 'tamper', prepSingleDose: 'single-dose grinder',
+  water: 'water', waterDefault: 'water by default',
 };
 
 /** Read an input's current value in the setting's type, without persisting. */
@@ -429,12 +513,15 @@ async function init() {
   applyFileSettings();
   document.body.classList.toggle('no-ratings', !ratingsOn());
   store.onChange = (kind) => scheduleAutoBackup(kind);
+  await loadMaintenance();
+  renderMaintenanceExtra();
   applyHeatSettings();
+  applyHeatSave();
   await probeAppServer().catch(() => {});
   renderMachineVia();
   renderLogStatus();
-  $('about-version').textContent = 'v0.19.1';
-  log.info('app', `portal-met-bridge v0.19.1 started · ${navigator.userAgent}`);
+  $('about-version').textContent = 'v0.20.0';
+  log.info('app', `portal-met-bridge v0.20.0 started · ${navigator.userAgent}`);
 
   const env = await environmentCheck();
   renderPortalSteps({ secure: env.secure, api: env.api, adapter: env.adapter });
@@ -456,6 +543,9 @@ async function init() {
   await refreshShotList();
   await recoverUnfinishedShots();
   renderAiSettings();
+  renderCommunity();
+  renderPrep();
+  renderMaintenance();
   await renderSavedReviews();
   const first = state.shots.find((x) => !x.inProgress);
   if (first) selectShot(first.id);
@@ -498,6 +588,7 @@ function connectMeticulous() {
     url = machineBaseUrl(host, { via });
   } catch {
     toast('That address does not look right. Set it under Settings → Machine.', 'error');
+    showView('settings', { open: 'machine' });
     return;
   }
   if (meticulous) {
@@ -522,10 +613,13 @@ function connectMeticulous() {
     if (d.state !== 'connected') {
       $('brew-state').textContent = '—';
       heat.reset();
+      piston.reset();
       renderHeat(null);
     }
   });
   meticulous.addEventListener('status', (e) => onStatus(e.detail));
+  meticulous.addEventListener('sensors', (e) => piston.onSensors(e.detail, performance.now()));
+  meticulous.addEventListener('notification', (e) => piston.onNotification(e.detail));
   meticulous.connect();
   machinePanel.attach(meticulous);
   meticulous.ping().then(
@@ -589,6 +683,10 @@ function onStatus(s) {
   setText('ro-pressure', fmt(s.p, 1));
   heat.setTarget(loadedProfileTemperature(s));
   heat.onStatus({ name: s.name, extracting: s.extracting, temp: sensorTemp(settings.heatSensor, s, meticulous?.lastSensors), at: performance.now() });
+  machinePanel.heatTargetC = heat.targetC; // the heating graph's data carries the target and whether the rule is met
+  machinePanel.heatReady = heat.targetC === null && heat.rule !== 'machine' ? null : heat.ready;
+  const pistonResult = piston.onStatus(s, performance.now());
+  if (pistonResult) onPistonResult(pistonResult);
   renderBrewState(s);
   renderHeat(s);
   if (recorder.isRecording) {
@@ -853,6 +951,7 @@ recorder.addEventListener('shot', async (e) => {
   }
   shot.context = readContext();
   shot.lagSec = settings.lagSec || 0;
+  if (settings.waterDefault && settings.water) shot.water = settings.water; // Settings → Brew Prep. → Water
   if (!shot.profileTargetG) applyProfileTarget(shot);
   delete shot.inProgress;
   delete shot.checkpointAt;
@@ -969,6 +1068,7 @@ async function refreshShotList() {
   $('history-tab-count').textContent = n ? `(${n})` : '';
   renderHistory();
   updateShotNav();
+  renderMaintenance(); // "brews since" and the reminder follow every brew
   if (!$('view-beans').hidden) renderBeans();
   else $('beans-tab-count').textContent = (() => { const k = new Set(); for (const x of state.beans || []) k.add(x.key); for (const x of state.shots) if (!x.inProgress && coffeeKey(x.context?.beanName)) k.add(coffeeKey(x.context.beanName)); return k.size ? `(${k.size})` : ''; })();
 }
@@ -1399,6 +1499,14 @@ async function deleteShots(ids) {
     hist.checked.delete(id);
   }
   log.info('shots', `deleted ${ids.length} shot(s): ${ids.join(', ')}`);
+  if (an.ids.some((id) => ids.includes(id))) {
+    an.ids = an.ids.filter((id) => !ids.includes(id));
+    for (const id of ids) {
+      an.confirmed.delete(id);
+      an.pending.delete(id);
+    }
+    an.savedId = null;
+  }
   const wasSelected = ids.includes(state.selected?.id);
   if (wasSelected) state.selected = null;
   await refreshShotList();
@@ -1407,6 +1515,7 @@ async function deleteShots(ids) {
     if (next) selectShot(next.id);
     else clearShotPanel();
   }
+  if (!$('view-analysis').hidden) renderAnalysis();
   toast(ids.length === 1 ? 'Shot deleted.' : `${ids.length} shots deleted.`);
 }
 
@@ -1599,6 +1708,13 @@ async function saveShotDialog() {
   if (state.selected?.id === shot.id) await selectShot(shot.id);
   if (settings.autoSaveFiles) autosaveShotFiles(shot).catch(() => {});
   $('shot-dialog').close();
+  if (an.ids.includes(shot.id)) {
+    // an edit can change the dose or the final weight the review is about: have it confirmed again
+    an.confirmed.delete(shot.id);
+    an.pending.delete(shot.id);
+    an.savedId = null;
+  }
+  if (!$('view-analysis').hidden) renderAnalysis();
   toast('Shot updated.');
 }
 
@@ -2958,12 +3074,12 @@ async function openResetDialog() {
   const beans = await store.listBeans({ limit: 100000 });
   const withReadings = shots.filter((s) => s.refractometer?.tdsPct).length;
   const reviews = await store.listReviews({ limit: 100000 });
-  const keys = ['aiKeyAnthropic', 'aiKeyOpenai', 'aiKeyGoogle'].filter((k) => settings[k]).length;
+  const keys = ['aiKeyAnthropic', 'aiKeyOpenai', 'aiKeyXai', 'aiKeyGoogle'].filter((k) => settings[k]).length;
   const items = [
     `${shots.length} shot${shots.length === 1 ? '' : 's'} with ${shots.length === 1 ? 'its' : 'their'} samples${withReadings ? ` (${withReadings} with refractometer readings)` : ''}`,
-    `${beans.length} bean${beans.length === 1 ? '' : 's'} in the bean library and the roaster / origin / grinder pick-lists`,
+    `${beans.length} bean${beans.length === 1 ? '' : 's'} in the bean library and the roaster / origin / grinder / water pick-lists`,
     `${reviews.length} saved AI review${reviews.length === 1 ? '' : 's'}`,
-    `all settings (machine address, recording, estimates, logging, AI review${keys ? ` including ${keys} API key${keys === 1 ? '' : 's'}` : ''}) and the current coffee`,
+    `all settings (machine address, recording, estimates, logging, AI review${keys ? ` including ${keys} API key${keys === 1 ? '' : 's'}` : ''}, brew prep.), the cleaning & maintenance dates and the current coffee`,
     `the debug log in this page (${log.ring.length} lines)`,
   ];
   if (portal.device) items.push(`the Bluetooth pairing with ${portal.device.name || 'the Portal'} (Chrome will ask you to pick it again)`);
@@ -3125,7 +3241,7 @@ window.addEventListener('beforeunload', (e) => {
     e.returnValue = '';
   }
 });
-document.querySelectorAll('[data-goto]').forEach((b) => b.addEventListener('click', () => showView(b.dataset.goto)));
+document.querySelectorAll('[data-goto]').forEach((b) => b.addEventListener('click', (e) => { e.preventDefault(); showView(b.dataset.goto, { open: b.dataset.open || null }); }));
 $('meticulous-test').addEventListener('click', testMeticulous);
 $('settings-export').addEventListener('click', () => deliver(`portal-met-bridge-settings-${stamp(Date.now())}.json`, JSON.stringify(settingsDocument(), null, 2), 'application/json', 'backups', { via: 'browser' }));
 $('settings-import').addEventListener('change', async (e) => {
@@ -3347,7 +3463,7 @@ function renderBrewProfiles() {
 
 // ------------------------------------------------------------ ready to brew --
 // heat.js watches the water temperature against the loaded profile's target with
-// the rule from Settings → Machine; Start brew is green while it says "ready".
+// the rule from Settings → Heating; Start brew is green while it says "ready".
 const heat = new HeatMonitor();
 
 function applyHeatSettings() {
@@ -3386,7 +3502,7 @@ function renderHeat(s) {
       line.hidden = false;
     }
   }
-  // Settings → Machine: the live readings, so the sensor choice can be made with eyes open.
+  // Settings → Heating: the live readings, so the sensor choice can be made with eyes open.
   if (!$('view-settings').hidden) {
     const sens = meticulous?.lastSensors;
     const live = s
@@ -3397,6 +3513,7 @@ function renderHeat(s) {
       $('heat-live').textContent = live;
     }
   }
+  renderHeatBrewInfo();
 }
 
 let brewStateText = '';
@@ -3458,6 +3575,337 @@ $('brew-load').addEventListener('click', async () => {
   }
 });
 
+// ------------------------------------------------------ settings sections --
+// Every Settings section folds. How they stand when Settings opens is a
+// setting of its own: compact (all closed, names only — the default),
+// detailed (all open), or as they were left.
+
+const settingsSections = () => [...document.querySelectorAll('#view-settings details.set-section')];
+
+function setSectionsOpen(open) {
+  for (const d of settingsSections()) d.open = Array.isArray(open) ? open.includes(d.dataset.section) : !!open;
+}
+
+async function applySettingsLayout() {
+  const mode = settings.settingsLayout || 'compact';
+  if (mode === 'detailed') setSectionsOpen(true);
+  else if (mode === 'remember') setSectionsOpen((await store.getSetting('settingsOpen', []).catch(() => [])) || []);
+  else setSectionsOpen(false);
+}
+
+/** Open one section (a link such as "Settings → Files and folders") and bring it into view. */
+function openSettingsSection(name) {
+  const d = settingsSections().find((x) => x.dataset.section === name);
+  if (!d) return;
+  d.open = true;
+  d.closest('section')?.scrollIntoView({ block: 'start' });
+}
+
+for (const d of settingsSections()) {
+  d.addEventListener('toggle', () => {
+    if (d.open && d.dataset.section === 'logging') renderLogTail();
+    if (!erasing) store.setSetting('settingsOpen', settingsSections().filter((x) => x.open).map((x) => x.dataset.section)).catch(() => {});
+  });
+}
+$('set-expand-all').addEventListener('click', () => setSectionsOpen(true));
+$('set-collapse-all').addEventListener('click', () => setSectionsOpen(false));
+
+// ------------------------------------------------- cleaning & maintenance --
+// Settings → Machine → "Show the cleaning & maintenance schedule" adds a panel
+// to the Machine tab: the weekly, monthly and three-monthly jobs Meticulous
+// recommends (maintenance.js), the date each was last done, what comes next,
+// and the piston check that follows every brew. The dates live in the
+// settings store under 'maintenance' and travel in backups and settings files.
+
+let maintLog = cleanMaintenanceLog(null);
+let pistonLast = null;
+const piston = new PistonMonitor();
+
+async function loadMaintenance() {
+  maintLog = cleanMaintenanceLog(await store.getSetting('maintenance', null));
+  pistonLast = cleanPistonResult(await store.getSetting('pistonLast', null));
+}
+
+const fmtDay = (ms) => new Date(ms).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+/** A time as the value of an <input type="datetime-local"> (local wall clock, to the minute). */
+const localInputValue = (ms) => new Date(ms - new Date(ms).getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+const MAINT_STATE_LABEL = { never: 'no date entered', ok: 'on schedule', soon: 'due soon', due: 'overdue' };
+
+function renderMaintenance() {
+  const on = settings.maintenanceShow !== false;
+  $('maint-panel').hidden = !on;
+  const rail = $('maint-reminder');
+  if (!on) {
+    rail.hidden = true;
+    return;
+  }
+  const opts = { now: Date.now(), shots: state.shots, fmtDate: fmtDay };
+  const st = maintenanceStatus(maintLog, opts);
+  const reminder = maintenanceReminder(maintLog, opts);
+  $('maint-next').textContent = reminder.text;
+  $('maint-next').dataset.state = reminder.state;
+  rail.hidden = false;
+  rail.dataset.state = reminder.state;
+  $('maint-reminder-text').textContent = st.allNever ? 'Cleaning & maintenance: enter your dates' : reminder.state === 'due' ? `Overdue: ${st.next.task.name.toLowerCase()} (${daysText(st.next.dueInDays)})` : `Next cleaning: ${st.next.task.name.toLowerCase()} ${daysText(st.next.dueInDays)}`;
+  $('maint-note').textContent = `${state.shots.filter((x) => !x.inProgress && x.source !== 'demo').length} brews recorded by this app`;
+  // do not redraw the table under someone typing a date into it
+  if (!document.activeElement?.classList?.contains('maint-when')) {
+    const nowValue = localInputValue(Date.now());
+    $('maint-rows').innerHTML = st.tasks
+      .map((t) => {
+        const covered = t.coveredBy ? MAINTENANCE_TASKS.find((x) => x.id === t.coveredBy) : null;
+        const last = t.lastAt == null ? '<span class="muted">not entered</span>' : `${esc(fmtDate(t.lastAt))}${covered ? `<br><small>done with the ${esc(covered.name.toLowerCase())}</small>` : ''}`;
+        const due = t.dueAt == null ? '<span class="muted">–</span>' : `${esc(fmtDay(t.dueAt))}<br><small>${esc(t.state === 'due' ? `was due ${daysText(t.dueInDays)}` : `due ${daysText(t.dueInDays)}`)}</small>`;
+        return `<tr data-task="${esc(t.task.id)}" data-state="${esc(t.state)}">
+          <td><b>${esc(t.task.name)}</b> <span class="maint-badge" data-state="${esc(t.state)}">${esc(MAINT_STATE_LABEL[t.state])}</span>
+            <div class="maint-when-text">${esc(t.task.when)}</div>
+            <details class="maint-steps"><summary>What to do</summary><ol>${t.task.steps.map((x) => `<li>${esc(x)}</li>`).join('')}</ol>${t.task.warnings.map((x) => `<p class="maint-warn">⚠ ${esc(x)}</p>`).join('')}</details></td>
+          <td>${last}</td>
+          <td>${due}</td>
+          <td class="num">${t.brewsSince == null ? '–' : Number(t.brewsSince)}</td>
+          <td class="actions"><input type="datetime-local" class="maint-when" aria-label="When the ${esc(t.task.name.toLowerCase())} was done" value="${nowValue}" max="${nowValue}" /> <button class="btn small primary" data-act="save" title="Record that it was done at the date and time entered">Save date</button> <button class="btn small" data-act="now" title="Record that it was done just now">Done now</button>${t.ownAt != null ? ' <button class="btn small" data-act="undo" title="Remove the last date entered for this job">Undo</button>' : ''}</td>
+        </tr>`;
+      })
+      .join('');
+  }
+  renderPiston();
+}
+
+function renderPiston() {
+  const r = pistonLast;
+  const badge = $('maint-piston-badge');
+  badge.dataset.state = !r ? 'none' : r.ok ? 'ok' : 'due';
+  badge.textContent = !r ? 'no brew yet' : r.ok ? 'all operating OK' : 'needs a look';
+  $('maint-piston').textContent = r ? `${r.summary} (${fmtDate(r.at)})` : "Checked after every brew while the machine is connected: the piston's travel, its return to rest and the machine going back to idle. Nothing has been brewed with this page open yet.";
+  const rows = !r
+    ? []
+    : [
+        ['Brew', `${fmt(r.brewSec, 1)} s`],
+        ['At rest', r.returned ? `${r.returnSec >= 1 ? `${fmt(r.returnSec, 0)} s after the brew` : 'right after the brew'}${r.sawRetract ? ' (retraction seen)' : ''}${r.parkedElsewhere ? ' — parked at a different position than it started from' : ''}` : r.interrupted ? 'the next brew began first' : 'not seen'],
+        ['Piston travel', r.posReported ? `${fmt(r.travel, 1)} (the machine's own units)` : 'not reported by the machine'],
+        ['Peak pressure', r.peakPressureBar != null ? `${fmt(r.peakPressureBar, 1)} bar` : null],
+        ['Motor', [r.motorPowerMaxPct != null ? `up to ${fmt(r.motorPowerMaxPct, 0)} % power` : null, r.motorTempMaxC != null ? `${fmt(r.motorTempMaxC, 1)} °C at most` : null].filter(Boolean).join(' · ') || null],
+      ];
+  $('maint-piston-kv').innerHTML = rows.filter(([, v]) => v).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('') + (r && !r.ok ? `<dt>What to do</dt><dd>${esc('Watch the next brew. If it happens again — or you see pressure leaks — a deep cleaning (remove, clean and re-grease the piston) is the job Meticulous recommends; contact their support if the piston stays out.')}</dd>` : '');
+}
+
+/** The static part of the panel: warnings, grease, the routine jobs, and where the schedule comes from. */
+function renderMaintenanceExtra() {
+  const ul = (xs) => `<ul>${xs.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`;
+  $('maint-extra').innerHTML =
+    `<h4>Warnings</h4>${ul(MAINTENANCE_WARNINGS)}<h4>Approved grease</h4><p>${esc(MAINTENANCE_GREASE.note)}</p>${ul(MAINTENANCE_GREASE.products)}<p>Seals:</p>${ul(MAINTENANCE_GREASE.parts)}` +
+    `<h4>Routine cleaning (not tracked here)</h4>${MAINTENANCE_ROUTINE.map((r) => `<p><b>${esc(r.when)}</b> — ${esc(r.name)}</p>${ul(r.steps)}`).join('')}`;
+  $('maint-source').innerHTML = `Schedule: <a href="${esc(MAINTENANCE_SOURCE.url)}" target="_blank" rel="noopener noreferrer">${esc(MAINTENANCE_SOURCE.title)} ↗</a>, as published on ${esc(new Date(`${MAINTENANCE_SOURCE.retrieved}T12:00:00`).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' }))} — look there for changes. A deep cleaning counts as the chamber and the internal cleaning too, and a chamber cleaning as the internal one. Switch this part off under <em>Settings → Machine</em>.`;
+}
+
+async function saveMaintenance(next, what) {
+  maintLog = cleanMaintenanceLog(next);
+  await store.setSetting('maintenance', maintLog);
+  scheduleAutoBackup('maintenance');
+  log.info('maintenance', what);
+  renderMaintenance();
+}
+
+$('maint-rows').addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-act]');
+  const tr = e.target.closest('tr[data-task]');
+  if (!btn || !tr) return;
+  const task = MAINTENANCE_TASKS.find((t) => t.id === tr.dataset.task);
+  if (!task) return;
+  try {
+    if (btn.dataset.act === 'undo') {
+      await saveMaintenance(undoMaintenance(maintLog, task.id), `${task.id}: last date removed`);
+      return toast(`Removed the last ${task.name.toLowerCase()} date.`);
+    }
+    const at = btn.dataset.act === 'now' ? Date.now() : new Date(tr.querySelector('.maint-when').value).getTime();
+    if (!Number.isFinite(at)) return toast('Enter the date and time it was done.', 'error');
+    if (at > Date.now() + 60000) return toast('That date is in the future.', 'error');
+    document.activeElement?.blur?.();
+    await saveMaintenance(recordMaintenance(maintLog, task.id, at), `${task.id} done at ${new Date(at).toISOString()}`);
+    toast(`${task.name} recorded for ${fmtDate(at)}.`);
+  } catch (err) {
+    toast(`Could not save the date: ${err?.message || err}`, 'error');
+  }
+});
+setInterval(() => !state.stopped && renderMaintenance(), 30 * 60 * 1000); // "due in 2 days" moves on by itself
+
+async function onPistonResult(r) {
+  pistonLast = cleanPistonResult(r);
+  log[r.ok ? 'info' : 'warn']('maintenance', `piston after the brew: ${pistonLast.summary}`);
+  store.setSetting('pistonLast', pistonLast).catch(() => {});
+  renderPiston();
+  if (!r.ok && settings.maintenanceShow !== false) toast(pistonLast.summary, 'warn', 9000);
+}
+
+// ---------------------------------------------------------- heating graph --
+// Settings → Heating → "Save the heating graph and its data": the Machine
+// tab's Temperatures and power graphs as a JPEG, a PDF or a CSV, each carrying
+// the brew the warm-up belongs to. Always downloaded through the browser.
+
+function applyHeatSave() {
+  const on = !!settings.heatSaveGraph;
+  $('heat-save-tools').hidden = !on;
+  machinePanel.setWindow(on ? WINDOW_SEC_SAVING : WINDOW_SEC);
+  heatInfoText = null;
+  renderHeatBrewInfo();
+}
+
+const fmtSpan = (sec) => (sec >= 90 ? `${Math.floor(sec / 60)} min ${Math.round(sec % 60)} s` : `${Math.round(sec)} s`);
+
+/** The brew a warm-up belongs to: the loaded profile and its temperature, the machine's state, the rule, the coffee. */
+function heatBrewDetails(data = machinePanel.heatingData()) {
+  const s = meticulous?.lastStatus || data.lastStatus || null;
+  const ctx = readContext();
+  const lastShot = state.shots.find((x) => !x.inProgress);
+  const rows = data.rows;
+  const last = rows[rows.length - 1] || {};
+  const span = rows.length > 1 ? rows[rows.length - 1].t - rows[0].t : 0;
+  const machine = machinePanel.info?.name || 'Meticulous';
+  const profile = s?.profile || '';
+  const target = heat.targetC !== null ? `${fmt(heat.targetC, 1)} °C` : 'unknown';
+  const phase = heat.since && heat.lastAt ? `${heat.phase} for ${fmtSpan(Math.max(0, (heat.lastAt - heat.since) / 1000))}` : heat.phase;
+  const coffee = [ctx.beanName, ctx.roaster].filter(Boolean).join(' · ');
+  const recipe = [ctx.doseG ? `${fmt(Number(ctx.doseG), 1)} g` : null, ctx.grindSize || null, ctx.grinderName || null].filter(Boolean).join(' · ');
+  const lastBrew = lastShot ? `${fmtDate(lastShot.startedAt)} · ${lastShot.profileName || 'no profile'} · ${fmt(beverageOf(lastShot), 1)} g in ${fmt(lastShot.durationSec, 1)} s` : '';
+  const info = [
+    ['When', fmtDate(Date.now())],
+    ['Machine', machine],
+    ['Profile', profile || 'none loaded'],
+    ['Target temperature', target],
+    ['Machine state', s ? [s.name, s.state].filter(Boolean).join(' / ') || 'idle' : 'not connected'],
+    ['Ready to brew', s ? heat.describe() : 'not connected'],
+    ['Rule', `${HEAT_RULES[heat.rule]?.label || heat.rule} · reading: ${HEAT_SENSORS[heat.sensor]?.label || heat.sensor} · ± ${fmt(heat.toleranceC, 1)} °C · hold ${fmt(heat.holdSec, 0)} s`],
+    ['Phase', phase],
+    ['Coffee', coffee],
+    ['Dose and grind', recipe],
+    ['Water', settings.water || ''],
+    ['Last brew', lastBrew],
+    ['Graph', `${fmtSpan(span)} of readings (${rows.length}), the last ${Math.round(data.windowSec / 60)} minutes at most`],
+  ].filter(([, v]) => v);
+  const readings = [
+    ['Status temperature', Number.isFinite(last.status) ? `${fmt(last.status, 1)} °C` : ''],
+    ['External 1 (boiler side)', Number.isFinite(last.ext1) ? `${fmt(last.ext1, 1)} °C` : ''],
+    ['External 2 (brew head)', Number.isFinite(last.ext2) ? `${fmt(last.ext2, 1)} °C` : ''],
+    ['Heater bar (up / mid / down)', [last.barUp, last.barMid, last.barDown].some(Number.isFinite) ? `${fmt(last.barUp, 1)} / ${fmt(last.barMid, 1)} / ${fmt(last.barDown, 1)} °C` : ''],
+    ['Tube', Number.isFinite(last.tube) ? `${fmt(last.tube, 1)} °C` : ''],
+    ['Motor', Number.isFinite(last.motor) ? `${fmt(last.motor, 1)} °C` : ''],
+    ['Heater power', Number.isFinite(last.heater) ? `${fmt(last.heater, 0)} %` : ''],
+  ].filter(([, v]) => v);
+  const lines = [
+    `${fmtDate(Date.now())} · ${machine} · ${fmtSpan(span)} of readings`,
+    `Profile: ${profile || 'none loaded'} · target ${target} · machine: ${s ? [s.name, s.state].filter(Boolean).join(' / ') || 'idle' : 'not connected'}`,
+    `Ready to brew: ${s ? heat.describe() : 'not connected'}`,
+    [coffee && `Coffee: ${coffee}`, recipe, lastBrew && `last brew ${lastBrew}`].filter(Boolean).join(' · '),
+  ];
+  const events = data.events.slice(-14).map((e) => [new Date(e.wall).toLocaleTimeString(), `${e.name}${e.state && e.state !== e.name ? ` (${e.state})` : ''}`]);
+  return { title: 'Heating — temperatures and power', subtitle: `${fmtDate(Date.now())} · ${machine}${profile ? ` · ${profile}` : ''}`, profile, info, readings, lines, events };
+}
+
+let heatInfoText = '';
+/** The line under the graphs that says what a saved graph will carry. */
+function renderHeatBrewInfo() {
+  const el = $('heat-brew-info');
+  if (!el) return;
+  if (!settings.heatSaveGraph) {
+    el.hidden = true;
+    return;
+  }
+  if ($('view-machine').hidden && heatInfoText !== null) return; // nobody is looking
+  const s = meticulous?.lastStatus;
+  const ctx = readContext();
+  const coffee = [ctx.beanName, ctx.roaster].filter(Boolean).join(' · ');
+  const text = s
+    ? `Saved with the graph: ${s.profile || 'no profile loaded'}${heat.targetC !== null ? ` · target ${fmt(heat.targetC, 1)} °C` : ''} · ${heat.describe()}${coffee ? ` · ${coffee}` : ''}`
+    : 'Connect the machine: the graph is saved with the loaded profile and its temperature, the ready-to-brew state and the coffee.';
+  if (text !== heatInfoText) {
+    heatInfoText = text;
+    el.textContent = text;
+  }
+  el.hidden = false;
+}
+
+async function saveHeating(kind) {
+  if ($('view-machine').hidden) showView('machine');
+  const data = machinePanel.heatingData();
+  if (!data.rows.length) return toast('No temperature readings yet — connect the machine first.', 'error');
+  try {
+    const b = heatBrewDetails(data);
+    const base = `heating-${stamp(Date.now())}${b.profile ? `-${slug(b.profile)}` : ''}`;
+    const via = { via: 'browser' };
+    if (kind === 'csv') {
+      await deliver(`${base}.csv`, heatingCsv(data.rows), 'text/csv', 'exports', via);
+    } else {
+      const image = await heatingJpeg([{ u: machinePanel.tempChart, caption: 'Temperatures (°C)' }, { u: machinePanel.powerChart, caption: 'Heater and motor power (%), piston position' }], { title: b.title, lines: b.lines });
+      if (kind === 'jpeg') await deliver(`${base}.jpg`, image.blob, 'image/jpeg', 'reports', via);
+      else await deliver(`${base}.pdf`, await heatingPdf({ ...b, image }), 'application/pdf', 'reports', via);
+    }
+    log.info('export', `heating graph saved as ${kind} (${data.rows.length} readings)`);
+  } catch (err) {
+    toast(`Could not save the heating graph: ${err?.message || err}`, 'error');
+    log.warn('export', `heating graph (${kind}) failed: ${err?.message || err}`);
+  }
+}
+$('heat-save-jpeg').addEventListener('click', () => saveHeating('jpeg'));
+$('heat-save-pdf').addEventListener('click', () => saveHeating('pdf'));
+$('heat-save-csv').addEventListener('click', () => saveHeating('csv'));
+
+// -------------------------------------------------------------- brew prep --
+// Settings → Brew Prep.: how the puck is prepared and the water brewed with.
+// Both go to the AI review; the water is also noted on each new shot.
+
+const PREP_SETTING = { rdt: 'prepRdt', wdt: 'prepWdt', distribution: 'prepDistribution', screen: 'prepScreen', tamper: 'prepTamper', singleDose: 'prepSingleDose' };
+const prepSettings = () => Object.fromEntries(Object.entries(PREP_SETTING).map(([k, key]) => [k, !!settings[key]]));
+/** The water every review is told about: the one entered, while "use by default" is on. */
+const defaultWater = () => (settings.waterDefault !== false && settings.water ? String(settings.water) : '');
+
+function renderPrep() {
+  const used = Object.keys(PREP_STEPS).filter((k) => settings[PREP_SETTING[k]]).map((k) => PREP_STEPS[k].label);
+  setText('set-prep-note', [used.length ? used.join(' · ') : 'no prep steps ticked', defaultWater() ? `water: ${defaultWater()}` : ''].filter(Boolean).join(' — '));
+  // "use by default" has something to apply to only once a water is entered
+  const has = !!$('set-water').value.trim();
+  $('set-water-default').disabled = !has;
+  $('water-default-row').classList.toggle('off', !has);
+}
+$('set-water').addEventListener('input', renderPrep);
+$('set-water').addEventListener('change', () => settingChanged('water').catch(() => {})); // a water picked from the list is a finished entry
+
+// ----------------------------------------------------- Meticulous Community --
+// community.js explains the three ways Community reaches the model. Here: the
+// settings behind them, the lookups (cached for the session, so a review that
+// is edited and run again does not ask twice) and the test button.
+
+const communityCache = new Map();
+const communityConfig = { url: COMMUNITY.url }; // tests point this at the mock server
+const communityDataSettings = () => ({ coffee: settings.communityCoffee, roaster: settings.communityRoaster, grinder: settings.communityGrinder, espresso: settings.communityEspresso, pourOver: settings.communityPourOver, profiles: settings.communityProfiles });
+const communityModeNow = (provider = aiConfig().provider) => communityMode(provider, { enabled: settings.communityEnabled !== false, via: settings.communityVia });
+
+function renderCommunity() {
+  const on = settings.communityEnabled !== false;
+  const box = $('community-options');
+  box.classList.toggle('off', !on);
+  for (const el of box.querySelectorAll('input, select, button')) el.disabled = !on;
+  $('set-sec-community').disabled = !on;
+  const { provider } = aiConfig();
+  const how = communityHow(provider, communityModeNow(provider), PROVIDERS[provider].label);
+  setText('community-how', on ? `With the provider chosen above — ${how}` : '');
+  setText('an-community', on ? `Meticulous Community — ${how}` : 'Meticulous Community is switched off (Settings → AI review).');
+}
+
+$('community-test').addEventListener('click', async () => {
+  const out = $('community-test-result');
+  out.textContent = 'Asking Meticulous Community…';
+  try {
+    const t0 = performance.now();
+    const r = await mcpCall('espresso_guide', {}, { url: communityConfig.url });
+    const n = (r.text.match(/^\s*-\s+`/gm) || []).length;
+    out.textContent = r.isError ? `Answered with an error: ${r.text.slice(0, 120)}` : `Meticulous Community answered in ${Math.round(performance.now() - t0)} ms${n ? ` — ${n} espresso topics on offer` : ''}.`;
+    log.info('community', `test ok (${n} topics)`);
+  } catch (err) {
+    out.textContent = `${err?.message || err} A review still runs without it.`;
+    log.warn('community', `test failed: ${err?.message || err}`);
+  }
+});
+
 // -------------------------------------------------------------- AI review --
 
 const REVIEW_MAX = 8;
@@ -3466,8 +3914,8 @@ const an = { ids: [], search: '', running: false, failed: false, abort: null, ma
 /** Provider, key and model currently chosen in Settings. */
 function aiConfig() {
   const provider = PROVIDERS[settings.aiProvider] ? settings.aiProvider : 'anthropic';
-  const keyKey = { anthropic: 'aiKeyAnthropic', openai: 'aiKeyOpenai', google: 'aiKeyGoogle' }[provider];
-  const modelKey = { anthropic: 'aiModelAnthropic', openai: 'aiModelOpenai', google: 'aiModelGoogle' }[provider];
+  const keyKey = { anthropic: 'aiKeyAnthropic', openai: 'aiKeyOpenai', xai: 'aiKeyXai', google: 'aiKeyGoogle' }[provider];
+  const modelKey = { anthropic: 'aiModelAnthropic', openai: 'aiModelOpenai', xai: 'aiModelXai', google: 'aiModelGoogle' }[provider];
   return { provider, key: settings[keyKey] || '', model: (settings[modelKey] || '').trim() || PROVIDERS[provider].defaultModel, baseUrl: provider === 'openai' ? settings.aiBaseOpenai || '' : '' };
 }
 
@@ -3484,9 +3932,10 @@ function renderAiSettings() {
     run.textContent = `Review with ${label.replace(/ \(.*\)$/, '')}`;
     run.disabled = an.running || !an.ids.length || !key || !allConfirmed();
   }
+  if ($('an-query')) $('an-query').disabled = an.running || !an.ids.length || !allConfirmed(); // the query can be read and copied without a key
 }
 
-$('set-ai-provider').addEventListener('input', renderAiSettings); // provider is a select → saves on change; keep the blocks in step while picking
+$('set-ai-provider').addEventListener('input', () => { renderAiSettings(); renderCommunity(); }); // provider is a select → saves on change; keep the blocks in step while picking
 document.querySelectorAll('button.reveal').forEach((b) =>
   b.addEventListener('click', () => {
     const input = $(b.dataset.reveal);
@@ -3568,6 +4017,7 @@ function renderAnalysis() {
   renderAnalysisList();
   renderPreflight();
   renderAiSettings();
+  renderCommunity();
   renderAnalysisDigest();
   renderAnalysisSize();
 }
@@ -3582,13 +4032,25 @@ function renderAnalysisList() {
       const on = an.ids.includes(s.id);
       const c = s.context || {};
       const tags = [s.portal?.length ? `P ${Number(s.portal.length) || 0}` : 'no Portal', s.machineShotId ? 'record' : 'live', c.grindSize ? `${esc(c.grindSize)}` : ''].filter(Boolean);
-      return `<li class="${on ? 'on' : ''}"><label><input type="checkbox" data-id="${esc(s.id)}" ${on ? 'checked' : ''} /> <span class="when">${esc(fmtDate(s.startedAt))}</span> <span class="what">${esc(c.beanName || 'unnamed coffee')} <small>${esc(s.profileName || '')}</small></span> <span class="tags">${ratingsOn() ? starsHtml(s, { compact: true }) : ''}${tags.map((t) => `<span class="tag">${t}</span>`).join('')}</span></label></li>`;
+      const tools = on ? `<span class="an-row-tools"><button type="button" class="btn small" data-act="edit" data-id="${esc(s.id)}" title="Edit this shot's coffee, dose, grind, final weight, rating and note">Edit</button><button type="button" class="btn small danger" data-act="delete" data-id="${esc(s.id)}" title="Delete this shot from the app">Delete</button></span>` : '';
+      return `<li class="${on ? 'on' : ''}"><label><input type="checkbox" data-id="${esc(s.id)}" ${on ? 'checked' : ''} /> <span class="when">${esc(fmtDate(s.startedAt))}</span> <span class="what">${esc(c.beanName || 'unnamed coffee')} <small>${esc(s.profileName || '')}</small></span> <span class="tags">${ratingsOn() ? starsHtml(s, { compact: true }) : ''}${tags.map((t) => `<span class="tag">${t}</span>`).join('')}</span></label>${tools}</li>`;
     })
     .join('');
   if (!shown.length) ul.innerHTML = `<li class="empty">${state.shots.length ? 'No shot matches.' : 'No shots recorded yet.'}</li>`;
   setText('an-sel-count', an.ids.length ? `(${an.ids.length})` : '');
   $('an-run').disabled = an.running || !an.ids.length || !aiConfig().key || !allConfirmed();
+  $('an-query').disabled = an.running || !an.ids.length || !allConfirmed();
 }
+
+// A ticked shot can be corrected or removed without leaving the tab.
+$('an-list').addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-act]');
+  if (!btn) return;
+  e.preventDefault();
+  const id = btn.dataset.id;
+  if (btn.dataset.act === 'edit') openShotDialog(await store.getShot(id));
+  else if (btn.dataset.act === 'delete') await deleteShots([id]);
+});
 
 $('an-search').addEventListener('input', () => {
   an.search = $('an-search').value;
@@ -3839,18 +4301,82 @@ function prepareReview() {
   return items;
 }
 
+/** Something a review is built from changed (a setting, a question): refresh the size line. */
+function queryChanged() {
+  if (!$('view-analysis').hidden) renderAnalysisSize();
+}
+
 function renderAnalysisSize() {
   const el = $('an-size');
   if (!an.ids.length) return (el.textContent = '');
   const items = prepareReview();
-  const { system, user } = buildReviewMessages(items.map(({ digest, profile }) => ({ digest, profile })), reviewOptions());
+  const part = communityPart(aiConfig().provider, an.digests);
+  const { system, user } = buildReviewMessages(items.map(({ digest, profile }) => ({ digest, profile })), reviewOptions(part));
   const tokens = approxTokens(system + user);
   const noPortal = items.filter((x) => !x.digest.hasPortal).length;
-  el.textContent = `About ${tokens.toLocaleString()} tokens will be sent (${items.length} shot${items.length === 1 ? '' : 's'}${noPortal ? `, ${noPortal} without Portal data` : ''}).`;
+  el.textContent = `About ${tokens.toLocaleString()} tokens will be sent (${items.length} shot${items.length === 1 ? '' : 's'}${noPortal ? `, ${noPortal} without Portal data` : ''})${part?.mode === 'app' ? ', plus what Meticulous Community answers' : ''}.`;
 }
 
-function reviewOptions() {
-  return { grindStepUm: settings.aiGrindStepUm || 5, drink: settings.aiDrink || 'espresso', standingNotes: settings.aiNotes || '', taste: $('an-taste').value.trim(), question: $('an-question').value.trim() };
+const SECTION_SETTING = { verdict: 'secVerdict', compared: 'secCompared', stages: 'secStages', standsOut: 'secStandsOut', helped: 'secHelped', community: 'secCommunity', changes: 'secChanges', questions: 'secQuestions', sources: 'secSources' };
+
+/** Everything Settings and the two question boxes contribute to a review; `community` is communityPart()'s result. */
+function reviewOptions(community = null) {
+  return {
+    grindStepUm: settings.aiGrindStepUm || 5,
+    drink: settings.aiDrink || 'espresso',
+    standingNotes: settings.aiNotes || '',
+    taste: $('an-taste').value.trim(),
+    question: $('an-question').value.trim(),
+    sections: Object.fromEntries(REVIEW_SECTIONS.map((x) => [x.key, settings[SECTION_SETTING[x.key]] !== false])),
+    send: { profile: settings.sendProfile !== false, trace: settings.sendTrace !== false, rating: settings.sendRating !== false },
+    prep: prepSettings(),
+    water: defaultWater(),
+    community,
+  };
+}
+
+/** The coffees' own web pages (Beans → Edit), by name: Community knows a coffee by its roaster's product page too. */
+function beanUrls() {
+  const out = {};
+  for (const b of state.beans || []) {
+    const u = safeUrl(b.url);
+    if (u) out[subjectKey(b.name)] = u;
+  }
+  return out;
+}
+
+/**
+ * The Meticulous Community part of a review for a provider: the mode, what is
+ * asked about, the instructions for the model, the line that names Community
+ * and — once the app has looked the answers up — the block that carries them.
+ */
+function communityPart(provider, digests, result = null, mode = communityModeNow(provider)) {
+  if (mode === 'off') return null;
+  const data = communityDataSettings();
+  const subjects = communitySubjects(digests, { beanUrls: beanUrls() });
+  return { mode, subjects, instructions: communityInstructions(mode, { data }), mention: communityMention(provider, mode, subjects), block: mode === 'app' && result ? communityBlock(result) : '' };
+}
+
+/**
+ * The whole query for the ticked shots: the two messages, and how Community
+ * takes part. In "app" mode this asks Community first (a few lookups by name);
+ * `mode` forces a mode (the fallback when a connector is refused).
+ */
+async function buildQuery({ signal, status, mode } = {}) {
+  const cfg = aiConfig();
+  const items = prepareReview();
+  let part = communityPart(cfg.provider, an.digests, null, mode ?? communityModeNow(cfg.provider));
+  let result = null;
+  if (part?.mode === 'app') {
+    status?.('Asking Meticulous Community…');
+    result = await gatherCommunity(part.subjects, { data: communityDataSettings(), url: communityConfig.url, signal, cache: communityCache, onProgress: (tool) => status?.(`Asking Meticulous Community (${tool.replace(/_/g, ' ')})…`) });
+    log.info('community', `looked up ${result.items.length} answer(s) in ${result.calls} call(s)${result.notes.length ? `; ${result.notes.join(' · ')}` : ''}`);
+    part = communityPart(cfg.provider, an.digests, result, 'app');
+  }
+  const options = reviewOptions(part);
+  const { system, user } = buildReviewMessages(items.map(({ digest, profile }) => ({ digest, profile })), options);
+  const mcp = part?.mode === 'connector' ? { ...communityConnector(communityDataSettings()), url: communityConfig.url } : null;
+  return { cfg, items, options, system, user, community: part, communityResult: result, mcp };
 }
 
 function stageTable(d) {
@@ -3921,42 +4447,82 @@ function renderReport() {
   $('an-copy').disabled = !done;
 }
 
-async function runReview() {
+/** The checks before a review or its query: something ticked, everything confirmed. */
+function reviewReady({ needKey = true } = {}) {
+  if (needKey && !aiConfig().key) return toast('Add an API key under Settings → AI review first.', 'error') && false;
+  if (!an.ids.length) return toast('Tick at least one shot.', 'error') && false;
+  if (!allConfirmed()) return toast('Confirm the brew profile and final weight of every ticked shot first.', 'error') && false;
+  return true;
+}
+
+/**
+ * Run a review. Without `edited` the query is built here; with it (the query
+ * window's "Send to AI") the text is what the user left in the window and
+ * `edited.base` is the query it started from.
+ */
+async function runReview(edited = null) {
   if (an.running) return;
+  if (!reviewReady()) return;
   const { provider, key, model, baseUrl } = aiConfig();
-  if (!key) return toast('Add an API key under Settings → AI review first.', 'error');
-  if (!an.ids.length) return toast('Tick at least one shot.', 'error');
-  if (!allConfirmed()) return toast('Confirm the brew profile and final weight of every ticked shot first.', 'error');
-  const items = prepareReview();
-  const options = reviewOptions();
-  const { system, user } = buildReviewMessages(items.map(({ digest, profile }) => ({ digest, profile })), options);
   an.running = true;
   an.failed = false;
   an.markdown = '';
   an.savedId = null;
-  an.meta = { createdAt: Date.now(), provider, model, title: reviewTitle(an.digests), shotIds: items.map((x) => x.shot.id), shotLabels: items.map((x) => shotLabel(x.shot)), taste: options.taste, question: options.question, durationMs: 0 };
+  an.toolNote = '';
   const ctrl = new AbortController();
   an.abort = ctrl;
   $('an-stop').hidden = false;
   $('an-run').disabled = true;
+  $('an-query').disabled = true;
   const status = $('an-status');
   const t0 = performance.now();
-  const tick = setInterval(() => (status.textContent = `${PROVIDERS[provider].label} is ${an.continued ? `continuing after the length limit (part ${an.continued + 1})` : 'writing'}… ${((performance.now() - t0) / 1000).toFixed(0)} s`), 500);
-  status.textContent = `Sending ${approxTokens(system + user).toLocaleString()} tokens to ${PROVIDERS[provider].label}…`;
-  renderReport();
-  const maxTokens = maxTokensFor(items.length);
-  an.request = { provider, key, model, baseUrl, system, user, maxTokens };
-  an.cutOff = false;
-  an.continued = 0;
-  log.info('ai', `review started: ${provider}/${model}, ${items.length} shot(s), up to ${maxTokens} output tokens`);
+  let tick = null;
   try {
-    let finish = await streamReviewPart(an.request, ctrl.signal);
+    let q = edited?.base || (await buildQuery({ signal: ctrl.signal, status: (t) => (status.textContent = t) }));
+    let system = edited ? edited.system : q.system;
+    let user = edited ? edited.user : q.user;
+    const items = q.items;
+    an.meta = { createdAt: Date.now(), provider, model, title: reviewTitle(an.digests), shotIds: items.map((x) => x.shot.id), shotLabels: items.map((x) => shotLabel(x.shot)), taste: q.options.taste, question: q.options.question, durationMs: 0, community: q.community?.mode || 'off', edited: !!edited?.changed };
+    tick = setInterval(() => (status.textContent = `${PROVIDERS[provider].label} is ${an.continued ? `continuing after the length limit (part ${an.continued + 1})` : an.toolNote || 'writing'}… ${((performance.now() - t0) / 1000).toFixed(0)} s`), 500);
+    status.textContent = `Sending ${approxTokens(system + user).toLocaleString()} tokens to ${PROVIDERS[provider].label}…`;
+    renderReport();
+    const maxTokens = maxTokensFor(items.length);
+    an.request = { provider, key, model, baseUrl, system, user, maxTokens, mcp: q.mcp };
+    an.cutOff = false;
+    an.continued = 0;
+    log.info('ai', `review started: ${provider}/${model}, ${items.length} shot(s), up to ${maxTokens} output tokens, Meticulous Community: ${q.community?.mode || 'off'}${edited?.changed ? ', query edited by hand' : ''}`);
+    let finish;
+    try {
+      finish = await streamReviewPart(an.request, ctrl.signal);
+    } catch (err) {
+      // The provider would not take the Community connector (a beta it does not know, a model without it):
+      // do the lookups from here instead and send the review again.
+      if (!(q.mcp && !an.markdown && isConnectorRejection(err?.status, err?.detail))) throw err;
+      log.warn('ai', `the Meticulous Community connector was refused (${err.detail || err.message}); looking the answers up from the app instead`);
+      finish = 'paused';
+    }
+    if (finish === 'paused' && q.mcp) {
+      // …or Claude's tool loop stopped before the report was written: same remedy.
+      an.markdown = '';
+      an.toolNote = '';
+      if (!edited?.changed) {
+        q = await buildQuery({ signal: ctrl.signal, mode: 'app', status: (t) => (an.toolNote = t.replace(/…$/, '').replace(/^Asking/, 'asking')) });
+        system = q.system;
+        user = q.user;
+        an.meta.community = 'app';
+      }
+      an.toolNote = '';
+      an.request = { provider, key, model, baseUrl, system, user, maxTokens, mcp: null };
+      finish = await streamReviewPart(an.request, ctrl.signal);
+    }
     // A series review can run past the model's output limit; ask for the rest, picking up where it stopped.
     while (finish === 'length' && an.continued < 2) {
       an.continued++;
       log.info('ai', `review cut off at ${an.markdown.length} chars; continuing (${an.continued})`);
       finish = await streamReviewPart(an.request, ctrl.signal, an.markdown);
     }
+    // With the connector Claude may say a word before it looks things up; the report starts at its first heading.
+    if (an.request.mcp && /^## /m.test(an.markdown)) an.markdown = an.markdown.slice(an.markdown.search(/^## /m));
     an.cutOff = finish === 'length';
     an.meta.durationMs = performance.now() - t0;
     status.textContent = an.cutOff ? `Stopped at the model's length limit after ${(an.meta.durationMs / 1000).toFixed(0)} s — the report is cut off; press Continue for the rest.` : `Done in ${(an.meta.durationMs / 1000).toFixed(0)} s${an.continued ? ` (in ${an.continued + 1} parts)` : ''}.`;
@@ -3964,7 +4530,7 @@ async function runReview() {
   } catch (err) {
     if (err?.name === 'AbortError') {
       status.textContent = 'Stopped.';
-      an.markdown += '\n\n*Stopped before the end.*';
+      if (an.markdown) an.markdown += '\n\n*Stopped before the end.*';
     } else {
       status.textContent = '';
       an.failed = !an.markdown; // a failure before any text arrived leaves nothing worth saving
@@ -3973,33 +4539,41 @@ async function runReview() {
       log.warn('ai', `review failed: ${err?.message || err}`);
     }
   } finally {
-    clearInterval(tick);
+    if (tick) clearInterval(tick);
     an.running = false;
     an.abort = null;
+    an.toolNote = '';
     $('an-stop').hidden = true;
     renderAiSettings();
     renderReport();
   }
 }
-$('an-run').addEventListener('click', runReview);
+// "Show the query before it is sent" (Settings → AI review) puts the query window in front of every review.
+$('an-run').addEventListener('click', () => (settings.aiEditQuery ? openQueryDialog() : runReview()));
 $('an-stop').addEventListener('click', () => an.abort?.abort());
 
 /**
  * One streamed answer appended to an.markdown. With `sofar` the request
  * continues the conversation: the text so far as the assistant's turn, then
- * "continue where you stopped". Returns the finish reason ('stop' | 'length').
+ * "continue where you stopped". Returns the finish reason ('stop' | 'length' | 'paused').
  */
 async function streamReviewPart(req, signal, sofar = '') {
   let finish = 'stop';
   const history = sofar ? [{ role: 'assistant', content: sofar }, { role: 'user', content: 'Your report was cut off by the output limit. Continue it exactly where it stopped — do not repeat anything already written, do not restart a section or add a preamble, begin mid-sentence if that is where it stopped, and keep the same section outline through to Sources.' }] : [];
   await streamCompletion(
     req.provider,
-    { key: req.key, model: req.model, baseUrl: req.baseUrl, system: req.system, user: req.user, history, maxTokens: req.maxTokens },
+    { key: req.key, model: req.model, baseUrl: req.baseUrl, system: req.system, user: req.user, history, maxTokens: req.maxTokens, mcp: sofar ? undefined : req.mcp || undefined }, // the lookups are done by the time a report is continued
     {
       signal,
       onRetry: (err) => log.warn('ai', `${req.model} refused a sampling parameter (${err.detail || err.message}); retrying without it`),
       onFinish: (f) => (finish = f || 'stop'),
+      onTool: (tool) => {
+        if (tool.error) return log.warn('community', 'a Meticulous Community lookup made by the model failed');
+        an.toolNote = `looking up Meticulous Community (${String(tool.name).replace(/_/g, ' ').slice(0, 40)})`;
+        log.info('community', `the model called ${tool.name}`);
+      },
       onDelta: (d) => {
+        an.toolNote = '';
         an.markdown += d;
         if (!reportRenderTimer) reportRenderTimer = setTimeout(() => { reportRenderTimer = null; renderReport(); }, 150);
       },
@@ -4040,6 +4614,80 @@ async function continueReview() {
   }
 }
 $('an-continue').addEventListener('click', continueReview);
+
+// ---------------------------------------------------------------- the query --
+// The query window shows what the app has prepared — the instructions and the
+// message with the shots — and lets it be edited before it is sent, or copied
+// into another assistant. "Edit query…" opens it; with the setting on, so does
+// "Review with AI".
+
+let queryDraft = null; // the query the window was opened with
+function renderQuerySize() {
+  const sys = $('q-system').value;
+  const user = $('q-user').value;
+  const changed = queryDraft && (sys !== queryDraft.system || user !== queryDraft.user);
+  setText('q-system-size', `(${approxTokens(sys).toLocaleString()} tokens)`);
+  setText('q-size', `About ${approxTokens(sys + user).toLocaleString()} tokens in all${changed ? ' — edited' : ''}.`);
+  $('q-reset').disabled = !changed;
+}
+
+async function openQueryDialog() {
+  if (an.running || !reviewReady({ needKey: false })) return;
+  const status = $('an-status');
+  $('an-query').disabled = true;
+  $('an-run').disabled = true;
+  try {
+    status.textContent = 'Preparing the query…';
+    const q = await buildQuery({ status: (t) => (status.textContent = t) });
+    queryDraft = q;
+    $('q-user').value = q.user;
+    $('q-system').value = q.system;
+    $('q-system-box').open = false;
+    const label = PROVIDERS[q.cfg.provider].label;
+    $('q-sub').textContent = `${label} · ${q.cfg.model} · ${q.items.length} shot${q.items.length === 1 ? '' : 's'}. ${communityHow(q.cfg.provider, q.community?.mode || 'off', label)}${q.cfg.key ? '' : ' No API key yet (Settings → AI review): the query can be copied, not sent.'}`;
+    $('q-send').disabled = !q.cfg.key;
+    $('q-send').textContent = `Send to ${label.replace(/ \(.*\)$/, '')}`;
+    renderQuerySize();
+    status.textContent = '';
+    $('query-dialog').showModal();
+    $('q-user').focus();
+    $('q-user').setSelectionRange(0, 0);
+    $('q-user').scrollTop = 0;
+  } catch (err) {
+    status.textContent = '';
+    toast(`Could not prepare the query: ${err?.message || err}`, 'error');
+  } finally {
+    renderAiSettings();
+    renderAnalysisList();
+  }
+}
+$('an-query').addEventListener('click', openQueryDialog);
+$('q-user').addEventListener('input', renderQuerySize);
+$('q-system').addEventListener('input', renderQuerySize);
+$('q-cancel').addEventListener('click', () => $('query-dialog').close());
+$('q-reset').addEventListener('click', () => {
+  if (!queryDraft) return;
+  $('q-user').value = queryDraft.user;
+  $('q-system').value = queryDraft.system;
+  renderQuerySize();
+});
+$('q-copy').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(`${$('q-system').value}\n\n---\n\n${$('q-user').value}`);
+    toast('Query copied — paste it into Claude, ChatGPT, Grok or another assistant.');
+  } catch {
+    toast('Could not copy (clipboard blocked).', 'error');
+  }
+});
+$('q-send').addEventListener('click', () => {
+  if (!queryDraft) return;
+  const system = $('q-system').value;
+  const user = $('q-user').value;
+  if (!user.trim()) return toast('The query is empty.', 'error');
+  const edited = { base: queryDraft, system, user, changed: system !== queryDraft.system || user !== queryDraft.user };
+  $('query-dialog').close();
+  runReview(edited);
+});
 
 /** Write a review in the chosen format (md / docx / pdf) to the save folder or the downloads. */
 async function downloadReview(rev, fmt = settings.reviewFormat || 'md') {
@@ -4124,7 +4772,7 @@ $('an-saved-rows').addEventListener('click', async (e) => {
   }
 });
 
-window.__pb = { state, store, portal, recorder, timeChart, massChart, calChart, compareChart, compare, machinePanel, settings, log, files, heat, hist, an, runAutoBackup, stopEverything, openStopDialog, openShotDialog, openWeightDialog, openRatingDialog, openCompare, openAnalysis, runReview, refreshShotList, recoverUnfinishedShots, backfillMachineRecords, autosaveShotFiles, refreshProfileTargets, get meticulous() { return meticulous; } };
+window.__pb = { state, store, portal, recorder, timeChart, massChart, calChart, compareChart, compare, machinePanel, settings, log, files, heat, hist, an, piston, communityConfig, communityCache, buildQuery, openQueryDialog, renderMaintenance, get maintenance() { return maintLog; }, get pistonLast() { return pistonLast; }, runAutoBackup, stopEverything, openStopDialog, openShotDialog, openWeightDialog, openRatingDialog, openCompare, openAnalysis, runReview, refreshShotList, recoverUnfinishedShots, backfillMachineRecords, autosaveShotFiles, refreshProfileTargets, get meticulous() { return meticulous; } };
 
 init().catch((err) => {
   console.error(err);

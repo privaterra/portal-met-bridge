@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.20.0
+
+- Matches portal-met-bridge v0.20.0. **Settings sections fold** (compact by default; a picker chooses compact, detailed or as left), with new sections **Heating** (the ready-to-brew rule moved here, plus an option to save the Machine tab's temperature graphs as JPEG, PDF and CSV with the brew they belong to) and **Brew Prep.** (grind prep checklist, the water you brew with, the pick-lists).
+- **AI review**: Meticulous Community data in the analysis (on by default; a checklist of what to read; Claude connects through its Meticulous Community connector, for ChatGPT, Grok and Gemini the app looks the answers up — this needs the browser to reach `community.meticuloushome.com`), a checklist of the report's sections and of what is sent, an editable query window, and Grok (xAI) as a provider. A ticked shot on the Analysis tab can be edited or deleted there.
+- **Machine tab → Cleaning & maintenance**: Meticulous's weekly, monthly and three-monthly cleaning jobs with the dates you did them, a reminder of the next one, and a check of the piston after every brew.
+
 ## 0.19.1
 
 - **Security release** — matches portal-met-bridge v0.19.1, the first release of the 0.19 changes (0.19.0 was tagged but its release build failed; the app is the same). The app's server now refuses requests that come from another website (before, a page you visited could have reached the app on your LAN, including the machine relay) and answers only to addresses, `homeassistant`, `.local` names and its certificate's names; a new option **`allowed_hosts`** lists any other name you use (a DuckDNS name, a reverse proxy). If the page suddenly says *421*, that is the option to fill in.

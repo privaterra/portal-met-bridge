@@ -116,8 +116,33 @@ try {
   await page.dispatchEvent('#ctx-bean', 'change');
   await page.waitForTimeout(300);
   check('picking a previous bean fills in its roaster and origin', (await page.inputValue('#ctx-roaster')) === 'E2E roaster' && (await page.inputValue('#ctx-origin')) === 'Colombia, Huila');
-  // Machine address lives under Settings; typing + Enter saves it and the rail follows.
+  // Settings sections fold (v0.20): compact by default, a click opens one, and how they open is a setting
   await page.click('.view-tab[data-view="settings"]');
+  await page.waitForTimeout(250);
+  const openSections = () => page.evaluate(() => [...document.querySelectorAll('#view-settings details.set-section')].filter((d) => d.open).map((d) => d.dataset.section).join(','));
+  const compact = await page.evaluate(() => ({ layout: window.__pb.settings.settingsLayout, names: [...document.querySelectorAll('#view-settings details.set-section > summary h2')].map((h) => h.textContent).join('|'), rule: document.querySelector('#set-heat-rule').closest('details').dataset.section, lists: document.querySelector('#list-roaster').closest('details').dataset.section }));
+  check('Settings opens compact: every section closed, names only — Heating after Machine, Brew Prep. after AI review', compact.layout === 'compact' && (await openSections()) === '' && !(await page.isVisible('#meticulous-host')) && compact.names === 'Machine|Heating|Recording|Files and folders|Estimates|AI review|Brew Prep.|Backup and restore|Logging and debug|Start over|About', JSON.stringify(compact));
+  check('Ready to brew lives under Heating and the pick-lists under Brew Prep.', compact.rule === 'heating' && compact.lists === 'prep', JSON.stringify(compact));
+  await page.click('details[data-section="recording"] > summary');
+  check('clicking a section name opens that section', (await openSections()) === 'recording' && (await page.isVisible('#settle-sec')));
+  await page.click('.view-tab[data-view="shots"]');
+  await page.click('.addr [data-goto="settings"]');
+  await page.waitForTimeout(250);
+  check('compact closes them again on the next visit; the rail\'s "change" link opens Machine', (await openSections()) === 'machine' && (await page.isVisible('#meticulous-host')), await openSections());
+  await page.selectOption('#set-layout', 'remember');
+  await page.click('details[data-section="heating"] > summary');
+  await page.waitForTimeout(250);
+  await page.click('.view-tab[data-view="shots"]');
+  await page.click('.view-tab[data-view="settings"]');
+  await page.waitForTimeout(250);
+  check('"as I left them" brings back the sections that were open', (await openSections()) === 'machine,heating', await openSections());
+  await page.click('#set-collapse-all');
+  check('Collapse all closes every section', (await openSections()) === '');
+  await page.selectOption('#set-layout', 'detailed');
+  await page.waitForTimeout(250);
+  check('detailed opens every section, now and on the next visit', (await openSections()).split(',').length === 11 && (await page.evaluate(() => window.__pb.settings.settingsLayout)) === 'detailed');
+  await page.waitForTimeout(4200); // let the "Saved …" flash run out so the next save is counted on its own
+  // Machine address lives under Settings; typing + Enter saves it and the rail follows.
   await page.click('#meticulous-host');
   await page.keyboard.press('Control+A');
   await page.keyboard.type('10.9.8.7');
@@ -583,6 +608,8 @@ try {
   await page.waitForFunction(() => !document.querySelector('#an-run').disabled, null, { timeout: 5000 });
   await page.fill('#an-taste', 'sweet, a bit thin');
   await page.fill('#an-question', 'Which shot was best?');
+  await page.evaluate((port) => { window.__pb.communityConfig.url = `http://127.0.0.1:${port}/api/mcp`; }, MOCK_PORT); // Meticulous Community is the mock
+  check('Meticulous Community is on by default and, for a provider without a connector, the app does the lookups', (await page.evaluate(() => window.__pb.settings.communityEnabled)) === true && /OpenAI: the query starts with @Meticulous Community; this app asks Meticulous Community/.test(await page.textContent('#an-community')), await page.textContent('#an-community'));
   await page.click('#an-run');
   await page.waitForFunction(() => !window.__pb.an.running && window.__pb.an.markdown.length > 100, null, { timeout: 20000 });
   const reviewed = await page.evaluate((id) => { const d = window.__pb.an.digests.find((x) => x.meta.id === id)?.meta; return d && { choice: d.profileChoice, target: d.profileTargetG, recorded: d.recordedProfile, vars: (d.profileVariables || []).map((v) => v.key).join(','), cup: d.beverageG }; }, e2eShotId);
@@ -592,7 +619,14 @@ try {
   const review = await page.evaluate(() => ({ md: window.__pb.an.markdown, h3: [...document.querySelectorAll('#an-report h3')].map((h) => h.textContent), table: !!document.querySelector('#an-report table'), status: document.querySelector('#an-status').textContent, title: document.querySelector('#an-report-title').textContent, saveDisabled: document.querySelector('#an-save').disabled }));
   check('the review streams in, rendered as sections and a table, with the prompt facts the mock echoes back', /mock review of 3 shots, one without Portal data/.test(review.md) && review.h3.join('|') === 'Verdict|Stages|What stands out|Suggested changes|Open questions|Sources' && review.table && /Done in/.test(review.status) && /^Shot review: 3 shots of E2E coffee.* on Blooming Espresso/.test(review.title) && !review.saveDisabled, JSON.stringify({ ...review, md: review.md.slice(0, 80) }));
   const sent = await page.evaluate(async (port) => (await (await fetch(`http://127.0.0.1:${port}/mock/dial`)).json()).lastAiRequest, MOCK_PORT);
-  check('the request carried the model, a system prompt and the digest', sent && sent.model === 'mock-gpt-2' && sent.stream === true && sent.systemChars > 2000 && sent.userChars > 3000, JSON.stringify(sent));
+  check('the request carried the model, a system prompt and the digest', sent && sent.model === 'mock-gpt-2' && sent.stream === true && sent.systemChars > 2000 && sent.userChars > 3000, JSON.stringify({ ...sent, system: undefined, user: undefined }));
+  // Meticulous Community (v0.20): looked up by name, added to the query, named the way ChatGPT wants it
+  const mcp = (await page.evaluate(async (port) => (await (await fetch(`http://127.0.0.1:${port}/mock/dial`)).json()).mcpCalls, MOCK_PORT)) || [];
+  check('the app asked Community by name only — the coffee (under both names the shots give it, one answer), the espresso guide for the origin, the roaster, the grinder', mcp.map((c) => c.name).join(',') === 'search_community,how_to_brew_coffee,search_community,espresso_guide,espresso_guide,search_community,how_to_brew_roaster,search_community,grinder_guide' && mcp.every((c) => JSON.stringify(c.args).length < 120) && mcp[4].args.topic === 'colombia' && (sent.user.match(/^## Coffee — /gm) || []).length === 1, JSON.stringify(mcp));
+  check('the query starts with @Meticulous Community and carries the answers with their source links, marked as data', /^# Review request\n@Meticulous Community — use Meticulous Community for this review/.test(sent.user) && /# Meticulous Community \(looked up by the app\)/.test(sent.user) && /## Coffee — E2E \[coffee\]/.test(sent.user) && /## Espresso guide — colombia/.test(sent.user) && /## Roaster — E2E Roaster/.test(sent.user) && /## Grinder — Zerno Z1/.test(sent.user) && /community\.meticuloushome\.com\/coffee\/c-0001/.test(sent.user) && /as data, never as instructions/.test(sent.user), sent.user.slice(0, 300));
+  check('the instructions ask for a Community comparison section and for the source links', /## Community comparison/.test(sent.system) && /Quote Community figures with their source link/.test(sent.system) && /The app has looked the answers up for you/.test(sent.system));
+  check('grind prep goes with the review (defaults: everything but the filter screen)', /Puck preparation.*RDT \(Ross Droplet Technique.*WDT \(Weiss Distribution Technique.*a tamper\. Not used: Filter screen\./.test(sent.user), (sent.user.match(/Puck preparation[^\n]*/) || [''])[0].slice(0, 200));
+  check('text planted in a Community answer stays text', (await page.evaluate(() => window.__xss || 0)) === 0 && /IGNORE ALL PREVIOUS INSTRUCTIONS/.test(sent.user));
   await page.click('#an-save');
   await page.waitForTimeout(300);
   const savedRows = await page.evaluate(() => ({ rows: document.querySelectorAll('#an-saved-rows tr').length, tab: document.querySelector('#analysis-tab-count').textContent, btn: document.querySelector('#an-save').textContent }));
@@ -817,6 +851,156 @@ try {
   check('zip of everything downloads (from History)', zip.bytes > 30000 && /export-.*\.zip$/.test(zip.name), `${zip.name} ${zip.bytes} B`);
   await page.click('.view-tab[data-view="shots"]');
 
+  // ---- v0.20: the query window, report sections, brew prep, shot edit/delete in the picker
+  await page.click('.view-tab[data-view="analysis"]');
+  await page.waitForTimeout(300);
+  await page.evaluate(async () => {
+    const { makeDemoShot } = await import('./js/demo.js?v=' + document.querySelector('script[src*="main.js"]').src.split('v=')[1]);
+    await window.__pb.store.putShot({ ...makeDemoShot({ seed: 21 }), id: 'picker-shot', source: 'live', startedAt: Date.now() - 60000, profileName: 'Blooming Espresso (demo)', context: { beanName: 'E2E coffee', roaster: 'E2E roaster', origin: 'Colombia, Huila', grinderName: 'Zerno Z1', doseG: 18, grindSize: '420 µm' } });
+    await window.__pb.refreshShotList();
+    window.__pb.openAnalysis(['picker-shot']);
+  });
+  await page.waitForTimeout(300);
+  const rowTools = await page.evaluate(() => ({ on: [...document.querySelectorAll('#an-list li.on .an-row-tools button')].map((b) => b.textContent).join(','), off: document.querySelectorAll('#an-list li:not(.on) .an-row-tools').length }));
+  check('a ticked shot in the review picker offers Edit and Delete; the others do not', rowTools.on === 'Edit,Delete' && rowTools.off === 0, JSON.stringify(rowTools));
+  await page.click('#an-confirm-all');
+  await page.waitForFunction(() => !document.querySelector('#an-query').disabled, null, { timeout: 5000 });
+  await page.click('#an-list li.on button[data-act="edit"]');
+  await page.waitForSelector('#shot-dialog[open]');
+  await page.fill('#e-dose', '18.5');
+  await page.click('#shot-dialog-save');
+  await page.waitForFunction(() => !document.querySelector('#shot-dialog').open, null, { timeout: 5000 });
+  await page.waitForTimeout(300);
+  const pickerEdit = await page.evaluate(async () => ({ dose: (await window.__pb.store.getShot('picker-shot')).context.doseG, confirmed: window.__pb.an.confirmed.has('picker-shot'), run: document.querySelector('#an-run').disabled, digest: document.querySelector('#an-digest').textContent }));
+  check('Edit opens the shot\'s details; saving updates the digest and asks for the shot to be confirmed again', pickerEdit.dose === 18.5 && !pickerEdit.confirmed && pickerEdit.run && /18\.5 g in/.test(pickerEdit.digest), JSON.stringify({ ...edited, digest: pickerEdit.digest.slice(0, 80) }));
+  await page.click('#an-confirm-all');
+  await page.waitForFunction(() => !document.querySelector('#an-query').disabled, null, { timeout: 5000 });
+
+  // the query window: what the app prepared, editable, sendable
+  await page.evaluate(async (port) => { await fetch(`http://127.0.0.1:${port}/mock/dial`, { method: 'POST', body: JSON.stringify({ mcpReset: true }) }); }, MOCK_PORT);
+  await page.click('#an-query');
+  await page.waitForSelector('#query-dialog[open]', { timeout: 8000 });
+  const qWin = await page.evaluate(() => ({ user: document.querySelector('#q-user').value, system: document.querySelector('#q-system').value, sub: document.querySelector('#q-sub').textContent, send: document.querySelector('#q-send').textContent, reset: document.querySelector('#q-reset').disabled }));
+  const cachedCalls = ((await page.evaluate(async (port) => (await (await fetch(`http://127.0.0.1:${port}/mock/dial`)).json()).mcpCalls, MOCK_PORT)) || []).length;
+  check('Edit query… shows the prepared query: the message with the shot and the Community answers, and the instructions', /^# Review request/.test(qWin.user) && /# Shot 1 of 1/.test(qWin.user) && /# Meticulous Community \(looked up by the app\)/.test(qWin.user) && /## Verdict/.test(qWin.system) && /OpenAI · mock-gpt-2 · 1 shot/.test(qWin.sub) && qWin.send === 'Send to OpenAI' && qWin.reset, JSON.stringify({ sub: qWin.sub, send: qWin.send }));
+  check('answers already fetched this session are not asked for again', cachedCalls === 0, String(cachedCalls));
+  await page.fill('#q-user', `${qWin.user}\n\nEDITED-BY-HAND: answer in two sentences.`);
+  check('an edit is noted and Reset becomes available', /edited/.test(await page.textContent('#q-size')) && !(await page.isDisabled('#q-reset')));
+  await page.click('#q-reset');
+  check('Reset restores the prepared query', (await page.inputValue('#q-user')) === qWin.user);
+  await page.click('#q-cancel');
+  check('Cancel closes the window and sends nothing', !(await page.evaluate(() => document.querySelector('#query-dialog').open || window.__pb.an.running)));
+  // with the setting on, Review with AI opens the window first
+  await page.click('.view-tab[data-view="settings"]');
+  await page.check('#set-ai-edit-query');
+  await page.uncheck('#set-sec-questions');
+  await page.check('#set-prep-screen');
+  await page.uncheck('#set-send-trace');
+  await page.fill('#set-water', 'E2E water 90 ppm');
+  await page.click('#settings-save');
+  await page.waitForTimeout(400);
+  const prepState = await page.evaluate(() => ({ water: window.__pb.settings.water, chips: [...document.querySelectorAll('#list-water .chip')].map((c) => c.firstChild.textContent.trim()), options: [...document.querySelectorAll('#water-list option')].map((o) => o.value), def: document.querySelector('#set-water-default').checked && !document.querySelector('#set-water-default').disabled, note: document.querySelector('#set-prep-note').textContent, prepDefaults: ['rdt', 'wdt', 'distribution', 'tamper', 'single-dose'].every((k) => document.querySelector(`#set-prep-${k}`).checked) }));
+  check('Brew Prep.: a typed water is saved, joins its pick-list and is the default; the grind-prep defaults are on', prepState.water === 'E2E water 90 ppm' && prepState.chips.includes('E2E water 90 ppm') && prepState.options.includes('E2E water 90 ppm') && prepState.def && prepState.prepDefaults && /Filter screen/.test(prepState.note) && /water: E2E water 90 ppm/.test(prepState.note), JSON.stringify(prepState));
+  await page.click('.view-tab[data-view="analysis"]');
+  await page.waitForTimeout(300);
+  await page.click('#an-run');
+  await page.waitForSelector('#query-dialog[open]', { timeout: 8000 });
+  const qSecond = await page.evaluate(() => ({ user: document.querySelector('#q-user').value, system: document.querySelector('#q-system').value }));
+  check('"Show the query before it is sent": Review with AI opens the query window instead of sending', !(await page.evaluate(() => window.__pb.an.running)) && /^# Review request/.test(qSecond.user));
+  check('the query follows Settings: a section left out, the trace not sent, the filter screen and the water included', !/## Open questions/.test(qSecond.system) && /Left out by the user: "Open questions"/.test(qSecond.system) && /## Suggested changes/.test(qSecond.system) && /the one-row-per-second trace is not sent/.test(qSecond.user) && !/Trace resampled/.test(qSecond.user) && /a filter \(puck\) screen on top of the coffee/.test(qSecond.user) && /Water the user brews with: E2E water 90 ppm\./.test(qSecond.user));
+  await page.fill('#q-user', `${qSecond.user}\n\nEDITED-BY-HAND: answer in two sentences.`);
+  await page.click('#q-send');
+  await page.waitForFunction(() => !window.__pb.an.running && window.__pb.an.markdown.length > 100, null, { timeout: 20000 });
+  const sentEdited = await page.evaluate(async (port) => (await (await fetch(`http://127.0.0.1:${port}/mock/dial`)).json()).lastAiRequest, MOCK_PORT);
+  check('Send to AI sends the query as edited, and the review says it was', /EDITED-BY-HAND: answer in two sentences\.$/.test(sentEdited.user) && (await page.evaluate(() => window.__pb.an.meta.edited === true && window.__pb.an.meta.community === 'app')));
+  // Community switched off, or unreachable: the review still runs
+  await page.evaluate(async (port) => { await fetch(`http://127.0.0.1:${port}/mock/dial`, { method: 'POST', body: JSON.stringify({ mcpDown: true }) }); window.__pb.communityCache.clear(); }, MOCK_PORT);
+  const mcpDown20 = await page.evaluate(async () => { const q = await window.__pb.buildQuery(); return { notes: q.communityResult.notes, items: q.communityResult.items.length, block: /Not available from Meticulous Community/.test(q.user) }; });
+  check('when Community cannot be reached the query says so and carries on', mcpDown20.items === 0 && mcpDown20.notes.length === 1 && /HTTP 503/.test(mcpDown20.notes[0]) && mcpDown20.block, JSON.stringify(mcpDown20));
+  await page.evaluate(async (port) => { await fetch(`http://127.0.0.1:${port}/mock/dial`, { method: 'POST', body: JSON.stringify({ mcpDown: false }) }); }, MOCK_PORT);
+  await page.click('.view-tab[data-view="settings"]');
+  await page.uncheck('#set-ai-edit-query');
+  await page.check('#set-sec-questions');
+  await page.check('#set-send-trace');
+  await page.uncheck('#set-prep-screen');
+  await page.uncheck('#set-community-profiles');
+  await page.selectOption('#set-ai-provider', 'anthropic');
+  await page.waitForTimeout(300);
+  const viaClaude = await page.evaluate(async () => { const q = await window.__pb.buildQuery(); return { mode: q.community.mode, mcp: q.mcp, mention: q.user.split('\n')[1], sys: /You are connected to Meticulous Community through the Meticulous Community \(Coffee\) connector/.test(q.system), block: /looked up by the app/.test(q.user), how: document.querySelector('#community-how').textContent }; });
+  check('with Claude the request carries the Meticulous Community connector instead of looked-up answers', viaClaude.mode === 'connector' && viaClaude.mcp?.name === 'meticulous-community' && /\/api\/mcp$/.test(viaClaude.mcp.url) && Object.keys(viaClaude.mcp.configs).length === 0 && /^Use the Meticulous Community \(Coffee\) connector: look up the coffee “E2E coffee” by E2E roaster/.test(viaClaude.mention) && viaClaude.sys && !viaClaude.block && /carries the Meticulous Community \(Coffee\) connector/.test(viaClaude.how), JSON.stringify(viaClaude));
+  await page.selectOption('#set-community-via', 'mention');
+  await page.selectOption('#set-ai-provider', 'xai');
+  await page.waitForTimeout(300);
+  const viaGrok = await page.evaluate(async () => { const q = await window.__pb.buildQuery(); return { mode: q.community.mode, mcp: q.mcp, mention: q.user.split('\n')[1], provider: q.cfg.provider, model: q.cfg.model, profiles: /Do not bring up Community brew profiles/.test(q.system), keyField: document.querySelector('#set-ai-key-xai').offsetParent !== null }; });
+  check('Grok is a provider; "name it only" mentions Meticulous Community and looks nothing up; an unticked kind is left out', viaGrok.provider === 'xai' && viaGrok.model === 'grok-4' && viaGrok.mode === 'mention' && viaGrok.mcp === null && /^Meticulous Community: look up the coffee/.test(viaGrok.mention) && viaGrok.profiles && viaGrok.keyField, JSON.stringify(viaGrok));
+  await page.uncheck('#set-community');
+  await page.waitForTimeout(200);
+  const comOff = await page.evaluate(async () => { const q = await window.__pb.buildQuery(); return { community: q.community, any: /Meticulous Community/.test(q.user + q.system), disabled: document.querySelector('#set-community-coffee').disabled, sec: /## Community comparison/.test(q.system) }; });
+  check('Meticulous Community switched off: nothing about it in the query, its options greyed', comOff.community === null && !comOff.any && comOff.disabled && !comOff.sec, JSON.stringify(comOff));
+  await page.check('#set-community');
+  await page.check('#set-community-profiles');
+  await page.selectOption('#set-community-via', 'auto');
+  await page.selectOption('#set-ai-provider', 'openai');
+  await page.waitForTimeout(200);
+  // Delete from the picker
+  await page.click('.view-tab[data-view="analysis"]');
+  await page.waitForTimeout(300);
+  await page.click('#an-list li.on button[data-act="delete"]');
+  await page.waitForSelector('#confirm-dialog[open]');
+  await page.click('#confirm-go');
+  await page.waitForFunction(() => !window.__pb.state.shots.some((s) => s.id === 'picker-shot'), null, { timeout: 5000 });
+  await page.waitForTimeout(300);
+  check('Delete removes the shot from the app and from the review', (await page.evaluate(() => window.__pb.an.ids.length === 0 && document.querySelector('#an-preflight').hidden && !document.querySelector('#an-list input[data-id="picker-shot"]'))));
+
+  // ---- v0.20: cleaning & maintenance, the piston check, the heating graph
+  await page.click('.view-tab[data-view="machine"]');
+  await page.waitForTimeout(600);
+  const maint0 = await page.evaluate(() => ({ shown: !document.querySelector('#maint-panel').hidden, rows: [...document.querySelectorAll('#maint-rows tr')].map((tr) => `${tr.dataset.task}:${tr.dataset.state}`).join(','), names: [...document.querySelectorAll('#maint-rows tr td:first-child b')].map((b) => b.textContent).join('|'), next: document.querySelector('#maint-next').textContent, rail: document.querySelector('#maint-reminder-text').textContent, source: document.querySelector('#maint-source a').href, routine: /Routine cleaning \(not tracked here\)/.test(document.querySelector('#maint-extra').textContent) }));
+  check('the Machine tab shows the cleaning & maintenance schedule (weekly, monthly, three-monthly — not the routine cleaning), with no dates yet', maint0.shown && maint0.rows === 'weekly:never,monthly:never,deep:never' && maint0.names === 'Internal cleaning|Chamber cleaning|Deep cleaning' && /No cleaning dates entered yet/.test(maint0.next) && /enter your dates/.test(maint0.rail) && maint0.source === 'https://meticuloushome.com/pages/maintenance-and-repairs' && maint0.routine, JSON.stringify(maint0));
+  await page.click('#maint-rows tr[data-task="weekly"] button[data-act="now"]');
+  await page.waitForTimeout(300);
+  const tenDaysAgo = await page.evaluate(() => new Date(Date.now() - 40 * 86400000 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16));
+  await page.fill('#maint-rows tr[data-task="monthly"] .maint-when', tenDaysAgo);
+  await page.click('#maint-rows tr[data-task="monthly"] button[data-act="save"]');
+  await page.waitForTimeout(300);
+  const maint1 = await page.evaluate(() => ({ rows: [...document.querySelectorAll('#maint-rows tr')].map((tr) => `${tr.dataset.task}:${tr.dataset.state}`).join(','), next: document.querySelector('#maint-next').textContent, state: document.querySelector('#maint-next').dataset.state, rail: document.querySelector('#maint-reminder-text').textContent, brews: document.querySelector('#maint-rows tr[data-task="monthly"] td.num').textContent, stored: window.__pb.maintenance }));
+  check('entered dates give each job a next-due date; the reminder names the overdue one and counts the brews since', maint1.rows === 'weekly:ok,monthly:due,deep:never' && maint1.state === 'due' && /^Overdue: Chamber cleaning — it was due \d+ days ago/.test(maint1.next) && /brews? since it was last done/.test(maint1.next) && /No date yet for: deep cleaning/.test(maint1.next) && /^Overdue: chamber cleaning/.test(maint1.rail) && Number(maint1.brews) >= 1 && maint1.stored.weekly.length === 1 && maint1.stored.monthly.length === 1, JSON.stringify({ ...maint1, stored: undefined }));
+  await page.click('#maint-rows tr[data-task="deep"] button[data-act="now"]');
+  await page.waitForTimeout(300);
+  const maint2 = await page.evaluate(() => ({ rows: [...document.querySelectorAll('#maint-rows tr')].map((tr) => `${tr.dataset.task}:${tr.dataset.state}`).join(','), monthly: document.querySelector('#maint-rows tr[data-task="monthly"]').textContent, next: document.querySelector('#maint-next').textContent }));
+  check('a deep cleaning counts as the chamber and the internal cleaning too', maint2.rows === 'weekly:ok,monthly:ok,deep:ok' && /done with the deep cleaning/.test(maint2.monthly) && /^Next: Internal cleaning — due in 7 days/.test(maint2.next), JSON.stringify(maint2));
+  await page.click('#maint-rows tr[data-task="deep"] button[data-act="undo"]');
+  await page.waitForTimeout(300);
+  check('Undo removes the last date entered', (await page.evaluate(() => window.__pb.maintenance.deep.length)) === 0 && (await page.getAttribute('#maint-rows tr[data-task="monthly"]', 'data-state')) === 'due');
+  const pistonUi = await page.evaluate(() => ({ last: window.__pb.pistonLast, badge: document.querySelector('#maint-piston-badge').textContent, text: document.querySelector('#maint-piston').textContent }));
+  check('the piston was checked after the brew: it travelled, came back to rest, all operating OK', pistonUi.last?.ok === true && pistonUi.last.returned && pistonUi.last.brewSec > 3 && pistonUi.badge === 'all operating OK' && /All operating OK/.test(pistonUi.text), JSON.stringify(pistonUi));
+  const backupMaint = await page.evaluate(async () => (await window.__pb.store.exportAll()).maintenance);
+  check('the cleaning dates travel in a backup', backupMaint.weekly.length === 1 && backupMaint.monthly.length === 1 && backupMaint.deep.length === 0, JSON.stringify(backupMaint));
+  // heating graph: off by default, then three files through the browser
+  const heat0 = await page.evaluate(() => ({ on: window.__pb.settings.heatSaveGraph, tools: document.querySelector('#heat-save-tools').hidden, window: window.__pb.machinePanel.windowSec, note: document.querySelector('#temps-note').textContent }));
+  check('saving the heating graph is off by default: no buttons, five minutes of history', heat0.on === false && heat0.tools && heat0.window === 300 && /Last 5 minutes/.test(heat0.note), JSON.stringify(heat0));
+  await page.click('.view-tab[data-view="settings"]');
+  await page.check('#set-heat-save');
+  await page.uncheck('#set-maintenance');
+  await page.waitForTimeout(200);
+  await page.click('.view-tab[data-view="machine"]');
+  await page.waitForTimeout(1500);
+  const heat1 = await page.evaluate(() => ({ tools: !document.querySelector('#heat-save-tools').hidden, window: window.__pb.machinePanel.windowSec, note: document.querySelector('#temps-note').textContent, info: document.querySelector('#heat-brew-info').textContent, maint: document.querySelector('#maint-panel').hidden && document.querySelector('#maint-reminder').hidden }));
+  check('switched on: the buttons appear, the graph keeps 30 minutes and says which brew it will be saved with; the maintenance part can be switched off', heat1.tools && heat1.window === 1800 && /Last 30 minutes/.test(heat1.note) && /Saved with the graph: Blooming Espresso · target 92\.0 °C/.test(heat1.info) && heat1.maint, JSON.stringify(heat1));
+  const hj = await dl('#heat-save-jpeg');
+  check('the heating graph downloads as a JPEG', hj.bytes > 20000 && /^heating-.*-blooming-espresso\.jpg$/.test(hj.name), `${hj.name} ${hj.bytes} B`);
+  const hp = await dl('#heat-save-pdf');
+  const hpText = readFileSync(hp.path, 'latin1');
+  check('…as a PDF with the brew it belongs to', hp.bytes > 20000 && /^%PDF/.test(hpText) && /^heating-.*\.pdf$/.test(hp.name), `${hp.name} ${hp.bytes} B`);
+  const hc = await dl('#heat-save-csv');
+  const hcText = readFileSync(hc.path, 'utf8').split('\n');
+  check('…and its data as CSV: one row per reading with the state, the profile and its target', hcText[0].trim() === 'time_iso,t_s,external_1_c,external_2_c,bar_up_c,bar_mid_c,bar_down_c,tube_c,motor_c,status_temp_c,target_c,ready,heater_power_pct,motor_power_pct,piston_position,state,stage,profile' && hcText.length > 10 && /,92,(yes|no),.*,Blooming Espresso\s*$/.test(hcText[hcText.length - 2] || hcText[hcText.length - 1]), `${hcText.length} lines · ${hcText[1]}`);
+  check('none of them was written to the data folder: they go through the browser', !onDisk().some((f) => /heating-/.test(f)));
+  await page.click('.view-tab[data-view="settings"]');
+  await page.check('#set-maintenance');
+  await page.uncheck('#set-heat-save');
+  await page.click('.view-tab[data-view="shots"]');
+
   // Disconnect path
   await page.click('#portal-disconnect');
   await page.waitForTimeout(300);
@@ -857,6 +1041,7 @@ try {
     dbs: (await (indexedDB.databases ? indexedDB.databases() : Promise.resolve([]))).map((d) => d.name),
   }));
   check('after restart: no shots, no beans, default address, log off, opens on Shots', after.shots === 0 && after.beans === 0 && after.host === '127.0.0.1' && after.addr === '127.0.0.1' && after.logOn === false && (after.hash === '' || after.hash === '#shots'), JSON.stringify(after));
+  await page.evaluate(async () => { window.__pb.settings.settingsLayout = 'detailed'; await window.__pb.store.setSetting('settingsLayout', 'detailed'); }); // the rest of the run works in open sections
   // Recovery: a checkpoint left behind by a tab closed mid-shot becomes a shot on the next start
   await page.evaluate(async () => {
     const t0 = Date.now() - 600000;
@@ -1030,7 +1215,7 @@ try {
   const quitRes = await fetch('http://127.0.0.1:8799/api/quit', { method: 'POST' }).then((r) => r.json());
   const exitCode = await Promise.race([spareExit, new Promise((r) => setTimeout(() => r('timeout'), 4000))]);
   check('POST api/quit stops the server process (what "Also stop the local server" does)', quitRes.stopping === true && exitCode === 0, JSON.stringify({ quitRes, exitCode }));
-  const unexpected = errors.filter((e) => !/bad-model|404 \(Not Found\)|400 \(Bad Request\)|405 \(Method Not Allowed\)|Refused to execute inline|violates the following Content Security Policy directive:? ['"]script-src/.test(e)); // …and the policy check injects inline script on purpose // the deliberate wrong-model request logs a 404, the refused file paths 400s
+  const unexpected = errors.filter((e) => !/bad-model|404 \(Not Found\)|400 \(Bad Request\)|405 \(Method Not Allowed\)|503 \(Service Unavailable\)|Refused to execute inline|violates the following Content Security Policy directive:? ['"]script-src/.test(e)); // …and the policy check injects inline script on purpose // the deliberate wrong-model request logs a 404, the refused file paths 400s, the Community-is-down check a 503
   check('no page errors', unexpected.length === 0, unexpected.join(' | ').slice(0, 300));
 
   if (headed) await page.waitForTimeout(5000);

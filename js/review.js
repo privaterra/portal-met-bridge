@@ -4,9 +4,10 @@
 //
 //   buildShotDigest(shot, analysis)  → the per-stage story of one shot
 //   buildReviewMessages(...)         → { system, user } for any provider
+//   reviewTemplate(...)              → the report outline from the sections switched on
 //   renderMarkdown(md)               → safe HTML for the report pane
 
-import { beverageOf, beverageSource, profileTargetOf, profileFinalWeight, measuredEy, grindMicrons } from './analysis.js?v=0.19.1';
+import { beverageOf, beverageSource, profileTargetOf, profileFinalWeight, measuredEy, grindMicrons } from './analysis.js?v=0.20.0';
 
 const r1 = (v) => (Number.isFinite(v) ? Math.round(v * 10) / 10 : null);
 const r2 = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
@@ -129,6 +130,7 @@ export function buildShotDigest(shot, analysis, { profileTargetG, profile = revi
     ratio: dose && beverage > 0 ? r2(beverage / dose) : null,
     durationSec: r1(shot.durationSec),
     note: c.note || null,
+    water: typeof shot.water === 'string' && shot.water.trim() ? shot.water.trim().slice(0, 200) : undefined,
     rating: ratingOf(shot),
     ratingMax: ratingOf(shot) ? ratingMaxOf(shot) : null,
     comment: typeof shot.comment === 'string' && shot.comment.trim() ? shot.comment.trim() : null,
@@ -319,63 +321,102 @@ export const REVIEW_METHOD = `Work the way an experienced Meticulous user review
 6. Only then recommend changes, ordered by expected effect, one change per shot, with the exact profile variable or stage parameter to edit and the value to set, and grind moves in the grinder's step size. Say what each change should do to the next trace so it can be checked.
 When several shots are given, treat them as a series: build the comparison table first, say what changed between them (grind, dose, profile, temperature) and what that did to pressure, time, yield and EC, then review the latest shot in the detail above and base the recommendations on the whole series.`;
 
-export const REVIEW_TEMPLATE = `Write the report in Markdown with exactly these sections, in this order (use "##" headings; no top-level title, the app adds it):
+/**
+ * The report's sections, in order. Each has the text for a single shot and for
+ * a series (null = the section does not exist there). Settings → AI review →
+ * "Sections of the report" switches them on and off; "community" is written
+ * only when Meticulous Community is used for the review.
+ */
+export const REVIEW_SECTIONS = [
+  {
+    key: 'verdict',
+    title: 'Verdict',
+    single: `Two or three sentences: is the trace clean, and is this the shot the profile describes? Then a short bullet list of the headline numbers (yield and ratio against the target, extraction pressure against the profile's aim, where the solubles came from or, without Portal data, how the cup filled). End with one line "Setup: …" naming machine, profile and setpoint, grinder and grind, coffee.`,
+    series: `Two or three sentences: did the shots get better from the first to the last, and which one came closest to what the profile describes? Then a short bullet list of the headline numbers of the latest shot against the best one (yield and ratio against the target, time, extraction pressure, mean EC/g or, without Portal data, how the cup filled). End with one line "Setup: …" naming what stayed fixed across the series (machine, profile and setpoint, grinder, coffee) and what was varied.`,
+  },
+  {
+    key: 'compared',
+    title: 'Shots compared',
+    single: `(Only when more than one shot is given.) A table with one row per shot: date, grind (µm), dose → beverage, ratio, time, peak extraction pressure, mean EC/g (or "–"), TDS/EY if known. Then a short paragraph on what changed between them and what it did.`,
+    series: `A table with one row per shot in brewing order: # | date | grind (µm) | dose → beverage | ratio | time | peak extraction pressure | mean EC/g (or "–") | TDS/EY if known. Then a short paragraph on what the user changed between the shots (grind, dose, profile or its variables, temperature setpoint, target weight) and what stayed the same — taken from the comparison the app computed, not guessed.`,
+  },
+  {
+    key: 'stages',
+    title: 'Stages',
+    single: `A table: Stage | Time | Water in | Cup | What happened — one row per stage, plus a final "Drips" row from pump stop to the last sample. Below the table, one sentence on where the solubles came from (share of ∫EC dm by end of each stage and at cup-mass milestones) when Portal data is present, otherwise one sentence on how the cup filled by stage.`,
+    series: `One table with a row per stage (in profile order, "Drips" last) and one column per shot — Stage | Shot 1 | Shot 2 | … | What differed — where each cell gives time span · water in · cup at the end (and the share of ∫EC dm by then when Portal data exists). Below it, a numbered list (1., 2., 3.) of how the stages differed between the shots: duration, exit on the trigger or on the time limit, peak pressure, mean flow, cup gain, where the solubles came from — and which stages were the same within noise. Say so when a stage exists in one shot and not in another.`,
+  },
+  {
+    key: 'standsOut',
+    title: 'What stands out',
+    single: `A numbered list (1., 2., 3. — consecutive, never "1." on every item) of the findings that matter, most important first (stopped short / ran long, pressure, bloom behaviour, temperature drift, data inconsistencies). Use sub-bullets for checks the user should make and for hypotheses, labelled "Unconfirmed:" when they are.`,
+    series: `A numbered list (1., 2., 3. — consecutive, never "1." on every item), in brewing order: one item per step between consecutive shots (1 → 2, 2 → 3, …) saying what was varied, what that did to pressure, time, yield, EC and taste when given, and a plain verdict — better, worse, or no clear change — with the numbers that say so. Then items on what varied without being changed on purpose (temperature, dose scatter, final weight) and on anything inconsistent in the records, with hypotheses labelled "Unconfirmed:". Finish with one item that begins "Trend:" — whether the shots improved in sequence, and what the best shot did that the others did not.`,
+  },
+  {
+    key: 'helped',
+    title: 'What helped and what did not',
+    single: null,
+    series: `Two short bullet lists — "Keep:" the changes the series shows helped, and "Revert or stop:" the ones that did not — each with the shot numbers as evidence; write "undecided" when one shot is not enough to tell.`,
+  },
+  {
+    key: 'community',
+    title: 'Community comparison',
+    community: true,
+    single: `How this shot compares with what Meticulous owners rate highest, from the Meticulous Community data. A table: Parameter | This shot | Owners' range | From — one row each for dose, ratio, water temperature and shot time, plus the profile style when Community names the ones owners love; "From" says which answer the range comes from (this coffee, its roaster, the origin and process, or the grinder) as a Markdown link to its Community page. Below it, two or three sentences: where the shot sits inside or outside those ranges, what owners taste in this coffee when Community says, and what that suggests. If Community had nothing on this coffee, roaster or grinder, say so in one line instead of the table.`,
+    series: `How the shots compare with what Meticulous owners rate highest, from the Meticulous Community data. A table: Parameter | Owners' range | Shot 1 | Shot 2 | … | From — one row each for dose, ratio, water temperature and shot time, plus the profile style when Community names the ones owners love; "From" says which answer the range comes from (this coffee, its roaster, the origin and process, or the grinder) as a Markdown link to its Community page. Below it, two or three sentences: which shot sits closest to what owners rate highest, whether the series moved towards or away from it, and what that suggests. If Community had nothing on this coffee, roaster or grinder, say so in one line instead of the table.`,
+  },
+  {
+    key: 'changes',
+    title: 'Suggested changes',
+    single: `First a sub-heading "### Stage by stage" with one bullet per stage of the profile, in the order the machine ran them (the digest's stages list; every stage, none skipped): "**<stage name>** (<start>–<end> s): what happened — <verdict> — <what to change, or keep>". "What happened" quotes the stage's own numbers (duration, pressure or flow, weight gained, EC where the Portal covered it, temperature when recorded); the verdict is exactly one of "worked well", "acceptable" or "needs work"; the last part names the parameter and value to change in that stage, or says "keep as is". Then a sub-heading "### One change per shot", starting with "Change one thing per shot, in this order." and a numbered list (1., 2., 3. — consecutive). Each item names the exact variable or stage parameter (use the profile's own keys when they are given, e.g. bloom_time, extraction_flow, saturation_pressure, the final weight, the temperature setpoint) and the value to set, or the grind move in whole steps of the grinder's step size, and says what to look for in the next trace. Respect how the user drinks the coffee (ratio targets differ for milk drinks and straight espresso).`,
+    series: `First a sub-heading "### Stage by stage" with one bullet per stage of the profile, in the order the machine ran them (every stage that appears in the digests, none skipped): "**<stage name>**: what happened across the shots — <verdict> — <what to change, or keep>". "What happened" quotes the stage's numbers from the shots (duration, pressure or flow, weight gained, EC where the Portal covered it) and how they moved from shot to shot; the verdict is exactly one of "worked well", "acceptable" or "needs work" for the latest shot; the last part names the parameter and value to change in that stage, or says "keep as is". Then a sub-heading "### One change per shot", starting with "Change one thing per shot, in this order." and a numbered list (1., 2., 3. — consecutive) of single changes for the next shots, meant to improve on the latest shot and built on what the series showed. Each item names the exact variable or stage parameter (the profile's own keys when given, e.g. bloom_time, extraction_flow, saturation_pressure, the final weight, the temperature setpoint) and the value to set, or the grind move in whole steps of the grinder's step size; says why the series points to it (which shots showed what); and says what to look for in the next trace. Respect how the user drinks the coffee (ratio targets differ for milk drinks and straight espresso).`,
+  },
+  {
+    key: 'questions',
+    title: 'Open questions',
+    single: `Bullets: what you need to know to go further (taste, a second-scale weight, a refractometer reading, which profile version is loaded).`,
+    series: `Bullets: what you need to know to go further (taste of each shot, a second-scale weight, a refractometer reading, which profile version was loaded for which shot).`,
+  },
+  {
+    key: 'sources',
+    title: 'Sources',
+    single: `Bullets listing only the data you were given: the shot ids/dates, the profile name and version, the coffee as recorded. Do not invent URLs or literature.`,
+    series: `Bullets listing only the data you were given: the shot ids/dates in order, the profile name(s) and version, the coffee as recorded. Do not invent URLs or literature.`,
+  },
+];
+export const REVIEW_SECTION_KEYS = REVIEW_SECTIONS.map((x) => x.key);
 
-## Verdict
-Two or three sentences: is the trace clean, and is this the shot the profile describes? Then a short bullet list of the headline numbers (yield and ratio against the target, extraction pressure against the profile's aim, where the solubles came from or, without Portal data, how the cup filled). End with one line "Setup: …" naming machine, profile and setpoint, grinder and grind, coffee.
+const TEMPLATE_INTRO = `Write the report in Markdown with exactly these sections, in this order (use "##" headings; no top-level title, the app adds it):`;
+const TEMPLATE_INTRO_SERIES = `Write the report in Markdown with exactly these sections, in this order (use "##" headings; no top-level title, the app adds it). Several shots are given, in brewing order, and every section must compare them — never review only the last one.`;
+const TEMPLATE_RULES = `Rules: use the numbers from the digest and do not recompute or round them differently; never invent values that are not there — say "not recorded" instead; keep the tone plain and specific; write for the person who pulled the shot; do not describe the chart (the app shows it); do not add a title, preamble or closing remarks.`;
+const TEMPLATE_RULES_SERIES = `Rules: use the numbers from the digests and the app's comparison and do not recompute or round them differently; never invent values that are not there — say "not recorded" instead; keep the tone plain and specific; write for the person who pulled the shots; do not describe the charts (the app shows them); do not add a title, preamble or closing remarks.`;
+const TEMPLATE_WEIGHTS = `Weights: meta.beverageG is the cup — the yield to use for ratio and EY — and meta.beverageNote says where it came from (weighed by hand, the profile's target, or the scale). meta.profileTargetG is only what the profile aimed to stop at and meta.scaleFinalG only what the machine's scale read; quote them as such and never present either as the measured yield when a hand-weighed value exists. When the three disagree, say so and by how much.`;
+const TEMPLATE_RATING = `Rating: meta.rating is the user's own star rating of the shot in the cup, out of meta.ratingMax (5 or 9; the top mark is best; null when not rated) and meta.comment their comment on it; treat both as the taste verdict for that shot, weigh the trace against them, and say so when the numbers and the rating disagree.`;
 
-## Shots compared
-(Only when more than one shot is given.) A table with one row per shot: date, grind (µm), dose → beverage, ratio, time, peak extraction pressure, mean EC/g (or "–"), TDS/EY if known. Then a short paragraph on what changed between them and what it did.
+/**
+ * The report outline for one shot or a series. `sections` is { key: false } for
+ * the ones switched off (missing = on); the Community section is written only
+ * when `community` is true; `rating: false` drops the rule about ratings (they
+ * are not sent). With everything at its default and no Community this is the
+ * outline the app has always sent.
+ */
+export function reviewTemplate({ series = false, sections = {}, community = false, rating = true } = {}) {
+  const on = REVIEW_SECTIONS.filter((x) => (series ? x.series : x.single) && sections?.[x.key] !== false && (!x.community || community));
+  const off = REVIEW_SECTIONS.filter((x) => (series ? x.series : x.single) && sections?.[x.key] === false && (!x.community || community));
+  const parts = [series ? TEMPLATE_INTRO_SERIES : TEMPLATE_INTRO];
+  for (const x of on) parts.push(`## ${x.title}\n${series ? x.series : x.single}`);
+  const rules = [series ? TEMPLATE_RULES_SERIES : TEMPLATE_RULES];
+  if (off.length) rules.push(`Left out by the user: ${off.map((x) => `"${x.title}"`).join(', ')} — do not write ${off.length === 1 ? 'that section' : 'those sections'}, and do not move ${off.length === 1 ? 'its' : 'their'} content into another section.`);
+  rules.push(TEMPLATE_WEIGHTS);
+  if (rating) rules.push(TEMPLATE_RATING);
+  parts.push(rules.join('\n'));
+  return parts.join('\n\n');
+}
 
-## Stages
-A table: Stage | Time | Water in | Cup | What happened — one row per stage, plus a final "Drips" row from pump stop to the last sample. Below the table, one sentence on where the solubles came from (share of ∫EC dm by end of each stage and at cup-mass milestones) when Portal data is present, otherwise one sentence on how the cup filled by stage.
-
-## What stands out
-A numbered list (1., 2., 3. — consecutive, never "1." on every item) of the findings that matter, most important first (stopped short / ran long, pressure, bloom behaviour, temperature drift, data inconsistencies). Use sub-bullets for checks the user should make and for hypotheses, labelled "Unconfirmed:" when they are.
-
-## Suggested changes
-First a sub-heading "### Stage by stage" with one bullet per stage of the profile, in the order the machine ran them (the digest's stages list; every stage, none skipped): "**<stage name>** (<start>–<end> s): what happened — <verdict> — <what to change, or keep>". "What happened" quotes the stage's own numbers (duration, pressure or flow, weight gained, EC where the Portal covered it, temperature when recorded); the verdict is exactly one of "worked well", "acceptable" or "needs work"; the last part names the parameter and value to change in that stage, or says "keep as is". Then a sub-heading "### One change per shot", starting with "Change one thing per shot, in this order." and a numbered list (1., 2., 3. — consecutive). Each item names the exact variable or stage parameter (use the profile's own keys when they are given, e.g. bloom_time, extraction_flow, saturation_pressure, the final weight, the temperature setpoint) and the value to set, or the grind move in whole steps of the grinder's step size, and says what to look for in the next trace. Respect how the user drinks the coffee (ratio targets differ for milk drinks and straight espresso).
-
-## Open questions
-Bullets: what you need to know to go further (taste, a second-scale weight, a refractometer reading, which profile version is loaded).
-
-## Sources
-Bullets listing only the data you were given: the shot ids/dates, the profile name and version, the coffee as recorded. Do not invent URLs or literature.
-
-Rules: use the numbers from the digest and do not recompute or round them differently; never invent values that are not there — say "not recorded" instead; keep the tone plain and specific; write for the person who pulled the shot; do not describe the chart (the app shows it); do not add a title, preamble or closing remarks.
-Weights: meta.beverageG is the cup — the yield to use for ratio and EY — and meta.beverageNote says where it came from (weighed by hand, the profile's target, or the scale). meta.profileTargetG is only what the profile aimed to stop at and meta.scaleFinalG only what the machine's scale read; quote them as such and never present either as the measured yield when a hand-weighed value exists. When the three disagree, say so and by how much.
-Rating: meta.rating is the user's own star rating of the shot in the cup, out of meta.ratingMax (5 or 9; the top mark is best; null when not rated) and meta.comment their comment on it; treat both as the taste verdict for that shot, weigh the trace against them, and say so when the numbers and the rating disagree.`;
+export const REVIEW_TEMPLATE = reviewTemplate();
 
 /** The report outline when several shots are reviewed together: every section compares. */
-export const REVIEW_TEMPLATE_SERIES = `Write the report in Markdown with exactly these sections, in this order (use "##" headings; no top-level title, the app adds it). Several shots are given, in brewing order, and every section must compare them — never review only the last one.
-
-## Verdict
-Two or three sentences: did the shots get better from the first to the last, and which one came closest to what the profile describes? Then a short bullet list of the headline numbers of the latest shot against the best one (yield and ratio against the target, time, extraction pressure, mean EC/g or, without Portal data, how the cup filled). End with one line "Setup: …" naming what stayed fixed across the series (machine, profile and setpoint, grinder, coffee) and what was varied.
-
-## Shots compared
-A table with one row per shot in brewing order: # | date | grind (µm) | dose → beverage | ratio | time | peak extraction pressure | mean EC/g (or "–") | TDS/EY if known. Then a short paragraph on what the user changed between the shots (grind, dose, profile or its variables, temperature setpoint, target weight) and what stayed the same — taken from the comparison the app computed, not guessed.
-
-## Stages
-One table with a row per stage (in profile order, "Drips" last) and one column per shot — Stage | Shot 1 | Shot 2 | … | What differed — where each cell gives time span · water in · cup at the end (and the share of ∫EC dm by then when Portal data exists). Below it, a numbered list (1., 2., 3.) of how the stages differed between the shots: duration, exit on the trigger or on the time limit, peak pressure, mean flow, cup gain, where the solubles came from — and which stages were the same within noise. Say so when a stage exists in one shot and not in another.
-
-## What stands out
-A numbered list (1., 2., 3. — consecutive, never "1." on every item), in brewing order: one item per step between consecutive shots (1 → 2, 2 → 3, …) saying what was varied, what that did to pressure, time, yield, EC and taste when given, and a plain verdict — better, worse, or no clear change — with the numbers that say so. Then items on what varied without being changed on purpose (temperature, dose scatter, final weight) and on anything inconsistent in the records, with hypotheses labelled "Unconfirmed:". Finish with one item that begins "Trend:" — whether the shots improved in sequence, and what the best shot did that the others did not.
-
-## What helped and what did not
-Two short bullet lists — "Keep:" the changes the series shows helped, and "Revert or stop:" the ones that did not — each with the shot numbers as evidence; write "undecided" when one shot is not enough to tell.
-
-## Suggested changes
-First a sub-heading "### Stage by stage" with one bullet per stage of the profile, in the order the machine ran them (every stage that appears in the digests, none skipped): "**<stage name>**: what happened across the shots — <verdict> — <what to change, or keep>". "What happened" quotes the stage's numbers from the shots (duration, pressure or flow, weight gained, EC where the Portal covered it) and how they moved from shot to shot; the verdict is exactly one of "worked well", "acceptable" or "needs work" for the latest shot; the last part names the parameter and value to change in that stage, or says "keep as is". Then a sub-heading "### One change per shot", starting with "Change one thing per shot, in this order." and a numbered list (1., 2., 3. — consecutive) of single changes for the next shots, meant to improve on the latest shot and built on what the series showed. Each item names the exact variable or stage parameter (the profile's own keys when given, e.g. bloom_time, extraction_flow, saturation_pressure, the final weight, the temperature setpoint) and the value to set, or the grind move in whole steps of the grinder's step size; says why the series points to it (which shots showed what); and says what to look for in the next trace. Respect how the user drinks the coffee (ratio targets differ for milk drinks and straight espresso).
-
-## Open questions
-Bullets: what you need to know to go further (taste of each shot, a second-scale weight, a refractometer reading, which profile version was loaded for which shot).
-
-## Sources
-Bullets listing only the data you were given: the shot ids/dates in order, the profile name(s) and version, the coffee as recorded. Do not invent URLs or literature.
-
-Rules: use the numbers from the digests and the app's comparison and do not recompute or round them differently; never invent values that are not there — say "not recorded" instead; keep the tone plain and specific; write for the person who pulled the shots; do not describe the charts (the app shows them); do not add a title, preamble or closing remarks.
-Weights: meta.beverageG is the cup — the yield to use for ratio and EY — and meta.beverageNote says where it came from (weighed by hand, the profile's target, or the scale). meta.profileTargetG is only what the profile aimed to stop at and meta.scaleFinalG only what the machine's scale read; quote them as such and never present either as the measured yield when a hand-weighed value exists. When the three disagree, say so and by how much.
-Rating: meta.rating is the user's own star rating of the shot in the cup, out of meta.ratingMax (5 or 9; the top mark is best; null when not rated) and meta.comment their comment on it; treat both as the taste verdict for that shot, weigh the trace against them, and say so when the numbers and the rating disagree.`;
+export const REVIEW_TEMPLATE_SERIES = reviewTemplate({ series: true });
 
 const num = (v) => (v === null || v === undefined || v === '' ? null : Number.isFinite(Number(v)) ? Number(v) : null); // null stays null (never 0)
 const delta = (a, b, digits = 2) => (a === null || b === null ? null : Math.round((b - a) * 10 ** digits) / 10 ** digits);
@@ -478,44 +519,89 @@ export function buildSeriesComparison(digests) {
   };
 }
 
+/** The puck-preparation steps of Settings → Brew Prep. → Grind Prep, in the order a puck is made. */
+export const PREP_STEPS = {
+  singleDose: { label: 'Single-dose grinder', text: 'a single-dose grinder (each dose weighed in, nothing held in a hopper)' },
+  rdt: { label: 'RDT', text: 'RDT (Ross Droplet Technique: a drop of water on the beans before grinding, against static and retention)' },
+  wdt: { label: 'WDT', text: 'WDT (Weiss Distribution Technique: needles stirred through the grounds to break up clumps)' },
+  distribution: { label: 'Distribution tool', text: 'a distribution tool to level the bed' },
+  tamper: { label: 'Tamper', text: 'a tamper' },
+  screen: { label: 'Filter screen', text: 'a filter (puck) screen on top of the coffee' },
+};
+export const PREP_KEYS = Object.keys(PREP_STEPS);
+
+/** "Puck preparation: uses …; does not use …" for the model, or '' when nothing was said. */
+export function prepLine(prep) {
+  if (!prep || typeof prep !== 'object') return '';
+  const used = PREP_KEYS.filter((k) => prep[k] === true).map((k) => PREP_STEPS[k].text);
+  const unused = PREP_KEYS.filter((k) => prep[k] === false).map((k) => PREP_STEPS[k].label);
+  if (!used.length && !unused.length) return '';
+  return `Puck preparation, the same for every shot unless a note says otherwise: ${used.length ? `the user uses ${used.join('; ')}` : 'none of the usual steps are used'}.${unused.length ? ` Not used: ${unused.join(', ')}.` : ''} Take this into account where it bears on the trace (channeling, an uneven bed, static and retention), and do not recommend a step that is already in use.`;
+}
+
+/** A digest without the user's rating and comment (Settings → AI review → "What is sent"). */
+function withoutRating(digest) {
+  return { ...digest, meta: { ...digest.meta, rating: null, ratingMax: null, comment: null } };
+}
+
 /**
  * Build the two messages for the model. `shots` is [{ digest, profile }] in
  * chronological order; `options` carries the user's standing notes and the
  * questions for this review. With more than one shot the series template is
  * used and the app's own comparison goes in ahead of the per-shot digests.
+ *
+ * options (all optional beyond the first row):
+ *   grindStepUm, drink, standingNotes, question, taste
+ *   sections   { key: false } — report sections switched off
+ *   send       { profile, trace, rating } — false leaves that part out of the request
+ *   prep       { rdt, wdt, distribution, screen, tamper, singleDose } — puck preparation
+ *   water      the water brewed with
+ *   community  { instructions, mention, block } — Meticulous Community: text for the
+ *              system prompt, the line that names it, and the answers the app looked up
  */
 export function buildReviewMessages(shots, options = {}) {
   const o = { grindStepUm: 5, drink: 'espresso', standingNotes: '', question: '', taste: '', ...options };
+  const send = { profile: true, trace: true, rating: true, ...(o.send || {}) };
+  const community = o.community && (o.community.instructions || o.community.mention || o.community.block) ? o.community : null;
+  const items = send.rating ? shots : shots.map((x) => ({ ...x, digest: withoutRating(x.digest) }));
   const drinkLabel = { espresso: 'a straight espresso', cortado: 'a cortado (espresso with a little milk)', milk: 'a milk drink (latte, flat white, cappuccino)', both: 'sometimes straight, sometimes with milk' }[o.drink] || o.drink;
   const system = [
     'You are an espresso brewing analyst reviewing shots pulled on a Meticulous espresso machine, an open profile-driven machine whose profiles are made of stages (each commanding flow or pressure over time or weight, with exit triggers and limits) and user-editable variables. Some shots also carry data from a Belka Portal, a conductivity (EC) sensor under the portafilter that measures the concentration of the liquid as it flows; EC is a concentration proxy, not TDS, and must not be presented as TDS unless a refractometer reading or a calibrated estimate is given.',
     '',
     REVIEW_METHOD,
+    ...(community?.instructions ? ['', community.instructions] : []),
     '',
-    shots.length > 1 ? REVIEW_TEMPLATE_SERIES : REVIEW_TEMPLATE,
+    reviewTemplate({ series: items.length > 1, sections: o.sections, community: !!community, rating: send.rating }),
   ].join('\n');
 
   const parts = [];
   parts.push(`# Review request`);
-  parts.push(`Shots to review: ${shots.length}${shots.length > 1 ? ' (a series, in brewing order — compare them in every section)' : ''}. The grinder adjusts in steps of ${o.grindStepUm} µm, so any grind change must be a whole number of steps. The user normally drinks this coffee as ${drinkLabel}.`);
+  if (community?.mention) parts.push(community.mention);
+  parts.push(`Shots to review: ${items.length}${items.length > 1 ? ' (a series, in brewing order — compare them in every section)' : ''}. The grinder adjusts in steps of ${o.grindStepUm} µm, so any grind change must be a whole number of steps. The user normally drinks this coffee as ${drinkLabel}.`);
   if (o.standingNotes) parts.push(`Standing notes from the user about their setup:\n${o.standingNotes}`);
+  const prep = prepLine(o.prep);
+  if (prep) parts.push(prep);
+  if (o.water) parts.push(`Water the user brews with: ${String(o.water).slice(0, 200)}.`);
   if (o.taste) parts.push(`How the shot(s) tasted, in the user's words:\n${o.taste}`);
   if (o.question) parts.push(`What the user wants to know:\n${o.question}`);
-  const comparison = buildSeriesComparison(shots.map((x) => x.digest));
+  const comparison = buildSeriesComparison(items.map((x) => x.digest));
   if (comparison) {
     parts.push(`\n# Series comparison (computed by the app)`);
     if (comparison.notes.length) parts.push(comparison.notes.map((n) => `- ${n}`).join('\n'));
     parts.push(`One row per shot, the setup and outcome changes between consecutive shots ("steps": what was changed on purpose is in setupChanged), every stage side by side by name, and the trend of the main numbers:\n\`\`\`json\n${JSON.stringify(comparison)}\n\`\`\``);
   }
-  shots.forEach(({ digest, profile }, i) => {
-    parts.push(`\n# Shot ${i + 1} of ${shots.length}${digest.meta.startedAt ? ` — ${digest.meta.startedAt}` : ''}`);
+  items.forEach(({ digest, profile }, i) => {
+    parts.push(`\n# Shot ${i + 1} of ${items.length}${digest.meta.startedAt ? ` — ${digest.meta.startedAt}` : ''}`);
     if (digest.gaps.length) parts.push(`Data gaps for this shot:\n${digest.gaps.map((g) => `- ${g}`).join('\n')}`);
     const { series, seriesColumns, ...rest } = digest;
     parts.push(`Digest (computed by the app from the recorded samples):\n\`\`\`json\n${JSON.stringify(rest)}\n\`\`\``);
-    if (profile) parts.push(`Brewed profile as the machine recorded it:\n\`\`\`json\n${JSON.stringify(profile)}\n\`\`\``);
+    if (!send.profile) parts.push('Brewed profile: not sent in full (the user switched that off); only the name, target weight, temperature, variables and stage names in the digest are known.');
+    else if (profile) parts.push(`Brewed profile as the machine recorded it:\n\`\`\`json\n${JSON.stringify(profile)}\n\`\`\``);
     else parts.push('Brewed profile: the machine\'s record is not attached, so only the profile name and target weight above are known.');
-    parts.push(`Trace resampled to one row per second, columns ${seriesColumns.join(', ')} (null = not recorded):\n\`\`\`json\n${JSON.stringify(series)}\n\`\`\``);
+    if (send.trace) parts.push(`Trace resampled to one row per second, columns ${seriesColumns.join(', ')} (null = not recorded):\n\`\`\`json\n${JSON.stringify(series)}\n\`\`\``);
+    else parts.push('Trace: the one-row-per-second trace is not sent (the user switched that off); work from the stage digest.');
   });
+  if (community?.block) parts.push(community.block);
   return { system, user: parts.join('\n') };
 }
 

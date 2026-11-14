@@ -3,9 +3,9 @@
 // loaded lazily from vendor/ only when a PDF is asked for.
 
 import { zipSync, strToU8 } from '../vendor/fflate.esm.js';
-import { beverageOf, beverageSource, profileTargetOf, measuredEy } from './analysis.js?v=0.19.1';
-import { pdfWriter } from './review-export.js?v=0.19.1';
-import { ratingOf, ratingMaxOf } from './review.js?v=0.19.1';
+import { beverageOf, beverageSource, profileTargetOf, measuredEy } from './analysis.js?v=0.20.0';
+import { pdfWriter } from './review-export.js?v=0.20.0';
+import { ratingOf, ratingMaxOf } from './review.js?v=0.20.0';
 
 const APP = 'portal-met-bridge';
 
@@ -342,3 +342,174 @@ export function download(name, data, type) {
 export const stamp = (ms) => new Date(ms).toISOString().replace(/[:.]/g, '-').slice(0, 19);
 export const slug = (s) => (s || '').toString().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'shot';
 const round = (x, d) => (Number.isFinite(x) ? Number(x.toFixed(d)) : '');
+
+// ---------------------------------------------------------- heating graph --
+// The Machine tab's "Temperatures and power" graphs, saved with the brew they
+// belong to (Settings → Heating → Save the heating graph and its data).
+
+const HEAT_FONT = '"Avenir Next", Avenir, "Helvetica Neue", Helvetica, Arial, sans-serif';
+
+/**
+ * Several uPlot charts stacked into one JPEG under a title and a few lines of
+ * text (the brew information), each chart with its caption and legend.
+ * @param {Array<{u: uPlot, caption: string}>} charts
+ * @param {object} o { title, lines: string[], scale }
+ */
+export async function heatingJpeg(charts, o = {}) {
+  const dpr = o.scale ?? 2;
+  const pad = 16;
+  const lines = (o.lines || []).filter(Boolean);
+  const cssW = Math.max(...charts.map((c) => c.u.width));
+  const legends = charts.map((c) => legendOf(c.u));
+  const legendH = (lg) => (lg.length ? Math.ceil(lg.length / 4) * 18 + 8 : 0);
+  const W = cssW + pad * 2;
+  const H = pad * 2 + (o.title ? 26 : 0) + lines.length * 17 + (lines.length ? 6 : 0) + charts.reduce((h, c, i) => h + 20 + c.u.height + 8 + legendH(legends[i]) + 6, 0);
+  const canvas = document.createElement('canvas');
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textBaseline = 'top';
+  let y = pad;
+  if (o.title) {
+    ctx.fillStyle = '#1c2430';
+    ctx.font = `600 16px ${HEAT_FONT}`;
+    ctx.fillText(o.title, pad, y);
+    y += 26;
+  }
+  ctx.font = `12px ${HEAT_FONT}`;
+  ctx.fillStyle = '#5b6470';
+  for (const line of lines) {
+    ctx.fillText(fitText(ctx, line, cssW), pad, y);
+    y += 17;
+  }
+  if (lines.length) y += 6;
+  charts.forEach((c, i) => {
+    ctx.font = `600 12px ${HEAT_FONT}`;
+    ctx.fillStyle = '#1c2430';
+    ctx.fillText(c.caption || '', pad, y);
+    y += 20;
+    const src = c.u.ctx.canvas;
+    ctx.drawImage(src, 0, 0, src.width, src.height, pad, y, c.u.width, c.u.height);
+    y += c.u.height + 8;
+    ctx.font = `12px ${HEAT_FONT}`;
+    const colW = cssW / 4;
+    legends[i].forEach((it, k) => {
+      const x = pad + (k % 4) * colW;
+      const yy = y + Math.floor(k / 4) * 18;
+      ctx.strokeStyle = it.color;
+      ctx.lineWidth = 2;
+      ctx.setLineDash(it.dash || []);
+      ctx.beginPath();
+      ctx.moveTo(x, yy + 8);
+      ctx.lineTo(x + 18, yy + 8);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#1c2430';
+      ctx.fillText(it.label, x + 24, yy + 1);
+    });
+    y += legendH(legends[i]) + 6;
+  });
+  ctx.font = `10px ${HEAT_FONT}`;
+  ctx.fillStyle = '#7a8491';
+  ctx.textAlign = 'right';
+  ctx.fillText(APP, W - pad, H - pad + 4);
+  const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.92));
+  return { blob, dataUrl: canvas.toDataURL('image/jpeg', 0.92), width: W, height: H };
+}
+
+/** `text` shortened with an ellipsis until it fits `width` on the canvas. */
+function fitText(ctx, text, width) {
+  let t = String(text);
+  if (ctx.measureText(t).width <= width) return t;
+  while (t.length > 4 && ctx.measureText(`${t}…`).width > width) t = t.slice(0, -4);
+  return `${t}…`;
+}
+
+export const HEATING_COLUMNS = ['time_iso', 't_s', 'external_1_c', 'external_2_c', 'bar_up_c', 'bar_mid_c', 'bar_down_c', 'tube_c', 'motor_c', 'status_temp_c', 'target_c', 'ready', 'heater_power_pct', 'motor_power_pct', 'piston_position', 'state', 'stage', 'profile'];
+
+/** The heating graph's samples as CSV: one row per reading, with the machine's state and the profile's target beside it. */
+export function heatingCsv(rows) {
+  const r1 = (v) => (Number.isFinite(v) ? Math.round(v * 10) / 10 : '');
+  const out = [HEATING_COLUMNS];
+  for (const x of rows || []) {
+    out.push([Number.isFinite(x.wall) ? new Date(x.wall).toISOString() : '', Number.isFinite(x.t) ? Math.round(x.t * 10) / 10 : '', r1(x.ext1), r1(x.ext2), r1(x.barUp), r1(x.barMid), r1(x.barDown), r1(x.tube), r1(x.motor), r1(x.status), r1(x.target), x.ready === true ? 'yes' : x.ready === false ? 'no' : '', r1(x.heater), r1(x.motorPower), Number.isFinite(x.motorPos) ? Math.round(x.motorPos * 100) / 100 : '', x.state || '', x.stage || '', x.profile || '']);
+  }
+  return rowsToCsv(out);
+}
+
+/**
+ * The heating graph as a one-page PDF: title, the brew information, the
+ * picture from heatingJpeg(), then the readings and the stage changes.
+ * @param {object} r { title, subtitle, image: {dataUrl,width,height}, info: [[k,v]], readings: [[k,v]], events: string[] }
+ */
+export async function heatingPdf(r) {
+  const jsPDF = await loadJsPdf();
+  const doc = new jsPDF({ unit: 'pt', format: 'letter', orientation: 'portrait' });
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const margin = 40;
+  const contentW = pageW - margin * 2;
+  let y = margin;
+  const ensure = (h) => {
+    if (y + h > pageH - 32) {
+      doc.addPage();
+      y = margin;
+    }
+  };
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(16);
+  doc.text(pdfSafe(r.title), margin, y);
+  y += 18;
+  if (r.subtitle) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+    doc.setTextColor(90);
+    const lines = doc.splitTextToSize(pdfSafe(r.subtitle), contentW);
+    doc.text(lines, margin, y);
+    y += 12 * lines.length + 6;
+    doc.setTextColor(0);
+  }
+  const table = (heading, rows) => {
+    if (!rows?.length) return;
+    ensure(30);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.text(pdfSafe(heading), margin, y + 10);
+    y += 18;
+    doc.setFontSize(9.5);
+    for (const [k, v] of rows) {
+      const lines = doc.splitTextToSize(pdfSafe(v), contentW - 150);
+      ensure(12 * lines.length + 2);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(90);
+      doc.text(pdfSafe(k), margin, y + 9);
+      doc.setTextColor(0);
+      doc.text(lines, margin + 150, y + 9);
+      y += 12 * lines.length + 2;
+    }
+    y += 6;
+  };
+  table('Brew', r.info);
+  if (r.image?.dataUrl) {
+    const scale = Math.min(contentW / r.image.width, 1);
+    const w = r.image.width * scale;
+    const h = r.image.height * scale;
+    ensure(h + 8);
+    doc.addImage(r.image.dataUrl, 'JPEG', margin, y, w, h);
+    y += h + 10;
+  }
+  table('Readings when this was saved', r.readings);
+  if (r.events?.length) table('Machine stages in the graph', r.events.map((e) => [e[0], e[1]]));
+  const pages = doc.getNumberOfPages();
+  for (let i = 1; i <= pages; i++) {
+    doc.setPage(i);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(130);
+    doc.text(pdfSafe(`${APP} · heating graph · page ${i} of ${pages}`), margin, pageH - 20);
+  }
+  return doc.output('blob');
+}

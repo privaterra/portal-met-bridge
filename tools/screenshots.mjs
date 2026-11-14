@@ -84,6 +84,8 @@ async function seed(page) {
     await window.__pb.store.putBean({ name: 'Supernova', roaster: 'Hatch', origin: 'Brazil, Cerrado', process: 'natural', roastLevel: 'light', url: 'https://hatch.example/supernova', notes: 'Yellow bourbon, 1 100 m.' });
     await window.__pb.store.setSetting('ratingWhen', 'after'); // the rating dialog screenshot wants the prompt after the shot
     window.__pb.settings.ratingWhen = 'after';
+    await window.__pb.store.setSetting('settingsLayout', 'detailed'); // the screenshots show the sections open; settings-sections shows the compact default
+    window.__pb.settings.settingsLayout = 'detailed';
   }, await page.evaluate(() => document.querySelector('script[src*="main.js"]').src.split('v=')[1]));
 }
 
@@ -219,6 +221,7 @@ try {
     window.__pb.settings.aiKeyOpenai = 'sk-test-123';
     window.__pb.settings.aiModelOpenai = '';
     window.__pb.settings.aiBaseOpenai = `http://127.0.0.1:${port}`;
+    window.__pb.communityConfig.url = `http://127.0.0.1:${port}/api/mcp`; // Meticulous Community is the mock too: nothing leaves this machine
   }, MOCK_PORT);
   await page.evaluate((id) => window.__pb.openAnalysis([id]), liveId);
   await page.waitForTimeout(500);
@@ -252,7 +255,20 @@ try {
   await narrow.waitForFunction(() => !document.getElementById('brew-controls').hidden, null, { timeout: 8000 });
   await narrow.click('.view-tab[data-view="machine"]');
   await narrow.waitForTimeout(2500);
+  // cleaning & maintenance: a weekly cleaning five days ago, a chamber cleaning five weeks ago, a deep cleaning two months ago
+  await narrow.evaluate(async () => {
+    const day = 86400000;
+    await window.__pb.store.setSetting('maintenance', { weekly: [Date.now() - 5 * day], monthly: [Date.now() - 36 * day], deep: [Date.now() - 62 * day] });
+  });
+  await narrow.reload({ waitUntil: 'networkidle' });
+  await narrow.evaluate(() => { window.__pb.settings.aiProvider = 'anthropic'; });
+  await narrow.click('#meticulous-connect');
+  await narrow.waitForFunction(() => !document.getElementById('brew-controls').hidden, null, { timeout: 8000 });
+  await narrow.click('.view-tab[data-view="machine"]');
+  await narrow.waitForTimeout(2500);
   await shot(narrow, 'machine');
+  await narrow.locator('#maint-panel').screenshot({ path: join(docs, 'screenshot-maintenance.png') });
+  console.log('  wrote docs/screenshot-maintenance.png');
 
   // ---- Settings (full page) and the save bar mid-edit
   await narrow.click('.view-tab[data-view="settings"]');
@@ -273,6 +289,13 @@ try {
   console.log('  wrote docs/screenshot-settings-ai.png');
   await narrow.locator('#about-version').locator('xpath=ancestor::section[1]').screenshot({ path: join(docs, 'screenshot-about.png') });
   console.log('  wrote docs/screenshot-about.png');
+  // the compact default: section names only
+  await narrow.selectOption('#set-layout', 'compact');
+  await narrow.waitForTimeout(300);
+  await narrow.evaluate(() => { document.querySelector('#toast').hidden = true; window.scrollTo(0, 0); document.querySelector('#view-settings').scrollTop = 0; });
+  await shot(narrow, 'settings-sections', { clip: { x: 300, y: 0, width: 880, height: 900 } });
+  await narrow.selectOption('#set-layout', 'detailed');
+  await narrow.waitForTimeout(300);
   const bar = await newPage(1180, 420);
   await bar.goto(`http://localhost:${APP_PORT}/`, { waitUntil: 'networkidle' });
   await bar.click('.view-tab[data-view="settings"]');

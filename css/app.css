@@ -543,3 +543,74 @@ table.beans td.roaster small { display: block; color: var(--ink-3); }
 table.beans td.muted, table.beans .muted { color: var(--ink-3); }
 .bean-link { font-size: 11px; font-weight: 500; color: var(--cobalt); text-decoration: none; margin-left: 4px; }
 .bean-link:hover { text-decoration: underline; }
+
+/* ---- v0.20: Settings sections fold; how they open is a setting ---- */
+.set-layout { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; max-width: 860px; margin: 0 0 10px; font-size: 12px; color: var(--ink-2); }
+.set-layout select { max-width: 100%; }
+.set-layout-tools { display: flex; gap: 6px; }
+.set-section > summary { cursor: pointer; list-style: none; user-select: none; align-items: baseline; }
+.set-section > summary::-webkit-details-marker { display: none; }
+.set-section > summary h2 { display: inline-flex; align-items: baseline; gap: 6px; }
+.set-section > summary h2::before { content: "▸"; display: inline-block; width: 0.9em; color: var(--ink-3); font-size: 0.85em; }
+.set-section[open] > summary h2::before { content: "▾"; }
+.set-section > summary:hover h2 { color: var(--cobalt); }
+.set-section > summary:focus-visible { outline: 2px solid var(--cobalt); outline-offset: 4px; }
+.set-section:not([open]) > summary .panel-note { max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel.settings:has(> .set-section:not([open])) { padding-bottom: 12px; }
+.settings-grid h4, #maint-extra h4 { margin: 8px 0 2px; font-size: 12px; font-weight: 600; color: var(--ink-2); }
+
+/* checklists: what Community reads, the report's sections, grind prep */
+fieldset.checklist { border: 1px solid var(--rule); border-radius: 4px; margin: 4px 0 6px; padding: 6px 12px 8px; min-width: 0; }
+fieldset.checklist legend { font-size: 12px; color: var(--ink-2); padding: 0 6px; }
+fieldset.checklist .check { margin: 3px 0; }
+fieldset.checklist .check b { color: var(--ink); font-weight: 600; }
+#community-options.off, .check.off { opacity: 0.5; }
+.how-list { margin: 2px 0 4px; padding-left: 18px; font-size: 12px; color: var(--ink-2); }
+.how-list li { margin: 3px 0; }
+.how-list b { color: var(--ink); }
+#community-how:empty { display: none; }
+
+/* cleaning & maintenance (Machine tab) and its reminder in the rail */
+.maint-next, .maint-reminder { margin: 8px 0; padding: 7px 10px; border-left: 3px solid var(--ok); background: var(--paper-2); font-size: 13px; }
+.maint-next[data-state="soon"], .maint-reminder[data-state="soon"] { border-left-color: var(--amber); background: #fff9ec; }
+.maint-next[data-state="due"], .maint-reminder[data-state="due"] { border-left-color: var(--bad); background: #fdf1f2; }
+.maint-next[data-state="never"], .maint-reminder[data-state="never"] { border-left-color: var(--ink-3); }
+.maint-reminder { font-size: 12px; padding: 5px 8px; }
+.maint-reminder .linkish { text-decoration: none; color: var(--ink-2); text-align: left; }
+.maint-reminder .linkish:hover { text-decoration: underline; }
+table.maint { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.maint th, table.maint td { padding: 7px 9px; border-bottom: 1px solid var(--paper-3); text-align: left; vertical-align: top; }
+table.maint th { font-size: 11.5px; color: var(--ink-2); font-weight: 600; white-space: nowrap; }
+table.maint .num { text-align: right; }
+table.maint small, table.maint .muted { color: var(--ink-3); }
+table.maint td.actions .btn { margin: 0 0 4px; }
+table.maint td:first-child { min-width: 220px; }
+.maint-when-text { font-size: 12px; color: var(--ink-2); margin-top: 3px; }
+table.maint input.maint-when { border: 1px solid var(--rule); border-radius: 3px; padding: 3px 6px; font: inherit; font-size: 12px; background: #fff; margin: 0 4px 4px 0; max-width: 100%; }
+.maint-steps { margin-top: 4px; font-size: 12px; color: var(--ink-2); }
+.maint-steps summary { cursor: pointer; color: var(--cobalt); }
+.maint-steps ol { margin: 4px 0; padding-left: 18px; }
+.maint-warn { margin: 4px 0 0; color: var(--warn); }
+.maint-badge { display: inline-block; font-size: 11px; font-weight: 600; border: 1px solid var(--ok); color: var(--ok); border-radius: 10px; padding: 0 7px; line-height: 17px; white-space: nowrap; vertical-align: 1px; }
+.maint-badge[data-state="soon"] { border-color: var(--amber); color: var(--warn); }
+.maint-badge[data-state="due"] { border-color: var(--bad); color: var(--bad); }
+.maint-badge[data-state="never"], .maint-badge[data-state="none"] { border-color: var(--ink-3); color: var(--ink-3); font-weight: 400; }
+.maint-piston { font-size: 13px; margin: 4px 0 0; }
+#maint-extra { font-size: 12px; color: var(--ink-2); }
+#maint-extra ul { margin: 2px 0 6px; padding-left: 18px; }
+#maint-extra p { margin: 4px 0 2px; }
+#heat-save-tools[hidden], #heat-brew-info[hidden] { display: none; }
+
+/* Analysis: a ticked shot can be edited or deleted; the query window */
+.an-list li { display: flex; align-items: center; }
+.an-list li > label { flex: 1 1 auto; min-width: 0; }
+.an-row-tools { display: inline-flex; gap: 4px; padding-right: 8px; flex: none; }
+.an-row-tools .btn { padding: 2px 8px; font-size: 12px; }
+.modal.xwide { width: min(96vw, 980px); }
+.modal.xwide textarea { font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; width: 100%; }
+#q-system-box { margin: 4px 0 8px; }
+#q-system-box textarea { margin-top: 6px; border: 1px solid var(--rule); border-radius: 3px; padding: 6px 8px; }
+#an-community:empty { display: none; }
+@media (max-width: 720px) {
+  table.maint td.actions { white-space: normal; }
+}

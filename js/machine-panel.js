@@ -10,12 +10,13 @@
 //   Settings            /settings, read-only
 
 import uPlot from '../vendor/uPlot.esm.js';
-import { COLORS } from './charts.js?v=0.19.1';
-import { isEndStage } from './meticulous.js?v=0.19.1';
+import { COLORS } from './charts.js?v=0.20.0';
+import { isEndStage } from './meticulous.js?v=0.20.0';
 
 const $ = (id) => document.getElementById(id);
 const font = '12px "Avenir Next", Avenir, system-ui, -apple-system, sans-serif';
-const WINDOW_SEC = 300; // temperature history kept in memory
+export const WINDOW_SEC = 300; // temperature history kept in memory …
+export const WINDOW_SEC_SAVING = 1800; // … and while the heating graph can be saved (Settings → Heating), so a whole warm-up fits
 
 export class MachinePanel {
   constructor(root) {
@@ -29,6 +30,10 @@ export class MachinePanel {
     this.lastStatusAt = 0;
     this.refreshTimer = null;
     this.chartDirty = false;
+    this.windowSec = WINDOW_SEC;
+    this.events = []; // [{t, wall, name, state}] — the machine's stage changes inside the window
+    this.heatTargetC = null; // set by main.js: the loaded profile's temperature …
+    this.heatReady = null; // … and whether the ready-to-brew rule is met
     this._buildCharts();
     setInterval(() => this._tick(), 500);
   }
@@ -65,7 +70,30 @@ export class MachinePanel {
 
   // ------------------------------------------------------------ live data --
 
+  /** How much history the graphs keep: five minutes, or thirty while the heating graph can be saved. */
+  setWindow(sec) {
+    this.windowSec = sec > 0 ? sec : WINDOW_SEC;
+    const note = $('temps-note');
+    if (note) note.textContent = `Last ${this.windowSec >= 120 ? `${Math.round(this.windowSec / 60)} minutes` : `${this.windowSec} seconds`}. Toggle series in the legend.`;
+  }
+
+  /**
+   * Everything the heating graph shows, for saving: one row per sensors sample
+   * (temperatures, power, piston, and the status that went with it) plus the
+   * stage changes. Times are seconds since the page opened and wall-clock ms.
+   */
+  heatingData() {
+    const power = new Map(this.powerBuf.map((x) => [x.t, x]));
+    const rows = this.tempBuf.map((x) => ({ ...x, ...(power.get(x.t) || {}) }));
+    return { rows, events: this.events.slice(), windowSec: this.windowSec, lastStatus: this.lastStatus };
+  }
+
   _status(s) {
+    const prev = this.lastStatus;
+    if (s?.name && s.name !== prev?.name) {
+      this.events.push({ t: (performance.now() - this.t0) / 1000, wall: Date.now(), name: String(s.name), state: String(s.state || '') });
+      if (this.events.length > 300) this.events.shift();
+    }
     this.lastStatus = s;
     this.lastStatusAt = performance.now();
     const brewing = s.extracting || (!!s.name && !isEndStage(s.name) && s.state && /brew|extract/i.test(s.state));
@@ -85,11 +113,13 @@ export class MachinePanel {
   _sensors(d) {
     this.lastSensorsAt = performance.now();
     const t = (performance.now() - this.t0) / 1000;
-    this.tempBuf.push({ t, ext1: n(d.t_ext_1), ext2: n(d.t_ext_2), barUp: n(d.t_bar_up), barMid: avg(n(d.t_bar_mu), n(d.t_bar_md)), barDown: n(d.t_bar_down), tube: n(d.t_tube), motor: n(d.motor_temp ?? d.t_motor_temp) });
+    const st = this.lastStatus;
+    this.tempBuf.push({ t, wall: Date.now(), ext1: n(d.t_ext_1), ext2: n(d.t_ext_2), barUp: n(d.t_bar_up), barMid: avg(n(d.t_bar_mu), n(d.t_bar_md)), barDown: n(d.t_bar_down), tube: n(d.t_tube), motor: n(d.motor_temp ?? d.t_motor_temp), status: n(st?.temp), stage: st?.name ? String(st.name) : '', state: st?.state ? String(st.state) : '', profile: st?.profile ? String(st.profile) : '', target: n(this.heatTargetC), ready: this.heatReady });
     this.powerBuf.push({ t, heater: n(d.bh_pwr), motorPower: n(d.m_pwr), motorPos: n(d.m_pos) });
-    const cutoff = t - WINDOW_SEC;
+    const cutoff = t - this.windowSec;
     while (this.tempBuf.length && this.tempBuf[0].t < cutoff) this.tempBuf.shift();
     while (this.powerBuf.length && this.powerBuf[0].t < cutoff) this.powerBuf.shift();
+    while (this.events.length && this.events[0].t < cutoff) this.events.shift();
     this.chartDirty = true;
     set('ms-boiler', fmt(n(d.t_ext_1), 1));
     set('ms-head', fmt(n(d.t_ext_2), 1));

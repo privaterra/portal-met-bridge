@@ -1,4 +1,4 @@
-// Thin clients for the three AI providers the Analysis tab can use. Calls go
+// Thin clients for the AI providers the Analysis tab can use (Claude, OpenAI, Grok, Gemini). Calls go
 // straight from the browser to the provider (the page runs on localhost); the
 // key is sent only to the provider chosen. Request building and stream parsing
 // are pure so they can be unit-tested; only streamCompletion/listModels fetch.
@@ -20,6 +20,14 @@ export const PROVIDERS = {
     keyHint: 'sk-…',
     docs: 'https://developers.openai.com/api/docs',
   },
+  xai: {
+    label: 'Grok (xAI)',
+    baseUrl: 'https://api.x.ai',
+    defaultModel: 'grok-4',
+    keyUrl: 'https://console.x.ai',
+    keyHint: 'xai-…',
+    docs: 'https://docs.x.ai',
+  },
   google: {
     label: 'Gemini (Google)',
     baseUrl: 'https://generativelanguage.googleapis.com',
@@ -31,6 +39,13 @@ export const PROVIDERS = {
 };
 
 const trimSlash = (u) => String(u || '').trim().replace(/\/+$/, '');
+
+/** Providers that speak the OpenAI chat-completions API (xAI's is compatible). */
+const OPENAI_STYLE = new Set(['openai', 'xai']);
+const openAiStyle = (provider) => OPENAI_STYLE.has(provider);
+
+/** The beta that lets a Messages request carry a remote MCP server (Anthropic's MCP connector). */
+export const ANTHROPIC_MCP_BETA = 'mcp-client-2025-11-20';
 
 /** Base URL for a provider: the user's override (OpenAI-compatible servers, proxies) or the default. */
 /**
@@ -70,8 +85,13 @@ export function baseUrlFor(provider, override) {
  * reasoning models answer "Unsupported parameter"), and a shot review does
  * not need it. Pass `temperature` explicitly to send one, e.g. for an older
  * model behind a compatible endpoint.
+ *
+ * `mcp` = { name, url, configs } connects Claude to a remote MCP server for
+ * this request (Anthropic only — the Messages API makes the connection and the
+ * model calls the server's tools itself); `configs` is { toolName: { enabled:
+ * false } } for tools to leave out. Other providers ignore it.
  */
-export function buildRequest(provider, { model, key, system, user, history = [], maxTokens = 8000, temperature, stream = true, baseUrl } = {}) {
+export function buildRequest(provider, { model, key, system, user, history = [], maxTokens = 8000, temperature, stream = true, baseUrl, mcp } = {}) {
   const base = baseUrlFor(provider, baseUrl);
   if (!PROVIDERS[provider]) throw new Error(`Unknown provider "${provider}"`);
   if (!model) throw new Error('No model chosen');
@@ -80,6 +100,12 @@ export function buildRequest(provider, { model, key, system, user, history = [],
   // `history` continues a conversation: [{ role: 'assistant' | 'user', content }] after the first user turn
   const turns = [{ role: 'user', content: user }, ...history.filter((h) => h && h.content).map((h) => ({ role: h.role === 'assistant' ? 'assistant' : 'user', content: String(h.content) }))];
   if (provider === 'anthropic') {
+    const connector = mcp && mcp.url && mcp.name
+      ? {
+          mcp_servers: [{ type: 'url', url: mcp.url, name: mcp.name }],
+          tools: [{ type: 'mcp_toolset', mcp_server_name: mcp.name, ...(mcp.configs && Object.keys(mcp.configs).length ? { configs: mcp.configs } : {}) }],
+        }
+      : {};
     return {
       url: `${base}/v1/messages`,
       headers: {
@@ -87,11 +113,12 @@ export function buildRequest(provider, { model, key, system, user, history = [],
         'x-api-key': key,
         'anthropic-version': '2023-06-01',
         'anthropic-dangerous-direct-browser-access': 'true', // required for a page to call the API directly
+        ...(connector.mcp_servers ? { 'anthropic-beta': ANTHROPIC_MCP_BETA } : {}),
       },
-      body: { model, max_tokens: maxTokens, ...sampling, system, messages: turns, stream },
+      body: { model, max_tokens: maxTokens, ...sampling, system, messages: turns, ...connector, stream },
     };
   }
-  if (provider === 'openai') {
+  if (openAiStyle(provider)) {
     return {
       url: `${base}/v1/chat/completions`,
       headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
@@ -123,8 +150,9 @@ export function maxTokensFor(shots = 1) {
 
 /**
  * Why the model stopped, from a stream event: 'length' when it hit the output
- * limit (the text is cut off), 'stop' when it finished, null when the event
- * says nothing about it.
+ * limit (the text is cut off), 'paused' when Claude's server-side tool loop
+ * stopped before the answer was written, 'stop' when it finished, null when
+ * the event says nothing about it.
  */
 export function finishFromEvent(provider, data) {
   if (data == null) return null;
@@ -136,9 +164,9 @@ export function finishFromEvent(provider, data) {
   }
   if (provider === 'anthropic') {
     const r = j.type === 'message_delta' ? j.delta?.stop_reason : j.type === 'message' ? j.stop_reason : null;
-    return r === 'max_tokens' ? 'length' : r ? 'stop' : null;
+    return r === 'max_tokens' ? 'length' : r === 'pause_turn' ? 'paused' : r ? 'stop' : null;
   }
-  if (provider === 'openai') {
+  if (openAiStyle(provider)) {
     const r = j.choices?.[0]?.finish_reason;
     return r === 'length' ? 'length' : r ? 'stop' : null;
   }
@@ -148,9 +176,34 @@ export function finishFromEvent(provider, data) {
 
 /** The finish reason of a non-streamed response body. */
 export function finishFromResponse(provider, j) {
-  if (provider === 'anthropic') return j.stop_reason === 'max_tokens' ? 'length' : 'stop';
-  if (provider === 'openai') return j.choices?.[0]?.finish_reason === 'length' ? 'length' : 'stop';
+  if (provider === 'anthropic') return j.stop_reason === 'max_tokens' ? 'length' : j.stop_reason === 'pause_turn' ? 'paused' : 'stop';
+  if (openAiStyle(provider)) return j.choices?.[0]?.finish_reason === 'length' ? 'length' : 'stop';
   return j.candidates?.[0]?.finishReason === 'MAX_TOKENS' ? 'length' : 'stop';
+}
+
+/**
+ * A tool call the provider ran for the model, from a stream event:
+ * { name, server } when Claude starts an MCP tool (the Community connector),
+ * { error: true } when one came back failed, else null.
+ */
+export function toolFromEvent(provider, data) {
+  if (provider !== 'anthropic' || data == null) return null;
+  let j;
+  try {
+    j = JSON.parse(String(data).trim());
+  } catch {
+    return null;
+  }
+  if (j.type !== 'content_block_start') return null;
+  const b = j.content_block || {};
+  if (b.type === 'mcp_tool_use') return { name: String(b.name || ''), server: String(b.server_name || '') };
+  if (b.type === 'mcp_tool_result' && b.is_error) return { error: true };
+  return null;
+}
+
+/** True when a 400 is about the MCP connector itself (the beta, the server list or the toolset), so the request can be retried without it. */
+export function isConnectorRejection(status, message) {
+  return status === 400 && /mcp|anthropic-beta|beta|toolset|tools?\b/i.test(String(message || ''));
 }
 
 /** Optional body fields a model may refuse; dropped on a retry after an HTTP 400 that names one of them. */
@@ -196,7 +249,7 @@ export function deltaFromEvent(provider, data) {
     if (j.type === 'error') throw new Error(j.error?.message || 'stream error');
     return '';
   }
-  if (provider === 'openai') {
+  if (openAiStyle(provider)) {
     if (j.error) throw new Error(j.error.message || 'stream error');
     const ch = j.choices?.[0];
     if (!ch) return '';
@@ -213,7 +266,7 @@ export function deltaFromEvent(provider, data) {
 /** The full text of a non-streamed response body. */
 export function textFromResponse(provider, j) {
   if (provider === 'anthropic') return (j.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('');
-  if (provider === 'openai') return j.choices?.[0]?.message?.content || '';
+  if (openAiStyle(provider)) return j.choices?.[0]?.message?.content || '';
   return (j.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
 }
 
@@ -280,7 +333,7 @@ function hintFor(status) {
  * the full text. `signal` aborts. Falls back to a non-streamed request when the
  * response is not an event stream (some proxies).
  */
-export async function streamCompletion(provider, opts, { onDelta, signal, fetchImpl = fetch, onRetry, onFinish } = {}) {
+export async function streamCompletion(provider, opts, { onDelta, signal, fetchImpl = fetch, onRetry, onFinish, onTool } = {}) {
   const req = buildRequest(provider, { ...opts, stream: true });
   const send = async (body) => {
     try {
@@ -316,6 +369,10 @@ export async function streamCompletion(provider, opts, { onDelta, signal, fetchI
   const handle = (events) => {
     for (const ev of events) {
       finish = finishFromEvent(provider, ev) || finish;
+      if (onTool) {
+        const tool = toolFromEvent(provider, ev);
+        if (tool) onTool(tool);
+      }
       const d = deltaFromEvent(provider, ev);
       if (d === null) return true;
       if (d) {
@@ -344,7 +401,7 @@ export async function listModels(provider, { key, baseUrl, fetchImpl = fetch } =
   if (provider === 'anthropic') {
     url = `${base}/v1/models?limit=100`;
     headers = { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' };
-  } else if (provider === 'openai') {
+  } else if (openAiStyle(provider)) {
     url = `${base}/v1/models`;
     headers = { authorization: `Bearer ${key}` };
   } else {
@@ -361,7 +418,7 @@ export async function listModels(provider, { key, baseUrl, fetchImpl = fetch } =
 export function normalizeModelList(provider, j) {
   let items = [];
   if (provider === 'anthropic') items = (j.data || []).map((m) => ({ id: m.id, label: m.display_name || m.id, created: m.created_at || '' }));
-  else if (provider === 'openai') {
+  else if (openAiStyle(provider)) {
     items = (j.data || [])
       .map((m) => ({ id: m.id, label: m.id, created: m.created || 0 }))
       .filter((m) => !/(audio|realtime|image|tts|transcribe|whisper|embedding|moderation|search|codex|dall-e|sora|live|davinci|babbage|instruct)/i.test(m.id)); // any id a compatible server offers, minus the obvious non-chat ones

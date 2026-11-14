@@ -47,6 +47,8 @@ The Content-Security-Policy, directive by directive (it is the `<meta>` in `inde
 - `style-src 'self' 'unsafe-inline'` — the charts and tables set inline styles; styles cannot run code.
 - `img-src 'self' data: blob: http: https:` — chart snapshots, the QR code, and the profile images the machine serves.
 - `connect-src 'self' http: https: ws: wss:` — the machine is at an address you type, and the AI provider or a local model is one you choose, so connections cannot be narrowed further.
+
+Since v0.20 a review can also read **Meticulous Community** (`https://community.meticuloushome.com/api/mcp`, a read-only MCP server that needs no account). What is sent there is the *name* of the coffee, of its roaster and of the grinder, and the origin and process as a guide topic — never shot data, notes, ratings or the API key; with Claude's connector it is Anthropic's servers that make those calls, on the model's behalf. What comes back is text written by roasters and members: it is placed in the request as a clearly marked data section, the model is told to treat it as data and never as instructions, it is shown in the page only inside a text box or as escaped Markdown (the same renderer as every review), and only `https://community.meticuloushome.com/…` links in it are recognised as sources. Switching *Use Meticulous Community data* off under Settings → AI review stops the lookups.
 - `worker-src 'self' blob:`, `font-src 'self' data:`, `object-src 'none'`, `base-uri 'none'`, `form-action 'none'`.
 
 ## Libraries: what is shipped, how it is kept current, how advisories surface

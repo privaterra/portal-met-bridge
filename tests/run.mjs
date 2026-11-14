@@ -1293,4 +1293,318 @@ await test('packaging: tools/package-macos.sh builds the bundle with two Node ru
   }
 });
 
+// ------------------------------------------------------------------ v0.20 --
+const community = await import('../js/community.js');
+const maintenance = await import('../js/maintenance.js');
+const reviewMod = await import('../js/review.js');
+const aiMod = await import('../js/ai.js');
+const exportMod = await import('../js/export.js');
+
+await test('Meticulous Community (v0.20): matches are parsed and picked with care, topics follow origin and process, profiles can be left out', () => {
+  const { parseMatches, pickMatch, parseTopics, topicFor, stripProfiles, sourceOf, isFilterBrew, communityMode, communityConnector, communitySubjects } = community;
+  const found = parseMatches('# Coffee matches for "Gesha"\n\n- **\\[Pre-Order\\] Uba \\| Special Edition Gesha** (Origin Coffee Roasters · Colombia · Washed): id `481792c8`, https://community.meticuloushome.com/coffee/481792c8\n- **Supernova** (Hatch · Ethiopia · Natural): id `aa11`, https://community.meticuloushome.com/coffee/aa11\n- **Supernova** (Somebody Else · Kenya · Washed): id `bb22`, https://community.meticuloushome.com/coffee/bb22\nnot a match line\n- **Evil** (x): id `zz`, http://plain.example/x\n');
+  assert.equal(found.length, 3, 'only well-formed https lines');
+  assert.equal(found[0].name, '[Pre-Order] Uba | Special Edition Gesha', 'Markdown escapes removed');
+  assert.equal(pickMatch(found, 'Supernova', { roaster: 'Hatch Coffee Roasters' }).id, 'aa11', 'the roaster settles which Supernova');
+  assert.equal(pickMatch(found, 'Supernova', { roaster: 'Nobody Known' }), null, 'a contradicting roaster means no match');
+  assert.equal(pickMatch(found, 'Gesha'), null, 'one generic word of a long name is not a match');
+  assert.equal(pickMatch(found, 'Uba Special Edition Gesha').id, '481792c8');
+  assert.equal(pickMatch(parseMatches('- **SEY** (United States): id `b4`, https://community.meticuloushome.com/roasters/sey\n'), 'Sey Coffee', { kind: 'roaster' }).id, 'b4', '"Coffee", "Roasters" and the like are ignored in a roaster name');
+  assert.equal(pickMatch(parseMatches('- **Niche Zero** (Niche): id `n0`, https://community.meticuloushome.com/grinders/niche-zero\n'), 'Zerno Z1', { kind: 'grinder' }), null);
+  assert.equal(parseMatches('No grinder matches "x" in Meticulous Community.').length, 0);
+  const topics = parseTopics('# Espresso topics\n\n## Topics\n\n- `light-roast-espresso`: Light roast espresso\n\n## Origins\n\n- `ethiopia`: Ethiopia\n- `costa-rica`: Costa Rica\n- `colombia`: Colombia\n\n## Processes\n\n- `washed-coffee`: Washed\n- `natural-coffee`: Natural\n\n## Origins by process\n\n- `washed-ethiopia`: Washed Ethiopian\n');
+  assert.equal(topics.all.length, 7);
+  assert.equal(topicFor({ origin: 'Ethiopia, Guji', process: 'washed' }, topics), 'washed-ethiopia');
+  assert.equal(topicFor({ origin: 'Costa Rica — Tarrazú', process: 'honey' }, topics), 'costa-rica', 'no honey-costa-rica here: the origin alone');
+  assert.equal(topicFor({ origin: 'Yemen', process: 'natural' }, topics), 'natural-coffee', 'unknown origin: the process');
+  assert.equal(topicFor({ origin: 'Yemen', process: '', roastLevel: 'light' }, topics), 'light-roast-espresso', 'else the roast level');
+  assert.equal(topicFor({ origin: 'Yemen' }, topics), null);
+  assert.equal(topicFor({ origin: 'Colombia' }, { all: [], sections: {} }), null);
+  const answer = '# How?\n\nTypical loved recipe: Dose 18 g\n\n## Which profile style do owners love?\n\nLever Style: 1:3\n\n- **Lever**: x\n\nLoved profiles: McQueen Shot, Low Contact.\n\nRoasters owners loved here: SEY.\n\n**Which profile style do owners love?** Lever.\n\n---\n\nSource: [Meticulous Community](https://community.meticuloushome.com/espresso/washed-ethiopia). Cite it.';
+  const noProfiles = stripProfiles(answer);
+  assert.ok(!/profile/i.test(noProfiles.replace(/Source:.*/s, '')) && /Typical loved recipe/.test(noProfiles) && /Roasters owners loved/.test(noProfiles) && /Source: \[Meticulous Community\]/.test(noProfiles), noProfiles);
+  assert.equal(sourceOf(answer), 'https://community.meticuloushome.com/espresso/washed-ethiopia');
+  assert.equal(sourceOf('Source: [x](https://evil.example/)'), '', 'only Community links count as a source');
+  assert.ok(isFilterBrew({ profile: 'V60 pour-over', ratio: 2 }) && isFilterBrew({ profile: 'x', ratio: 15 }) && !isFilterBrew({ profile: 'Blooming Espresso', ratio: 2.2 }));
+  // how it reaches the model
+  assert.equal(communityMode('anthropic'), 'connector', 'Claude: its own connector');
+  assert.equal(communityMode('openai'), 'app');
+  assert.equal(communityMode('xai'), 'app');
+  assert.equal(communityMode('google'), 'app');
+  assert.equal(communityMode('anthropic', { via: 'app' }), 'app');
+  assert.equal(communityMode('openai', { via: 'mention' }), 'mention');
+  assert.equal(communityMode('anthropic', { enabled: false }), 'off');
+  assert.deepEqual(communityConnector().configs, {}, 'everything on: no tool is disabled');
+  assert.deepEqual(communityConnector({ grinder: false, pourOver: false, profiles: false }).configs, { grinder_guide: { enabled: false }, pour_over_guide: { enabled: false } }, 'a kind switched off disables its tool; search stays');
+  assert.equal(communityConnector().url, 'https://community.meticuloushome.com/api/mcp');
+  // one subject per coffee, filled in across the shots
+  const subj = communitySubjects([{ meta: { coffee: { bean: 'Supernova' }, grinder: 'Zerno Z1' } }, { meta: { coffee: { bean: 'supernova', roaster: 'Hatch', origin: 'Ethiopia', process: 'natural' }, grinder: 'zerno z1' } }], { beanUrls: { supernova: 'https://hatch.example/supernova' } });
+  assert.equal(subj.coffees.length, 1);
+  assert.deepEqual([subj.coffees[0].roaster, subj.coffees[0].origin, subj.coffees[0].url], ['Hatch', 'Ethiopia', 'https://hatch.example/supernova']);
+  assert.deepEqual([subj.roasters, subj.grinders], [['Hatch'], ['Zerno Z1']]);
+});
+
+await test('Meticulous Community (v0.20): the app\'s lookups ask by name only, tolerate failures, and the prompt names Community the way each assistant wants', async () => {
+  const { gatherCommunity, mcpCall, communityInstructions, communityMention, communityBlock, communityHow } = community;
+  const calls = [];
+  const SRC = (p) => `\n\n---\n\nSource: [Meticulous Community](https://community.meticuloushome.com/${p}). Cite it.`;
+  const server = (down = false) => async (url, init) => {
+    const rpc = JSON.parse(init.body);
+    calls.push({ url, ...rpc.params });
+    if (down) return new Response('down', { status: 503 });
+    const { name, arguments: a } = rpc.params;
+    const reply = (text, isError) => new Response(JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result: { content: [{ type: 'text', text }], ...(isError ? { isError: true } : {}) } }), { status: 200, headers: { 'content-type': 'application/json' } });
+    if (name === 'search_community') return a.kind === 'coffee' && /supernova/i.test(a.query) ? reply('- **Supernova** (Hatch · Ethiopia · Natural): id `c1`, https://community.meticuloushome.com/coffee/c1\n') : a.kind === 'roaster' ? reply('- **Hatch** (Canada): id `r1`, https://community.meticuloushome.com/roasters/hatch\n') : reply(`No ${a.kind} matches "${a.query}" in Meticulous Community.`);
+    if (name === 'how_to_brew_coffee') return a.coffee === 'https://hatch.example/unknown' ? reply('No coffee for that page.', true) : reply(`# Supernova\n\nDose 18 g · Ratio 1:2.2\n\nLoved profiles: Mock Bloom.${SRC('coffee/c1')}`);
+    if (name === 'how_to_brew_roaster') return reply(`# Hatch\n\nRatio 1:2–2.5${SRC('roasters/hatch')}`);
+    if (name === 'espresso_guide') return a.topic ? reply(`# ${a.topic}\n\n88–91 °C${SRC(`espresso/${a.topic}`)}`) : reply('## Origins\n\n- `ethiopia`: Ethiopia\n\n## Origins by process\n\n- `natural-ethiopia`: Natural Ethiopian\n');
+    if (name === 'pour_over_guide') return reply(`# All filter coffee\n\n1:16${SRC('pour-over')}`);
+    return reply('unknown', true);
+  };
+  const subjects = { coffees: [{ bean: 'Supernova', roaster: 'Hatch', origin: 'Ethiopia', process: 'natural', roastLevel: 'light', url: 'https://hatch.example/unknown', filter: false }], roasters: ['Hatch'], grinders: ['Zerno Z1'] };
+  const cache = new Map();
+  const r = await gatherCommunity(subjects, { fetchImpl: server(), url: 'https://c.example/api/mcp', cache });
+  assert.deepEqual(r.items.map((x) => x.title), ['Coffee — Supernova', 'Espresso guide — natural-ethiopia', 'Roaster — Hatch']);
+  assert.deepEqual(r.notes, ['Grinder “Zerno Z1” was not found on Meticulous Community.']);
+  assert.equal(r.items[0].source, 'https://community.meticuloushome.com/coffee/c1');
+  assert.deepEqual(calls.map((c) => c.name), ['how_to_brew_coffee', 'search_community', 'how_to_brew_coffee', 'espresso_guide', 'espresso_guide', 'search_community', 'how_to_brew_roaster', 'search_community'], 'the bean\'s own page first, then search → answer; the guide by topic');
+  assert.ok(calls.every((c) => c.url === 'https://c.example/api/mcp' && JSON.stringify(c.arguments).length < 80), 'names and topics only');
+  assert.equal(calls[4].arguments.topic, 'natural-ethiopia');
+  const before = calls.length;
+  const again = await gatherCommunity(subjects, { fetchImpl: server(), cache });
+  assert.equal(again.items.length, 3);
+  assert.equal(calls.length - before, 1, 'answers are cached for the session; only the lookup that failed is tried again');
+  // a kind switched off is not asked for; profiles can be cut from the answers; a filter brew reads the pour-over guide
+  calls.length = 0;
+  const partial = await gatherCommunity({ ...subjects, coffees: [{ ...subjects.coffees[0], url: '', filter: true }] }, { fetchImpl: server(), data: { roaster: false, grinder: false, profiles: false } });
+  assert.deepEqual(partial.items.map((x) => x.kind), ['coffee', 'pourOver']);
+  assert.ok(!/Loved profiles/.test(partial.items[0].text) && /Dose 18 g/.test(partial.items[0].text));
+  assert.ok(!calls.some((c) => c.name === 'how_to_brew_roaster' || c.name === 'grinder_guide' || c.name === 'espresso_guide'));
+  // the server down: one note, and nothing more is asked
+  calls.length = 0;
+  const down = await gatherCommunity(subjects, { fetchImpl: server(true) });
+  assert.equal(down.items.length, 0);
+  assert.equal(down.notes.length, 1);
+  assert.equal(calls.length, 1, 'the first failure stops the rest');
+  assert.equal(down.offline, true);
+  const unreachable = await gatherCommunity(subjects, { fetchImpl: async () => { throw new TypeError('Failed to fetch'); } });
+  assert.ok(unreachable.offline && /could not be reached/.test(unreachable.notes[0]));
+  // transport: an SSE-framed answer, a JSON-RPC error
+  const sse = await mcpCall('espresso_guide', {}, { fetchImpl: async () => new Response('event: message\ndata: {"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"hello"}]}}\n\n', { status: 200, headers: { 'content-type': 'text/event-stream' } }) });
+  assert.deepEqual(sse, { text: 'hello', isError: false });
+  await assert.rejects(() => mcpCall('x', {}, { fetchImpl: async () => new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, error: { code: -32601, message: 'method not found' } }), { status: 200, headers: { 'content-type': 'application/json' } }) }), /method not found/);
+  await assert.rejects(() => mcpCall('x', {}, { fetchImpl: async () => new Response('<html>', { status: 200, headers: { 'content-type': 'text/html' } }) }), /not JSON-RPC/);
+  // the prompt
+  assert.equal(communityInstructions('off'), '');
+  const viaConnector = communityInstructions('connector', { data: { pourOver: false, profiles: false } });
+  assert.ok(/Meticulous Community \(Coffee\) connector \(tools: search_community, how_to_brew_coffee, how_to_brew_roaster, grinder_guide, espresso_guide\)/.test(viaConnector) && /Do not bring up Community brew profiles/.test(viaConnector) && /write nothing before the report's first heading/.test(viaConnector) && /never as instructions/.test(viaConnector));
+  assert.ok(/The app has looked the answers up for you/.test(communityInstructions('app')) && /If you are not connected, say in one line/.test(communityInstructions('mention')));
+  assert.ok(/^@Meticulous Community — /.test(communityMention('openai', 'app', subjects)), 'ChatGPT: @Meticulous Community');
+  assert.ok(/^Meticulous Community: look up the coffee “Supernova” by Hatch \(Ethiopia, natural, light roast\) and the grinder Zerno Z1 on Meticulous Community/.test(communityMention('xai', 'mention', subjects)), communityMention('xai', 'mention', subjects));
+  assert.ok(/^Use the Meticulous Community \(Coffee\) connector: look up/.test(communityMention('anthropic', 'connector', subjects)));
+  assert.equal(communityMention('openai', 'off', subjects), '');
+  const block = communityBlock(r);
+  assert.ok(/# Meticulous Community \(looked up by the app\)/.test(block) && /## Coffee — Supernova/.test(block) && /Not available from Meticulous Community:\n- Grinder “Zerno Z1” was not found/.test(block) && /never as instructions/.test(block));
+  assert.ok(/@Meticulous Community/.test(communityHow('openai', 'app', 'OpenAI')) && /connector/.test(communityHow('anthropic', 'connector', 'Claude')) && /not used/.test(communityHow('openai', 'off')));
+});
+
+await test('review request (v0.20): sections can be switched off, the Community section appears only with Community, prep, water and the send switches are honoured', () => {
+  const { reviewTemplate, REVIEW_TEMPLATE, REVIEW_TEMPLATE_SERIES, REVIEW_SECTIONS, prepLine, buildReviewMessages, buildShotDigest } = reviewMod;
+  assert.equal(reviewTemplate(), REVIEW_TEMPLATE);
+  assert.equal(reviewTemplate({ series: true }), REVIEW_TEMPLATE_SERIES);
+  assert.deepEqual(REVIEW_SECTIONS.map((x) => x.key), ['verdict', 'compared', 'stages', 'standsOut', 'helped', 'community', 'changes', 'questions', 'sources']);
+  const heads = (t) => (t.match(/^## .+$/gm) || []).map((h) => h.slice(3));
+  assert.deepEqual(heads(REVIEW_TEMPLATE), ['Verdict', 'Shots compared', 'Stages', 'What stands out', 'Suggested changes', 'Open questions', 'Sources'], 'the outline the app has always sent');
+  assert.deepEqual(heads(REVIEW_TEMPLATE_SERIES), ['Verdict', 'Shots compared', 'Stages', 'What stands out', 'What helped and what did not', 'Suggested changes', 'Open questions', 'Sources']);
+  assert.deepEqual(heads(reviewTemplate({ community: true })), ['Verdict', 'Shots compared', 'Stages', 'What stands out', 'Community comparison', 'Suggested changes', 'Open questions', 'Sources']);
+  const cut = reviewTemplate({ series: true, community: true, sections: { helped: false, community: false, questions: false } });
+  assert.deepEqual(heads(cut), ['Verdict', 'Shots compared', 'Stages', 'What stands out', 'Suggested changes', 'Sources']);
+  assert.ok(/Left out by the user: "What helped and what did not", "Community comparison", "Open questions" — do not write those sections/.test(cut));
+  assert.ok(!/Left out by the user/.test(reviewTemplate({ sections: { community: false } })), 'the Community section is not "left out" when Community is not in use');
+  assert.ok(!/^Rating:/m.test(reviewTemplate({ rating: false })) && /^Rating:/m.test(REVIEW_TEMPLATE));
+  assert.equal(prepLine(null), '');
+  const line = prepLine({ rdt: true, wdt: true, distribution: true, screen: false, tamper: true, singleDose: true });
+  assert.ok(/the user uses a single-dose grinder.*; RDT \(Ross Droplet Technique.*; WDT \(Weiss Distribution Technique.*; a distribution tool.*; a tamper\. Not used: Filter screen\./.test(line), line);
+  assert.ok(/none of the usual steps are used/.test(prepLine({ rdt: false, wdt: false, distribution: false, screen: false, tamper: false, singleDose: false })));
+  const demo = makeDemoShot({ seed: 4 });
+  const shot = { ...demo, id: 's1', startedAt: Date.UTC(2026, 10, 9, 9, 0), profileName: 'Blooming Espresso', rating: 4, comment: 'sweet', water: 'Third Wave Water', context: { beanName: 'Supernova', doseG: 18, grindSize: '420 µm' } };
+  const d = buildShotDigest(shot, analyzeShot(shot.portal, shot.machine.map((m) => ({ t: m.t, w: m.w })), { doseG: 18 }));
+  assert.equal(d.meta.water, 'Third Wave Water', 'the water noted on the shot is in its digest');
+  const profile = { name: 'Blooming Espresso', stages: [] };
+  const plain = buildReviewMessages([{ digest: d, profile }], {});
+  assert.ok(!/Meticulous Community/.test(plain.system + plain.user) && !/Puck preparation|Water the user brews with/.test(plain.user), 'nothing new unless asked for');
+  const full = buildReviewMessages([{ digest: d, profile }], { prep: { rdt: true, screen: false }, water: 'BWT tap', community: { instructions: 'COMMUNITY-RULES', mention: '@Meticulous Community — look it up', block: '\n# Meticulous Community (looked up by the app)\n\nDATA' }, sections: { questions: false } });
+  assert.ok(full.user.startsWith('# Review request\n@Meticulous Community — look it up\nShots to review: 1'), full.user.slice(0, 120));
+  assert.ok(/Puck preparation.*RDT.*Not used: Filter screen/.test(full.user) && /Water the user brews with: BWT tap\./.test(full.user));
+  assert.ok(full.user.trimEnd().endsWith('DATA'), 'the Community answers close the request');
+  assert.ok(full.system.includes('COMMUNITY-RULES') && /## Community comparison/.test(full.system) && !/## Open questions/.test(full.system));
+  assert.ok(full.system.indexOf('COMMUNITY-RULES') < full.system.indexOf('## Verdict'), 'Community rules come before the outline');
+  const lean = buildReviewMessages([{ digest: d, profile }], { send: { profile: false, trace: false, rating: false } });
+  assert.ok(/Brewed profile: not sent in full/.test(lean.user) && /the one-row-per-second trace is not sent/.test(lean.user) && !/Trace resampled/.test(lean.user) && !/"stages":\[\]\}/.test(lean.user.split('Brewed profile')[1] || ''));
+  assert.ok(/"rating":null/.test(lean.user) && !/sweet/.test(lean.user) && !/^Rating:/m.test(lean.system), 'the rating and comment are not sent, and the rule about them is dropped');
+  assert.ok(/"rating":4/.test(plain.user) && /sweet/.test(plain.user));
+});
+
+await test('AI providers (v0.20): Grok speaks the chat API, Claude can carry the Community connector, a paused tool loop and tool calls are recognised', async () => {
+  const { PROVIDERS: P, buildRequest: build, finishFromEvent: fin, finishFromResponse: finR, toolFromEvent, isConnectorRejection, streamCompletion: stream, normalizeModelList: norm, ANTHROPIC_MCP_BETA } = aiMod;
+  const opts = { model: 'm', key: 'k', system: 'S', user: 'U', maxTokens: 10 };
+  const x = build('xai', opts);
+  assert.equal(x.url, 'https://api.x.ai/v1/chat/completions');
+  assert.equal(x.headers.authorization, 'Bearer k');
+  assert.deepEqual(x.body.messages.map((m) => m.role), ['system', 'user']);
+  assert.equal(aiMod.deltaFromEvent('xai', JSON.stringify({ choices: [{ delta: { content: 'Yo' } }] })), 'Yo');
+  assert.equal(fin('xai', JSON.stringify({ choices: [{ delta: {}, finish_reason: 'length' }] })), 'length');
+  assert.deepEqual(norm('xai', { data: [{ id: 'grok-4', created: 2 }, { id: 'grok-imagine-image', created: 3 }] }).map((m) => m.id), ['grok-4']);
+  assert.ok(P.xai.label === 'Grok (xAI)' && P.xai.defaultModel);
+  // the connector
+  const plain = build('anthropic', opts);
+  assert.ok(!('mcp_servers' in plain.body) && !('tools' in plain.body) && !('anthropic-beta' in plain.headers), 'no connector unless asked for');
+  const c = build('anthropic', { ...opts, mcp: { name: 'meticulous-community', url: 'https://community.meticuloushome.com/api/mcp', configs: { grinder_guide: { enabled: false } } } });
+  assert.equal(c.headers['anthropic-beta'], ANTHROPIC_MCP_BETA);
+  assert.deepEqual(c.body.mcp_servers, [{ type: 'url', url: 'https://community.meticuloushome.com/api/mcp', name: 'meticulous-community' }]);
+  assert.deepEqual(c.body.tools, [{ type: 'mcp_toolset', mcp_server_name: 'meticulous-community', configs: { grinder_guide: { enabled: false } } }]);
+  assert.ok(!('configs' in build('anthropic', { ...opts, mcp: { name: 'n', url: 'https://x.example/mcp', configs: {} } }).body.tools[0]));
+  assert.ok(!('mcp_servers' in build('openai', { ...opts, mcp: { name: 'n', url: 'https://x.example/mcp' } }).body), 'other providers ignore it');
+  assert.equal(fin('anthropic', JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'pause_turn' } })), 'paused');
+  assert.equal(fin('anthropic', JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'end_turn' } })), 'stop');
+  assert.equal(finR('anthropic', { stop_reason: 'pause_turn' }), 'paused');
+  assert.deepEqual(toolFromEvent('anthropic', JSON.stringify({ type: 'content_block_start', content_block: { type: 'mcp_tool_use', name: 'search_community', server_name: 'meticulous-community' } })), { name: 'search_community', server: 'meticulous-community' });
+  assert.deepEqual(toolFromEvent('anthropic', JSON.stringify({ type: 'content_block_start', content_block: { type: 'mcp_tool_result', is_error: true } })), { error: true });
+  assert.equal(toolFromEvent('anthropic', JSON.stringify({ type: 'content_block_start', content_block: { type: 'text' } })), null);
+  assert.equal(toolFromEvent('openai', '{}'), null);
+  assert.ok(isConnectorRejection(400, 'mcp_servers: Extra inputs are not permitted') && isConnectorRejection(400, 'Unexpected value(s) `mcp-client-2025-11-20` for the `anthropic-beta` header') && !isConnectorRejection(401, 'mcp') && !isConnectorRejection(400, 'messages: text content blocks must be non-empty'));
+  // a stream with a tool call in the middle: the text is the report, the call is reported
+  const events = [
+    { type: 'content_block_start', content_block: { type: 'mcp_tool_use', name: 'how_to_brew_coffee', server_name: 'meticulous-community' } },
+    { type: 'content_block_start', content_block: { type: 'mcp_tool_result', is_error: false } },
+    { type: 'content_block_delta', delta: { type: 'text_delta', text: '## Verdict\n' } },
+    { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Clean.' } },
+    { type: 'message_delta', delta: { stop_reason: 'end_turn' } },
+    { type: 'message_stop' },
+  ];
+  const sent = [];
+  const tools = [];
+  let finish = null;
+  const text = await stream('anthropic', { ...opts, mcp: { name: 'meticulous-community', url: 'https://community.meticuloushome.com/api/mcp' } }, { fetchImpl: async (url, init) => { sent.push({ headers: init.headers, body: JSON.parse(init.body) }); return new Response(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(''), { status: 200, headers: { 'content-type': 'text/event-stream' } }); }, onTool: (t) => tools.push(t.name), onFinish: (f) => (finish = f) });
+  assert.equal(text, '## Verdict\nClean.');
+  assert.deepEqual(tools, ['how_to_brew_coffee']);
+  assert.equal(finish, 'stop');
+  assert.ok(sent[0].headers['anthropic-beta'] && sent[0].body.mcp_servers.length === 1 && sent[0].body.stream === true);
+});
+
+await test('cleaning & maintenance (v0.20): the schedule, the dates, the reminder that follows them', () => {
+  const { MAINTENANCE_TASKS, MAINTENANCE_ROUTINE, MAINTENANCE_SOURCE, cleanMaintenanceLog, recordMaintenance, undoMaintenance, mergeMaintenanceLogs, addInterval, taskStatus, maintenanceStatus, maintenanceReminder, daysText, calendarDays } = maintenance;
+  assert.deepEqual(MAINTENANCE_TASKS.map((t) => `${t.id}:${t.name}`), ['weekly:Internal cleaning', 'monthly:Chamber cleaning', 'deep:Deep cleaning'], 'the weekly, monthly and three-monthly jobs — not the per-shot and daily routine');
+  assert.deepEqual(MAINTENANCE_TASKS.map((t) => t.every), [{ days: 7 }, { months: 1 }, { months: 3 }]);
+  assert.ok(MAINTENANCE_ROUTINE.length === 2 && MAINTENANCE_SOURCE.url === 'https://meticuloushome.com/pages/maintenance-and-repairs');
+  assert.ok(MAINTENANCE_TASKS.every((t) => t.steps.length >= 2 && t.warnings.length));
+  const at = (y, m, d, h = 12) => new Date(y, m - 1, d, h).getTime();
+  assert.equal(addInterval(at(2026, 1, 31), { months: 1 }), at(2026, 2, 28), 'a month after 31 January is the end of February');
+  assert.equal(addInterval(at(2026, 11, 14), { months: 3 }), at(2027, 2, 14));
+  assert.equal(addInterval(at(2026, 11, 14), { days: 7 }), at(2026, 11, 21));
+  assert.equal(calendarDays(at(2026, 11, 14, 23), at(2026, 11, 15, 1)), 1);
+  assert.deepEqual([daysText(0), daysText(1), daysText(7), daysText(-1), daysText(-9)], ['today', 'tomorrow', 'in 7 days', 'yesterday', '9 days ago']);
+  const now = at(2026, 11, 14);
+  // storage: bounded, newest first, nothing from the future, junk dropped
+  assert.deepEqual(cleanMaintenanceLog({ weekly: [5, 'x', now, now, now + 10 * 86400000, -1], evil: [1], monthly: 'no' }, { now }), { weekly: [now, 5], monthly: [], deep: [] });
+  let log = cleanMaintenanceLog(null, { now });
+  assert.equal(maintenanceStatus(log, { now }).allNever, true);
+  assert.ok(/No cleaning dates entered yet/.test(maintenanceReminder(log, { now }).text) && maintenanceReminder(log, { now }).state === 'never');
+  log = recordMaintenance(log, 'weekly', now, { now });
+  const shots = [{ startedAt: now - 3600000 }, { startedAt: now + 60000 }, { startedAt: now + 120000 }, { startedAt: now + 180000, source: 'demo' }, { startedAt: now + 200000, inProgress: true }];
+  const later = now + 3 * 86400000;
+  const w = taskStatus(MAINTENANCE_TASKS[0], log, { now: later, shots });
+  assert.deepEqual([w.state, w.dueInDays, w.brewsSince, w.dueAt], ['ok', 4, 2, at(2026, 11, 21)], 'brews since it was done are counted (not demo shots, not a recording in progress)');
+  assert.equal(taskStatus(MAINTENANCE_TASKS[0], log, { now: now + 6.5 * 86400000 }).state, 'soon');
+  assert.equal(taskStatus(MAINTENANCE_TASKS[0], log, { now: now + 8 * 86400000 }).state, 'due');
+  const r1 = maintenanceReminder(log, { now, shots });
+  assert.ok(/^Next: Internal cleaning — due in 7 days/.test(r1.text) && /No date yet for: chamber cleaning, deep cleaning\./.test(r1.text) && r1.state === 'ok', r1.text);
+  log = recordMaintenance(log, 'monthly', at(2026, 10, 1), { now });
+  const r2 = maintenanceReminder(log, { now, shots });
+  assert.ok(/^Overdue: Chamber cleaning — it was due 13 days ago/.test(r2.text) && r2.state === 'due', r2.text);
+  // a deep cleaning covers the smaller jobs
+  log = recordMaintenance(log, 'deep', now, { now });
+  const st = maintenanceStatus(log, { now });
+  assert.deepEqual(st.tasks.map((t) => `${t.id}:${t.state}:${t.coveredBy || '-'}`), ['weekly:ok:-', 'monthly:ok:deep', 'deep:ok:-']);
+  assert.equal(st.next.id, 'weekly');
+  assert.equal(st.tasks[1].dueAt, at(2026, 12, 14));
+  assert.deepEqual(undoMaintenance(log, 'deep', { now }).deep, []);
+  assert.equal(recordMaintenance(log, 'nope', now, { now }).weekly.length, 1, 'an unknown job changes nothing');
+  assert.deepEqual(mergeMaintenanceLogs({ weekly: [now] }, { weekly: [now, 5], deep: [7] }, { now }), { weekly: [now, 5], monthly: [], deep: [7] }, 'a backup merges: every date of both, once');
+});
+
+await test('piston check (v0.20): after a brew the piston must have travelled and come to rest; problems are named', () => {
+  const { PistonMonitor, pistonSummary, cleanPistonResult } = maintenance;
+  const run = (mon, steps) => {
+    let res = null;
+    for (const [t, st, pos, extra] of steps) {
+      if (pos !== undefined && pos !== null) mon.onSensors({ m_pos: pos, m_pwr: st.extracting ? 25 : 0, motor_temp: 30 + (st.extracting ? 2 : 0) }, t * 1000);
+      if (extra?.note) mon.onNotification(extra.note);
+      res = mon.onStatus({ p: st.extracting ? 8.5 : 0, ...st }, t * 1000) || res;
+    }
+    return res;
+  };
+  const idle = { name: 'idle', state: 'idle', extracting: false };
+  const brew = { name: 'Extract', state: 'brewing', extracting: true };
+  const retract = { name: 'retracting', state: 'brewing', extracting: false };
+  // a normal brew: out with the stroke, retract, back at rest
+  const steps = [[0, idle, 0], [1, idle, 0]];
+  for (let t = 2; t <= 30; t++) steps.push([t, brew, (t - 2) * 1.5]);
+  for (let t = 31; t <= 36; t++) steps.push([t, retract, Math.max(0, 42 - (t - 30) * 8)]);
+  for (let t = 37; t <= 45; t++) steps.push([t, idle, 0]);
+  const ok = run(new PistonMonitor(), steps);
+  assert.ok(ok && ok.ok && ok.returned && ok.posReported && ok.sawRetract && !ok.parkedElsewhere, JSON.stringify(ok));
+  assert.deepEqual([ok.brewSec, ok.travel, ok.peakPressureBar, ok.motorPowerMaxPct, ok.motorTempMaxC], [29, 42, 8.5, 25, 32]);
+  assert.ok(/^All operating OK — the piston travelled its stroke, retracted and was at rest (\d+ s|right) after the brew\.$/.test(ok.summary), ok.summary);
+  // the page joined mid-brew: there is no rest position to compare with, a piston that has stopped is at rest
+  const joined = run(new PistonMonitor(), [...steps.slice(10, 31), ...Array.from({ length: 8 }, (_, i) => [31 + i, idle, 3])]);
+  assert.ok(joined && joined.ok && joined.returned, JSON.stringify(joined));
+  // the piston never stops moving and the machine never goes idle
+  const stuck = run(new PistonMonitor({ returnTimeoutSec: 20 }), [...steps.slice(0, 31), ...Array.from({ length: 25 }, (_, i) => [31 + i, retract, 40 + (i % 2) * 5])]);
+  assert.ok(stuck && !stuck.ok && !stuck.returned && /had not gone back to idle 2\d s after the brew ended/.test(stuck.problems[0]), JSON.stringify(stuck));
+  assert.ok(/^Check the piston:/.test(stuck.summary));
+  const moving = run(new PistonMonitor({ returnTimeoutSec: 20 }), [...steps.slice(0, 31), ...Array.from({ length: 25 }, (_, i) => [31 + i, idle, 40 + (i % 2) * 5])]);
+  assert.ok(moving && !moving.ok && /The piston was still moving/.test(moving.problems[0]), JSON.stringify(moving));
+  // a firmware that reports no position: judged by the machine going back to idle
+  const blind = run(new PistonMonitor(), [[0, idle], ...Array.from({ length: 20 }, (_, i) => [1 + i, brew]), [22, retract], [24, idle]]);
+  assert.ok(blind && blind.ok && !blind.posReported && blind.travel === null && /does not report the piston's position/.test(blind.summary), JSON.stringify(blind));
+  // a machine notification about the motor during the brew is a problem; a flicker of "extracting" is not a brew
+  const noted = run(new PistonMonitor(), [...steps.slice(0, 20), [20.5, brew, 28, { note: { message: 'Motor error: stall detected <b>' } }], ...steps.slice(20)]);
+  assert.ok(noted && !noted.ok && /The machine reported: Motor error: stall detected/.test(noted.problems.join(' ')), JSON.stringify(noted));
+  assert.equal(run(new PistonMonitor(), [[0, idle, 0], [1, brew, 1], [2, idle, 0], [6, idle, 0]]), null);
+  // a new brew before the check finished
+  const m = new PistonMonitor();
+  const first = run(m, [...steps.slice(0, 31), [31, retract, 20], [32, brew, 2]]);
+  assert.ok(first && first.interrupted && first.ok && m.phase === 'brewing');
+  // what is stored is brought back to plain fields
+  const cleaned = cleanPistonResult({ ...ok, problems: ['x'.repeat(900), 5, null], summary: '<img>', extra: { nested: true } });
+  assert.ok(cleaned.problems.length === 1 && cleaned.problems[0].length === 300 && !('extra' in cleaned) && cleaned.summary === pistonSummary(cleaned));
+  assert.equal(cleanPistonResult('nope'), null);
+});
+
+await test('heating graph (v0.20): the CSV has one row per reading with the state, the profile and its target; Settings is made of folding sections', () => {
+  const csv = exportMod.heatingCsv([
+    { t: 12.34, wall: Date.UTC(2026, 10, 14, 13, 0, 0), ext1: 102.94, ext2: 103.4, barUp: 84, barMid: 88.1, barDown: 85.1, tube: 86.3, motor: 29.3, status: 91.26, target: 93, ready: false, heater: 55.4, motorPower: 0, motorPos: 0, state: 'brewing', stage: 'heating', profile: '=cmd|x' },
+    { t: 13, wall: NaN, ext1: null, status: 93.01, target: 93, ready: true, state: 'brewing', stage: 'click to start', profile: 'Blooming, "Espresso"' },
+  ]).split('\n');
+  assert.equal(csv[0], exportMod.HEATING_COLUMNS.join(','));
+  assert.equal(csv[1], "2026-11-14T13:00:00.000Z,12.3,102.9,103.4,84,88.1,85.1,86.3,29.3,91.3,93,no,55.4,0,0,brewing,heating,'=cmd|x", 'rounded; a formula-looking profile name is defused');
+  assert.equal(csv[2], ',13,,,,,,,,93,93,yes,,,,brewing,click to start,"Blooming, ""Espresso"""');
+  // the page: every settings section folds, in the order asked for, with the options where they were moved to
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  const sections = [...html.matchAll(/<details class="set-section" data-section="([a-z]+)">\s*<summary class="panel-head"><h2>([^<]+)<\/h2>/g)].map((m) => `${m[1]}:${m[2]}`);
+  assert.deepEqual(sections, ['machine:Machine', 'heating:Heating', 'recording:Recording', 'files:Files and folders', 'estimates:Estimates', 'ai:AI review', 'prep:Brew Prep.', 'backup:Backup and restore', 'logging:Logging and debug', 'startover:Start over', 'about:About']);
+  const within = (id, section) => { const a = html.indexOf(`data-section="${section}"`); const b = html.indexOf('</details>\n      </section>', a); const i = html.indexOf(`id="${id}"`); return i > a && i < b; };
+  assert.ok(within('set-heat-rule', 'heating') && within('set-heat-save', 'heating') && !within('set-heat-rule', 'machine'), 'Ready to brew moved to Heating');
+  assert.ok(within('list-roaster', 'prep') && within('set-prep-rdt', 'prep') && within('set-water', 'prep'), 'Pick-lists, Grind Prep and Water under Brew Prep.');
+  assert.ok(within('set-community', 'ai') && within('set-sec-verdict', 'ai') && within('set-ai-edit-query', 'ai') && within('set-maintenance', 'machine'));
+  const checked = (id) => new RegExp(`id="${id}"[^>]*\\bchecked\\b`).test(html);
+  assert.deepEqual(['set-prep-rdt', 'set-prep-wdt', 'set-prep-distribution', 'set-prep-screen', 'set-prep-tamper', 'set-prep-single-dose'].map(checked), [true, true, true, false, true, true], 'Grind Prep defaults');
+  assert.ok(checked('set-community') && ['coffee', 'roaster', 'grinder', 'espresso', 'pourover', 'profiles'].every((k) => checked(`set-community-${k}`)) && !checked('set-heat-save') && !checked('set-ai-edit-query'));
+  // every setting main.js binds has its input in the page
+  const main = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  const bound = [...main.slice(main.indexOf('const SETTINGS = {'), main.indexOf('const settings = {};')).matchAll(/el: '([^']+)'/g)].map((m) => m[1]);
+  assert.ok(bound.length > 70 && bound.every((id) => html.includes(`id="${id}"`)), bound.filter((id) => !html.includes(`id="${id}"`)).join(','));
+});
+
 console.log(`\n${passed} test group(s) passed in total${process.exitCode ? ', with failures' : ''}.`);

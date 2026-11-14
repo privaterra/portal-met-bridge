@@ -1,12 +1,13 @@
-// store.js — IndexedDB persistence for shots, beans and settings. One database,
-// three object stores. Shots carry their own refractometer reading and coffee
+// store.js — IndexedDB persistence for shots, beans, reviews, temperature
+// records and settings. One database, a handful of object stores. Shots carry their own refractometer reading and coffee
 // context so calibration can be rebuilt from the shot list alone; the beans
 // store is the pick-list of coffees you have entered before.
 
-import { mergeMaintenanceLogs, cleanMaintenanceLog } from './maintenance.js?v=0.21.0';
+import { mergeMaintenanceLogs, cleanMaintenanceLog } from './maintenance.js?v=0.22.0';
+import { cleanImportedThermal } from './thermal.js?v=0.22.0';
 
 const DB_NAME = 'portal-met-bridge';
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 
 function openDb() {
   return new Promise((resolve, reject) => {
@@ -32,6 +33,11 @@ function openDb() {
       if (!db.objectStoreNames.contains('reviews')) {
         const r = db.createObjectStore('reviews', { keyPath: 'id' });
         r.createIndex('createdAt', 'createdAt');
+      }
+      // v5: saved "Temperatures and power" records (History → Temperatures and power)
+      if (!db.objectStoreNames.contains('thermal')) {
+        const t = db.createObjectStore('thermal', { keyPath: 'id' });
+        t.createIndex('at', 'at');
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -294,6 +300,43 @@ export class Store {
     });
   }
 
+  // ------------------------------------------- temperatures and power --
+
+  async putThermal(rec) {
+    const db = await this.dbp;
+    await tx(db, 'thermal', 'readwrite', (s) => s.put(rec));
+    this._changed('thermal');
+    return rec;
+  }
+
+  async getThermal(id) {
+    const db = await this.dbp;
+    return tx(db, 'thermal', 'readonly', (s) => s.get(id));
+  }
+
+  async deleteThermal(id) {
+    const db = await this.dbp;
+    await tx(db, 'thermal', 'readwrite', (s) => s.delete(id));
+    this._changed('thermal');
+  }
+
+  /** Newest brew first. */
+  async listThermal({ limit = 1000 } = {}) {
+    const db = await this.dbp;
+    return new Promise((resolve, reject) => {
+      const out = [];
+      const t = db.transaction('thermal', 'readonly');
+      const req = t.objectStore('thermal').index('at').openCursor(null, 'prev');
+      req.onsuccess = () => {
+        const c = req.result;
+        if (!c || out.length >= limit) return resolve(out);
+        out.push(c.value);
+        c.continue();
+      };
+      req.onerror = () => reject(req.error);
+    });
+  }
+
   // -------------------------------------------------------------- settings --
 
   async getSetting(key, fallback = null) {
@@ -310,10 +353,10 @@ export class Store {
   // ------------------------------------------------------- backup/restore --
 
   async exportAll() {
-    const [shots, beans, reviews, ...lists] = await Promise.all([this.listShots({ limit: 100000 }), this.listBeans({ limit: 100000 }), this.listReviews({ limit: 100000 }), ...LIST_KINDS.map((k) => this.listValues(k))]);
+    const [shots, beans, reviews, thermal, ...lists] = await Promise.all([this.listShots({ limit: 100000 }), this.listBeans({ limit: 100000 }), this.listReviews({ limit: 100000 }), this.listThermal({ limit: 100000 }), ...LIST_KINDS.map((k) => this.listValues(k))]);
     // the cleaning dates are kept as a setting, but they are a record like the shots: a backup carries them
     const maintenance = cleanMaintenanceLog(await this.getSetting('maintenance', null));
-    return { app: 'portal-met-bridge', version: 4, exportedAt: new Date().toISOString(), shots, beans, reviews, lists: lists.flat(), maintenance };
+    return { app: 'portal-met-bridge', version: 4, exportedAt: new Date().toISOString(), shots, beans, reviews, thermal, lists: lists.flat(), maintenance };
   }
 
   async importAll(json) {
@@ -341,6 +384,12 @@ export class Store {
       for (const raw of json.reviews) {
         const r = cleanImportedReview(raw);
         if (r) await tx(db, 'reviews', 'readwrite', (s) => s.put(r));
+      }
+    }
+    if (Array.isArray(json.thermal)) {
+      for (const raw of json.thermal) {
+        const r = cleanImportedThermal(raw);
+        if (r) await tx(db, 'thermal', 'readwrite', (s) => s.put(r));
       }
     }
     if (isObj(json.maintenance)) await this.setSetting('maintenance', mergeMaintenanceLogs(await this.getSetting('maintenance', null), json.maintenance));

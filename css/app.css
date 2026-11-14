@@ -637,3 +637,28 @@ table.refcal td.actions { white-space: nowrap; text-align: right; }
 .rc-step .kv { margin-top: 6px; }
 #refcal-dialog .status:empty, #refedit-dialog .status:empty { display: none; }
 #rc-brew-note, #rc-mean[data-level="warn"] { color: var(--warn); }
+
+/* ---- v0.22: Temperatures and power on the Shots tab; History in two folding sections; kept records, their comparison and analysis ---- */
+.panel.hist-panel:has(> .set-section:not([open])) { padding-bottom: 12px; }
+.hist-section > .hist-body { margin-top: 4px; }
+.hist-toolbar.hist-files { margin-bottom: 0; }
+#temps-panel .panel-tools, #tp-compare-panel .panel-tools, #tp-analysis-panel .panel-tools { flex-wrap: wrap; align-items: center; }
+.seg { display: inline-flex; }
+.seg .btn { border-radius: 0; margin-left: -1px; }
+.seg .btn:first-child { border-radius: 3px 0 0 3px; margin-left: 0; }
+.seg .btn:last-child { border-radius: 0 3px 3px 0; }
+.seg .btn[aria-pressed="true"] { background: var(--cobalt); border-color: var(--cobalt); color: #fff; }
+#heat-brew-info:empty, .inline-field[hidden], #tp-tiles[hidden] { display: none; }
+table.hist td.num small, table.hist th small { color: var(--ink-3); font-size: 11px; font-weight: 400; }
+table.hist td.data .tag { white-space: nowrap; }
+table.tp-analysis th small { display: block; white-space: normal; max-width: 180px; margin-left: auto; }
+table.tp-analysis tbody th { position: sticky; left: 0; z-index: 1; font-weight: 500; color: var(--ink-2); background: var(--paper-2); }
+table.tp-analysis td.lo { color: var(--cobalt); }
+table.tp-analysis td.hi { color: var(--bad); }
+table.tp-analysis td.lo::after { content: " ▾"; font-size: 9px; }
+table.tp-analysis td.hi::after { content: " ▴"; font-size: 9px; }
+.tp-findings { margin: 4px 0 8px; padding-left: 20px; font-size: 13.5px; line-height: 1.5; }
+.tp-findings li { margin: 4px 0; }
+#tp-an-status:empty { display: none; }
+#tp-cmp-chart-temp { min-height: 300px; }
+#tp-cmp-chart-power { min-height: 220px; }

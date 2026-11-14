@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.22.0
+
+- Matches portal-met-bridge v0.22.0. **Temperatures and power** moved from the Machine tab to the **Shots** tab: the graphs follow the brew as it runs, count time from the start of the brew, and keep the brew's readings on screen afterwards; *Save to History* keeps them as a record (or every brew's, under Settings → Heating).
+- **History** has two folding sections, *Brews* and *Temperatures and power*. Kept records can be listed, opened, compared (lined up at the start of each brew), analysed side by side, exported as a zip and deleted.
+- The browser's database gains a store for these records (version 5); nothing changes for existing shots. Records are part of *Back up all*.
+- Security check for this release: no open advisories for the shipped libraries (all current), none for the development tools.
+
 ## 0.21.0
 
 - Matches portal-met-bridge v0.21.0. **Settings → Refractometer**: a guided calibration that follows a brew (zero the refractometer, take the sample, pair the reading with the Portal's conductivity for that brew), the procedure as text, and a history of every reading that can be edited or deleted, with each coffee's calibration.

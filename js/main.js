@@ -1,24 +1,25 @@
 // main.js — wires the devices, the recorder, storage, charts and export together.
 
-import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.21.0';
-import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, machineBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.21.0';
-import { MachinePanel, WINDOW_SEC, WINDOW_SEC_SAVING } from './machine-panel.js?v=0.21.0';
-import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.21.0';
-import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.21.0';
-import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.21.0';
-import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, profileFinalWeight, setBeveragePreference, grindMicrons, measuredEy, DEFAULTS } from './analysis.js?v=0.21.0';
-import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, approxTokens, reviewProfileOf, ratingOf, ratingMaxOf, REVIEW_SECTIONS, PREP_STEPS } from './review.js?v=0.21.0';
-import { PROVIDERS, streamCompletion, listModels, testKey, maskKey, maxTokensFor, endpointRisk, isConnectorRejection } from './ai.js?v=0.21.0';
-import { COMMUNITY, subjectKey, communityMode, communityHow, communitySubjects, gatherCommunity, communityInstructions, communityMention, communityBlock, communityConnector, mcpCall } from './community.js?v=0.21.0';
-import { MAINTENANCE_SOURCE, MAINTENANCE_TASKS, MAINTENANCE_ROUTINE, MAINTENANCE_WARNINGS, MAINTENANCE_GREASE, cleanMaintenanceLog, recordMaintenance, undoMaintenance, mergeMaintenanceLogs, maintenanceStatus, maintenanceReminder, daysText, PistonMonitor, cleanPistonResult } from './maintenance.js?v=0.21.0';
-import { CALIBRATION_WINDOW_MIN, ZERO_WITH, READING_SPREAD_WARN, refractometerOf, refractometerGuide, netWater, netTds, calibrationCandidate, averageReadings, buildReading, editReading, calibrationImpact, impactText, readingRows, coffeeCalibrations } from './refractometer.js?v=0.21.0';
-import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.21.0';
-import { makeDemoShot } from './demo.js?v=0.21.0';
-import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug, loadJsPdf, heatingJpeg, heatingCsv, heatingPdf } from './export.js?v=0.21.0';
-import { REVIEW_FORMATS, reviewFile, reviewMarkdownFile } from './review-export.js?v=0.21.0';
-import { log, formatLine } from './log.js?v=0.21.0';
-import { files, Files, FILE_KINDS, DEFAULT_ROOT, cleanDirName } from './files.js?v=0.21.0';
-import { HeatMonitor, HEAT_RULES, HEAT_SENSORS, sensorTemp } from './heat.js?v=0.21.0';
+import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.22.0';
+import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, machineBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.22.0';
+import { MachinePanel, WINDOW_SEC, VIEW_SPANS } from './machine-panel.js?v=0.22.0';
+import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.22.0';
+import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.22.0';
+import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.22.0';
+import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, profileFinalWeight, setBeveragePreference, grindMicrons, measuredEy, DEFAULTS } from './analysis.js?v=0.22.0';
+import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, approxTokens, reviewProfileOf, ratingOf, ratingMaxOf, REVIEW_SECTIONS, PREP_STEPS } from './review.js?v=0.22.0';
+import { PROVIDERS, streamCompletion, listModels, testKey, maskKey, maxTokensFor, endpointRisk, isConnectorRejection } from './ai.js?v=0.22.0';
+import { COMMUNITY, subjectKey, communityMode, communityHow, communitySubjects, gatherCommunity, communityInstructions, communityMention, communityBlock, communityConnector, mcpCall } from './community.js?v=0.22.0';
+import { MAINTENANCE_SOURCE, MAINTENANCE_TASKS, MAINTENANCE_ROUTINE, MAINTENANCE_WARNINGS, MAINTENANCE_GREASE, cleanMaintenanceLog, recordMaintenance, undoMaintenance, mergeMaintenanceLogs, maintenanceStatus, maintenanceReminder, daysText, PistonMonitor, cleanPistonResult } from './maintenance.js?v=0.22.0';
+import { CALIBRATION_WINDOW_MIN, ZERO_WITH, READING_SPREAD_WARN, refractometerOf, refractometerGuide, netWater, netTds, calibrationCandidate, averageReadings, buildReading, editReading, calibrationImpact, impactText, readingRows, coffeeCalibrations } from './refractometer.js?v=0.22.0';
+import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.22.0';
+import { makeDemoShot } from './demo.js?v=0.22.0';
+import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug, loadJsPdf, heatingJpeg, heatingPdf } from './export.js?v=0.22.0';
+import { THERMAL_SERIES, TEMP_KEYS, POWER_KEYS, SUMMARY_FIELDS, THERMAL_AI_SYSTEM, brewSpans, matchShot, buildRecord, seriesOf, compareRange, analyzeRecords, thermalCsvRows, thermalSummaryRows, thermalDigest, fmtSummary, fmtSpan, makeDemoThermalRows } from './thermal.js?v=0.22.0';
+import { REVIEW_FORMATS, reviewFile, reviewMarkdownFile } from './review-export.js?v=0.22.0';
+import { log, formatLine } from './log.js?v=0.22.0';
+import { files, Files, FILE_KINDS, DEFAULT_ROOT, cleanDirName } from './files.js?v=0.22.0';
+import { HeatMonitor, HEAT_RULES, HEAT_SENSORS, sensorTemp } from './heat.js?v=0.22.0';
 import qrcode from '../vendor/qrcode.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -31,6 +32,8 @@ const timeChart = new TimeChart($('chart-time'));
 const massChart = new MassChart($('chart-mass'));
 const calChart = new CalibrationChart($('chart-cal'));
 const compareChart = new CompareChart($('cmp-chart'));
+const tpTempChart = new CompareChart($('tp-cmp-chart-temp'), 300);
+const tpPowerChart = new CompareChart($('tp-cmp-chart-power'), 220);
 const machinePanel = new MachinePanel($('view-machine'));
 
 const VIEWS = ['shots', 'history', 'analysis', 'beans', 'machine', 'settings'];
@@ -50,15 +53,20 @@ function showView(name, { open = null } = {}) {
   }
   else if (name === 'settings' && open) openSettingsSection(open);
   document.querySelectorAll('.view-tab').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.view === name)));
-  if (name === 'machine') {
-    machinePanel.onShown();
-    renderMaintenance();
-  } else if (name === 'history') renderHistory();
+  if (name === 'machine') renderMaintenance();
+  else if (name === 'history') {
+    renderHistory();
+    renderThermalList();
+    if (open) openHistorySection(open);
+  }
   else if (name === 'analysis') renderAnalysis();
   else if (name === 'beans') renderBeans();
   else if (name === 'shots') {
     timeChart.u.setSize({ width: Math.max(320, $('chart-time').clientWidth), height: 320 });
     massChart.u.setSize({ width: Math.max(320, $('chart-mass').clientWidth), height: 300 });
+    machinePanel.onShown();
+    renderThermalPanel();
+    if (open === 'temps') $('temps-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
   } else if (name === 'settings') renderLogTail();
   if (!erasing) store.setSetting('view', name).catch(() => {});
   try {
@@ -91,7 +99,7 @@ const SETTINGS = {
   machineVia: { def: 'auto', el: 'set-machine-via' },
   maintenanceShow: { def: true, el: 'set-maintenance', bool: true },
   settingsLayout: { def: 'compact', el: 'set-layout' },
-  heatSaveGraph: { def: false, el: 'set-heat-save', bool: true },
+  heatKeep: { def: false, el: 'set-heat-keep', bool: true },
   heatRule: { def: 'hold', el: 'set-heat-rule' },
   heatSensor: { def: 'status', el: 'set-heat-sensor' },
   heatToleranceC: { def: 1, el: 'set-heat-tol', num: true, min: 0.2, max: 5 },
@@ -320,8 +328,8 @@ function applySetting(key, v) {
     case 'maintenanceShow':
       renderMaintenance();
       break;
-    case 'heatSaveGraph':
-      applyHeatSave();
+    case 'heatKeep':
+      renderThermalPanel();
       break;
     case 'water':
       if (v) store.rememberValue('water', v).then(() => refreshBeanLists()).catch(() => {});
@@ -416,7 +424,7 @@ const SETTING_LABELS = {
   dirReviews: 'reviews folder', dirBackups: 'backups folder', dirLogs: 'logs folder', autoBackup: 'automatic backup',
   aiProvider: 'AI provider', aiKeyAnthropic: 'Anthropic key', aiModelAnthropic: 'Claude model', aiKeyOpenai: 'OpenAI key', aiModelOpenai: 'OpenAI model', aiBaseOpenai: 'OpenAI endpoint',
   aiKeyGoogle: 'Gemini key', aiModelGoogle: 'Gemini model', aiGrindStepUm: 'grinder step', aiDrink: 'usual drink', aiNotes: 'standing notes', reviewFormat: 'review file format',
-  aiKeyXai: 'xAI key', aiModelXai: 'Grok model', settingsLayout: 'how Settings opens', maintenanceShow: 'cleaning & maintenance', heatSaveGraph: 'save the heating graph',
+  aiKeyXai: 'xAI key', aiModelXai: 'Grok model', settingsLayout: 'how Settings opens', maintenanceShow: 'cleaning & maintenance', heatKeep: 'keep temperatures and power',
   communityEnabled: 'Meticulous Community', communityCoffee: 'Community: coffee', communityRoaster: 'Community: roaster', communityGrinder: 'Community: grinder', communityEspresso: 'Community: brews by origin and process',
   communityPourOver: 'Community: pour-over brews', communityProfiles: 'Community: brew profiles', communityVia: 'how Community reaches the AI',
   secVerdict: 'report: Verdict', secCompared: 'report: Shots compared', secStages: 'report: Stages', secStandsOut: 'report: What stands out', secHelped: 'report: What helped', secCommunity: 'report: Community comparison',
@@ -530,12 +538,11 @@ async function init() {
   renderMaintenanceExtra();
   renderRefGuide();
   applyHeatSettings();
-  applyHeatSave();
   await probeAppServer().catch(() => {});
   renderMachineVia();
   renderLogStatus();
-  $('about-version').textContent = 'v0.21.0';
-  log.info('app', `portal-met-bridge v0.21.0 started · ${navigator.userAgent}`);
+  $('about-version').textContent = 'v0.22.0';
+  log.info('app', `portal-met-bridge v0.22.0 started · ${navigator.userAgent}`);
 
   const env = await environmentCheck();
   renderPortalSteps({ secure: env.secure, api: env.api, adapter: env.adapter });
@@ -554,6 +561,11 @@ async function init() {
   const promoted = await store.promoteLegacyBeverage();
   if (promoted) log.info('shots', `moved the hand-weighed beverage of ${promoted} older shot(s) from the reading to the shot`);
   await refreshBeanLists();
+  const span = Number(await store.getSetting('tpWindow', WINDOW_SEC));
+  machinePanel.setWindow(VIEW_SPANS.includes(span) ? span : WINDOW_SEC);
+  $('tp-window').value = String(machinePanel.windowSec);
+  await applyHistorySections();
+  await refreshThermalList();
   await refreshShotList();
   await recoverUnfinishedShots();
   renderAiSettings();
@@ -699,6 +711,9 @@ function onStatus(s) {
   heat.onStatus({ name: s.name, extracting: s.extracting, temp: sensorTemp(settings.heatSensor, s, meticulous?.lastSensors), at: performance.now() });
   machinePanel.heatTargetC = heat.targetC; // the heating graph's data carries the target and whether the rule is met
   machinePanel.heatReady = heat.targetC === null && heat.rule !== 'machine' ? null : heat.ready;
+  const working = !!s.extracting || /heating|preheat/i.test(`${s.name || ''} ${s.state || ''}`);
+  if (working && !tp.working && tp.mode === 'brew') setThermalMode('live'); // the machine is busy again: show what it is doing now
+  tp.working = working;
   const pistonResult = piston.onStatus(s, performance.now());
   if (pistonResult) onPistonResult(pistonResult);
   renderBrewState(s);
@@ -810,6 +825,7 @@ recorder.addEventListener('state', (e) => {
   $('rec-manual').textContent = d.state === 'idle' ? 'Start recording now' : 'Stop and save';
   renderRefState();
   if (d.state === 'recording') {
+    if (tp.mode !== 'live') setThermalMode('live'); // the temperatures and power follow the brew as it runs
     applyProfileTarget(d.shot);
     $('shot-title').textContent = 'Live shot';
     $('shot-sub').textContent = liveShotSub(d.shot);
@@ -976,6 +992,9 @@ recorder.addEventListener('shot', async (e) => {
   await rememberContextValues(shot.context);
   await refreshBeanLists();
   await refreshShotList();
+  // the temperatures and power around this brew: shown under the shot, kept in History when asked (or always, Settings → Heating)
+  tp.latest = captureThermal({ shot });
+  if (tp.latest && settings.heatKeep) await keepThermal(tp.latest, { quiet: true });
   selectShot(shot.id);
   log.info('recorder', `saved shot ${shot.id}: ${fmt(shot.finalWeightG, 1)} g in ${fmt(shot.durationSec, 1)} s, ${shot.machine.length} machine + ${shot.portal.length} Portal samples`);
   toast(`Saved shot — ${fmt(shot.finalWeightG, 1)} g in ${fmt(shot.durationSec, 1)} s`);
@@ -1110,6 +1129,7 @@ async function selectShot(id, { show = false } = {}) {
   document.querySelectorAll('#hist-rows tr').forEach((tr) => tr.classList.toggle('selected', tr.dataset.id === id));
   updateShotNav();
   renderShot();
+  await syncThermalToShot();
   if (show) showView('shots');
 }
 
@@ -2300,6 +2320,11 @@ async function addDemoShot() {
   shot.context = { ...readContext(), beanName: readContext().beanName || 'Demo coffee' };
   shot.analysisCache = summarize(analyzeShot(shot.portal, shot.machine.map((s) => ({ t: s.t, w: s.w }))));
   await store.putShot(shot);
+  // a demo brew comes with demo temperatures and power, so History → Temperatures and power can be tried without a machine
+  const brew = { startWall: shot.startedAt, endWall: shot.startedAt + shot.durationSec * 1000 };
+  const demo = buildRecord({ rows: makeDemoThermalRows({ startedAt: shot.startedAt, durationSec: shot.durationSec, targetC: shot.profileTemperatureC || 93, seed: Number(shot.id.replace(/\D/g, '')) || 7, profile: shot.profileName }), brew, info: { ...thermalInfo(shot), machine: 'Demo machine', rule: '', source: 'demo' } });
+  if (demo) await store.putThermal(demo);
+  await refreshThermalList();
   await refreshShotList();
   selectShot(shot.id);
 }
@@ -3360,6 +3385,10 @@ $('hist-delete-selected').addEventListener('click', () => deleteShots([...hist.c
 $('hist-export').addEventListener('click', () => downloadZip([...hist.checked]));
 $('hist-compare').addEventListener('click', () => openCompare([...hist.checked]));
 $('hist-analyze').addEventListener('click', () => openAnalysis([...hist.checked]));
+$('tp-compare').addEventListener('click', () => openThermalCompare([...tp.checked]));
+$('tp-analyze').addEventListener('click', () => openThermalAnalysis([...tp.checked]));
+$('tp-export').addEventListener('click', () => exportThermal([...tp.checked]));
+$('tp-delete-selected').addEventListener('click', () => deleteThermal([...tp.checked]));
 $('cmp-close').addEventListener('click', closeCompare);
 $('cmp-series').addEventListener('change', () => { compare.series = $('cmp-series').value; renderCompare().catch((err) => toast(`Could not draw the comparison: ${err?.message || err}`, 'error')); });
 $('cmp-x').addEventListener('change', () => { compare.x = $('cmp-x').value; renderCompare().catch((err) => toast(`Could not draw the comparison: ${err?.message || err}`, 'error')); });
@@ -3417,6 +3446,7 @@ function chooseDialog({ title, text = '', choices }) {
 async function restoreBackup(json, label) {
   const n = await store.importAll(json);
   await refreshBeanLists();
+  await refreshThermalList(); // … and the kept temperatures and power
   await refreshShotList();
   renderBeans();
   await renderSavedReviews(); // a backup carries reviews too; without this they appeared only after a reload
@@ -3754,117 +3784,670 @@ async function onPistonResult(r) {
   if (!r.ok && settings.maintenanceShow !== false) toast(pistonLast.summary, 'warn', 9000);
 }
 
-// ---------------------------------------------------------- heating graph --
-// Settings → Heating → "Save the heating graph and its data": the Machine
-// tab's Temperatures and power graphs as a JPEG, a PDF or a CSV, each carrying
-// the brew the warm-up belongs to. Always downloaded through the browser.
+// ------------------------------------------------ temperatures and power --
+// The machine's probes, heater and motor power and piston, graphed on the
+// Shots tab: live while the machine heats and brews, then the brew that just
+// ended. "Save to History" keeps a brew's readings as a record (js/thermal.js);
+// History → Temperatures and power lists the kept records, overlays them lined
+// up at the start of each brew, puts their numbers side by side, exports and
+// deletes them.
 
-function applyHeatSave() {
-  const on = !!settings.heatSaveGraph;
-  $('heat-save-tools').hidden = !on;
-  machinePanel.setWindow(on ? WINDOW_SEC_SAVING : WINDOW_SEC);
-  heatInfoText = null;
-  renderHeatBrewInfo();
+const THERMAL_MAX = COMPARE_COLORS.length;
+const tp = {
+  mode: 'live', // 'live' — the machine now; 'brew' — a record (the shown shot's, or one opened from History)
+  record: null, // the record shown in 'brew' mode
+  shotRecord: null, // the record that belongs to the shot shown on the Shots tab, kept or not
+  latest: null, // the readings captured when the newest brew ended (kept only when asked)
+  working: false, // the machine is heating or brewing
+  list: [], // the kept records without their readings, newest brew first
+  checked: new Set(),
+  search: '',
+  sort: 'at',
+  dir: 'desc',
+  cmp: { ids: [], temp: 'status', power: 'heater', range: 'brew' },
+  an: { ids: [], records: [], markdown: '', running: false, abort: null },
+};
+
+const thermalLabel = (r) => `${fmtDate(r.at)}${r.coffee ? ` · ${r.coffee}` : ''}${r.profile ? ` · ${r.profile}` : ''}${r.source === 'demo' ? ' (demo)' : ''}`;
+/** How records are named beside each other: by their date, and by coffee and profile only where those differ. */
+function thermalShortLabel(recs) {
+  const differ = (key) => new Set(recs.map((r) => r[key] || '')).size > 1;
+  const coffee = differ('coffee');
+  const profile = differ('profile');
+  return (r) => [fmtDate(r.at), coffee ? r.coffee || 'no bean' : null, profile ? r.profile || 'no profile' : null].filter(Boolean).join(' · ');
+}
+const thermalFileBase = (r) => `temperatures-${stamp(r.at)}${r.profile ? `-${slug(r.profile)}` : ''}`;
+const TP_FIELD = Object.fromEntries(SUMMARY_FIELDS.map((f) => [f.key, f]));
+const tpValue = (r, key) => fmtSummary(TP_FIELD[key], r.summary?.[key]);
+
+/** What a record is filed under: the brew's profile, target and coffee (the shot's, or what is on the page now). */
+function thermalInfo(shot = null) {
+  const ctx = shot?.context || readContext();
+  const s = meticulous?.lastStatus;
+  return {
+    shotId: shot?.id || null,
+    profile: shot?.profileName || s?.profile || '',
+    targetC: Number.isFinite(shot?.profileTemperatureC) ? shot.profileTemperatureC : undefined, // else the target that was in force when the brew started
+    machine: machinePanel.info?.name || '',
+    coffee: ctx.beanName || '',
+    roaster: ctx.roaster || '',
+    doseG: Number(ctx.doseG) || null,
+    grind: ctx.grindSize ? String(ctx.grindSize) : '',
+    water: shot?.water || (settings.waterDefault ? settings.water || '' : ''),
+    rule: `${HEAT_RULES[heat.rule]?.short || heat.rule} · ${HEAT_SENSORS[heat.sensor]?.label || heat.sensor} · ± ${fmt(heat.toleranceC, 1)} °C · hold ${fmt(heat.holdSec, 0)} s`,
+    source: shot?.source === 'demo' ? 'demo' : 'live',
+  };
 }
 
-const fmtSpan = (sec) => (sec >= 90 ? `${Math.floor(sec / 60)} min ${Math.round(sec % 60)} s` : `${Math.round(sec)} s`);
-
-/** The brew a warm-up belongs to: the loaded profile and its temperature, the machine's state, the rule, the coffee. */
-function heatBrewDetails(data = machinePanel.heatingData()) {
-  const s = meticulous?.lastStatus || data.lastStatus || null;
-  const ctx = readContext();
-  const lastShot = state.shots.find((x) => !x.inProgress);
-  const rows = data.rows;
-  const last = rows[rows.length - 1] || {};
-  const span = rows.length > 1 ? rows[rows.length - 1].t - rows[0].t : 0;
-  const machine = machinePanel.info?.name || 'Meticulous';
-  const profile = s?.profile || '';
-  const target = heat.targetC !== null ? `${fmt(heat.targetC, 1)} °C` : 'unknown';
-  const phase = heat.since && heat.lastAt ? `${heat.phase} for ${fmtSpan(Math.max(0, (heat.lastAt - heat.since) / 1000))}` : heat.phase;
-  const coffee = [ctx.beanName, ctx.roaster].filter(Boolean).join(' · ');
-  const recipe = [ctx.doseG ? `${fmt(Number(ctx.doseG), 1)} g` : null, ctx.grindSize || null, ctx.grinderName || null].filter(Boolean).join(' · ');
-  const lastBrew = lastShot ? `${fmtDate(lastShot.startedAt)} · ${lastShot.profileName || 'no profile'} · ${fmt(beverageOf(lastShot), 1)} g in ${fmt(lastShot.durationSec, 1)} s` : '';
-  const info = [
-    ['When', fmtDate(Date.now())],
-    ['Machine', machine],
-    ['Profile', profile || 'none loaded'],
-    ['Target temperature', target],
-    ['Machine state', s ? [s.name, s.state].filter(Boolean).join(' / ') || 'idle' : 'not connected'],
-    ['Ready to brew', s ? heat.describe() : 'not connected'],
-    ['Rule', `${HEAT_RULES[heat.rule]?.label || heat.rule} · reading: ${HEAT_SENSORS[heat.sensor]?.label || heat.sensor} · ± ${fmt(heat.toleranceC, 1)} °C · hold ${fmt(heat.holdSec, 0)} s`],
-    ['Phase', phase],
-    ['Coffee', coffee],
-    ['Dose and grind', recipe],
-    ['Water', settings.water || ''],
-    ['Last brew', lastBrew],
-    ['Graph', `${fmtSpan(span)} of readings (${rows.length}), the last ${Math.round(data.windowSec / 60)} minutes at most`],
-  ].filter(([, v]) => v);
-  const readings = [
-    ['Status temperature', Number.isFinite(last.status) ? `${fmt(last.status, 1)} °C` : ''],
-    ['External 1 (boiler side)', Number.isFinite(last.ext1) ? `${fmt(last.ext1, 1)} °C` : ''],
-    ['External 2 (brew head)', Number.isFinite(last.ext2) ? `${fmt(last.ext2, 1)} °C` : ''],
-    ['Heater bar (up / mid / down)', [last.barUp, last.barMid, last.barDown].some(Number.isFinite) ? `${fmt(last.barUp, 1)} / ${fmt(last.barMid, 1)} / ${fmt(last.barDown, 1)} °C` : ''],
-    ['Tube', Number.isFinite(last.tube) ? `${fmt(last.tube, 1)} °C` : ''],
-    ['Motor', Number.isFinite(last.motor) ? `${fmt(last.motor, 1)} °C` : ''],
-    ['Heater power', Number.isFinite(last.heater) ? `${fmt(last.heater, 0)} %` : ''],
-  ].filter(([, v]) => v);
-  const lines = [
-    `${fmtDate(Date.now())} · ${machine} · ${fmtSpan(span)} of readings`,
-    `Profile: ${profile || 'none loaded'} · target ${target} · machine: ${s ? [s.name, s.state].filter(Boolean).join(' / ') || 'idle' : 'not connected'}`,
-    `Ready to brew: ${s ? heat.describe() : 'not connected'}`,
-    [coffee && `Coffee: ${coffee}`, recipe, lastBrew && `last brew ${lastBrew}`].filter(Boolean).join(' · '),
-  ];
-  const events = data.events.slice(-14).map((e) => [new Date(e.wall).toLocaleTimeString(), `${e.name}${e.state && e.state !== e.name ? ` (${e.state})` : ''}`]);
-  return { title: 'Heating — temperatures and power', subtitle: `${fmtDate(Date.now())} · ${machine}${profile ? ` · ${profile}` : ''}`, profile, info, readings, lines, events };
+/**
+ * The readings in memory as a record. With a shot: its warm-up (back to the
+ * end of the brew before it, 30 minutes at most), the brew and what followed.
+ * Without one: the last `sinceSec` seconds, filed under the brew found in them.
+ */
+function captureThermal({ shot = null, sinceSec = null } = {}) {
+  const { rows } = machinePanel.heatingData({ sinceSec: shot ? null : sinceSec });
+  if (rows.length < 2) return null;
+  const spans = brewSpans(rows);
+  let brew = null;
+  let fromWall = -Infinity;
+  if (shot) {
+    brew = { startWall: shot.startedAt, endWall: shot.startedAt + Math.max(1, shot.durationSec) * 1000 };
+    if (rows[rows.length - 1].wall < brew.startWall) return null; // nothing was read during this brew
+    const before = spans.filter((x) => x.endWall < brew.startWall - 5000).pop();
+    if (before) fromWall = before.endWall + 10000;
+  } else if (spans.length) {
+    brew = spans[spans.length - 1];
+    shot = matchShot(state.shots, brew);
+    if (shot) brew = { startWall: shot.startedAt, endWall: shot.startedAt + Math.max(1, shot.durationSec) * 1000 };
+  }
+  return buildRecord({ rows, brew, fromWall, info: thermalInfo(shot) });
 }
 
-let heatInfoText = '';
-/** The line under the graphs that says what a saved graph will carry. */
+async function keepThermal(rec, { quiet = false } = {}) {
+  await store.putThermal(rec);
+  log.info('thermal', `kept temperatures and power ${rec.id}: ${rec.n} readings, ${fmtSpan(rec.summary.spanSec)}${rec.brewSec > 0 ? `, brew of ${fmt(rec.brewSec, 1)} s` : ', no brew'}`);
+  await refreshThermalList();
+  if (!quiet) toast('Kept — listed under History → Temperatures and power.');
+  return rec;
+}
+
+async function refreshThermalList() {
+  const all = await store.listThermal();
+  tp.list = all.map(({ cols, ...rest }) => rest); // the readings stay in the database until a record is opened
+  for (const id of [...tp.checked]) if (!tp.list.some((r) => r.id === id)) tp.checked.delete(id);
+  renderThermalList();
+  renderThermalPanel();
+}
+
+/** The Shots tab follows the shown shot: its temperatures and power when there are any, else the machine now. */
+async function syncThermalToShot() {
+  const shot = state.selected;
+  let rec = null;
+  if (shot) {
+    const kept = tp.list.find((r) => r.shotId === shot.id);
+    if (kept) rec = await store.getThermal(kept.id);
+    if (!rec && tp.latest?.shotId === shot.id) rec = tp.latest;
+  }
+  tp.shotRecord = rec || null;
+  if (recorder.isRecording) tp.mode = 'live';
+  else if (rec) {
+    tp.mode = 'brew';
+    tp.record = rec;
+  } else {
+    tp.mode = 'live';
+    tp.record = null;
+  }
+  renderThermalPanel();
+}
+
+function setThermalMode(mode) {
+  if (mode === 'brew') {
+    const rec = tp.record || tp.shotRecord; // the record last shown (a shot's, or one opened from History), else the shown shot's
+    if (!rec) return;
+    tp.record = rec;
+    tp.mode = 'brew';
+  } else tp.mode = 'live';
+  renderThermalPanel();
+}
+
+/** One line of a record's main numbers. */
+function thermalLine(r) {
+  const s = r.summary || {};
+  if (!(s.brewSec > 0)) return `No brew in these readings · ${fmtSpan(s.spanSec)} · status temperature ${fmt(s.minC, 1)}–${fmt(s.maxC, 1)} °C${Number.isFinite(s.heaterMeanPct) ? ` · heater ${fmt(s.heaterMeanPct, 0)} % on average` : ''}`;
+  return [
+    Number.isFinite(s.startStatusC) ? `Brew started at ${fmt(s.startStatusC, 1)} °C${Number.isFinite(s.targetC) ? ` (target ${fmt(s.targetC, 1)} °C, ${tpValue(r, 'startOffsetC')})` : ''}` : null,
+    Number.isFinite(s.brewMeanC) ? `in the brew ${fmt(s.brewMeanC, 1)} °C on average, ${fmt(s.brewMinC, 1)}–${fmt(s.brewMaxC, 1)} °C` : null,
+    Number.isFinite(s.heaterBrewPct) ? `heater ${fmt(s.heaterBrewPct, 0)} %` : null,
+    Number.isFinite(s.warmupSec) ? `warm-up ${fmtSpan(s.warmupSec)}` : null,
+  ].filter(Boolean).join(' · ');
+}
+
+let tpInfoText = null;
+/** The Shots tab's Temperatures and power panel: which readings the graphs show and what the buttons do. */
+function renderThermalPanel() {
+  if (!$('tp-live')) return;
+  const brew = tp.mode === 'brew' && tp.record;
+  if (!brew) tp.mode = 'live';
+  $('tp-live').setAttribute('aria-pressed', String(!brew));
+  $('tp-brew').setAttribute('aria-pressed', String(!!brew));
+  $('tp-brew').disabled = !(tp.shotRecord || tp.record);
+  $('tp-window-field').hidden = !!brew;
+  $('tp-tiles').hidden = !!brew; // the tiles are the machine now, not the brew on screen
+  const save = $('tp-save');
+  if (brew) {
+    const kept = tp.list.some((r) => r.id === tp.record.id);
+    if (machinePanel.view.record !== tp.record) machinePanel.showRecord(tp.record);
+    $('temps-note').textContent = `${thermalLabel(tp.record)} — ${kept ? 'kept in History' : 'not kept yet'}`;
+    save.disabled = kept;
+    save.textContent = kept ? 'Saved ✓' : 'Save to History';
+    tpInfoText = thermalLine(tp.record);
+    $('heat-brew-info').textContent = tpInfoText;
+  } else {
+    if (machinePanel.view.mode !== 'live') machinePanel.showLive();
+    const min = Math.round(machinePanel.windowSec / 60);
+    $('temps-note').textContent = `Live: the last ${min} minutes${settings.heatKeep ? ' · every brew is kept in History' : ''}`;
+    save.disabled = machinePanel.tempBuf.length < 2;
+    save.textContent = 'Save to History';
+    tpInfoText = null;
+    renderHeatBrewInfo();
+  }
+  for (const id of ['heat-save-jpeg', 'heat-save-pdf', 'heat-save-csv']) $(id).disabled = !brew && machinePanel.tempBuf.length < 2;
+}
+
+/** Live: the line above the graphs — what the machine is heating for. Called with every status, so it only writes on a change. */
 function renderHeatBrewInfo() {
   const el = $('heat-brew-info');
-  if (!el) return;
-  if (!settings.heatSaveGraph) {
-    el.hidden = true;
-    return;
-  }
-  if ($('view-machine').hidden && heatInfoText !== null) return; // nobody is looking
+  if (!el || tp.mode !== 'live') return;
+  if ($('view-shots').hidden && tpInfoText !== null) return; // nobody is looking
   const s = meticulous?.lastStatus;
-  const ctx = readContext();
-  const coffee = [ctx.beanName, ctx.roaster].filter(Boolean).join(' · ');
   const text = s
-    ? `Saved with the graph: ${s.profile || 'no profile loaded'}${heat.targetC !== null ? ` · target ${fmt(heat.targetC, 1)} °C` : ''} · ${heat.describe()}${coffee ? ` · ${coffee}` : ''}`
-    : 'Connect the machine: the graph is saved with the loaded profile and its temperature, the ready-to-brew state and the coffee.';
-  if (text !== heatInfoText) {
-    heatInfoText = text;
+    ? `${s.profile || 'No profile loaded'} · ${heat.describe()}`
+    : 'Connect the machine to see its temperatures and power here; the newest brew\'s readings stay on screen after it ends.';
+  if (text !== tpInfoText) {
+    tpInfoText = text;
     el.textContent = text;
+    const dis = machinePanel.tempBuf.length < 2;
+    if ($('tp-save').disabled !== dis) renderThermalPanel(); // the first readings have arrived
   }
-  el.hidden = false;
 }
 
+/** The record the panel's buttons act on: the shown brew, or the live graphs as they stand. */
+function shownThermal() {
+  return tp.mode === 'brew' && tp.record ? tp.record : captureThermal({ sinceSec: machinePanel.windowSec });
+}
+
+async function saveThermalNow() {
+  const rec = shownThermal();
+  if (!rec) return toast('No temperature readings yet — connect the machine first.', 'error');
+  await keepThermal(rec);
+  if (tp.mode === 'live' && rec.shotId && rec.shotId === state.selected?.id) await syncThermalToShot(); // it now belongs to the shown shot
+  else renderThermalPanel();
+}
+
+/** What a saved picture or report says about a record. */
+function thermalDetails(rec) {
+  const s = rec.summary;
+  const coffee = [rec.coffee, rec.roaster].filter(Boolean).join(' · ');
+  const hasBrew = s.brewSec > 0;
+  const info = [
+    [hasBrew ? 'Brew started' : 'Readings from', fmtDate(rec.at)],
+    ['Machine', rec.machine],
+    ['Profile', rec.profile || 'unknown'],
+    ['Target temperature', tpValue(rec, 'targetC')],
+    ['Coffee', coffee],
+    ['Dose and grind', [rec.doseG ? `${fmt(rec.doseG, 1)} g` : null, rec.grind || null].filter(Boolean).join(' · ')],
+    ['Water', rec.water],
+    ['Ready-to-brew rule', rec.rule],
+    ['Record', `${fmtSpan(s.spanSec)} of readings (${s.readings})${hasBrew ? ` — ${fmtSpan(s.leadSec)} before the brew, ${fmt(s.brewSec, 1)} s of brew, ${fmtSpan(s.tailSec)} after` : ' — no brew'}`],
+    ['Note', rec.note],
+  ].filter(([, v]) => v && v !== '–');
+  const readings = SUMMARY_FIELDS.filter((f) => !['targetC', 'readings', 'brewSec'].includes(f.key)).map((f) => [f.label, fmtSummary(f, s[f.key])]).filter(([, v]) => v !== '–');
+  const lines = [
+    `${fmtDate(rec.at)} · ${rec.machine || 'Meticulous'} · ${fmtSpan(s.spanSec)} of readings`,
+    `Profile: ${rec.profile || 'unknown'} · target ${tpValue(rec, 'targetC')}${coffee ? ` · Coffee: ${coffee}` : ''}`,
+    thermalLine(rec),
+  ];
+  const events = (rec.events || []).slice(-16).map((e) => [`${e.t.toFixed(0)} s`, `${e.name}${e.state && e.state !== e.name ? ` (${e.state})` : ''}`]);
+  return { title: 'Temperatures and power', subtitle: `${fmtDate(rec.at)}${rec.machine ? ` · ${rec.machine}` : ''}${rec.profile ? ` · ${rec.profile}` : ''}`, info, readings, readingsTitle: hasBrew ? 'The brew in numbers' : 'The readings in numbers', lines, events };
+}
+
+const thermalCharts = () => [{ u: machinePanel.tempChart, caption: 'Temperatures (°C) — time from the start of the brew' }, { u: machinePanel.powerChart, caption: 'Heater and motor power (%), piston position' }];
+
+/** The panel's JPEG / PDF / CSV buttons: what the graphs show, downloaded. */
 async function saveHeating(kind) {
-  if ($('view-machine').hidden) showView('machine');
-  const data = machinePanel.heatingData();
-  if (!data.rows.length) return toast('No temperature readings yet — connect the machine first.', 'error');
+  if ($('view-shots').hidden) showView('shots');
+  const rec = shownThermal();
+  if (!rec) return toast('No temperature readings yet — connect the machine first.', 'error');
   try {
-    const b = heatBrewDetails(data);
-    const base = `heating-${stamp(Date.now())}${b.profile ? `-${slug(b.profile)}` : ''}`;
+    const b = thermalDetails(rec);
+    const base = thermalFileBase(rec);
     const via = { via: 'browser' };
     if (kind === 'csv') {
-      await deliver(`${base}.csv`, heatingCsv(data.rows), 'text/csv', 'exports', via);
+      await deliver(`${base}.csv`, rowsToCsv(thermalCsvRows(rec)), 'text/csv', 'exports', via);
     } else {
-      const image = await heatingJpeg([{ u: machinePanel.tempChart, caption: 'Temperatures (°C)' }, { u: machinePanel.powerChart, caption: 'Heater and motor power (%), piston position' }], { title: b.title, lines: b.lines });
+      const image = await heatingJpeg(thermalCharts(), { title: b.title, lines: b.lines });
       if (kind === 'jpeg') await deliver(`${base}.jpg`, image.blob, 'image/jpeg', 'reports', via);
       else await deliver(`${base}.pdf`, await heatingPdf({ ...b, image }), 'application/pdf', 'reports', via);
     }
-    log.info('export', `heating graph saved as ${kind} (${data.rows.length} readings)`);
+    log.info('export', `temperatures and power saved as ${kind} (${rec.n} readings)`);
   } catch (err) {
-    toast(`Could not save the heating graph: ${err?.message || err}`, 'error');
-    log.warn('export', `heating graph (${kind}) failed: ${err?.message || err}`);
+    toast(`Could not save the graph: ${err?.message || err}`, 'error');
+    log.warn('export', `temperatures and power (${kind}) failed: ${err?.message || err}`);
   }
 }
 $('heat-save-jpeg').addEventListener('click', () => saveHeating('jpeg'));
 $('heat-save-pdf').addEventListener('click', () => saveHeating('pdf'));
 $('heat-save-csv').addEventListener('click', () => saveHeating('csv'));
+$('tp-save').addEventListener('click', () => saveThermalNow().catch((err) => toast(`Could not keep the readings: ${err?.message || err}`, 'error')));
+$('tp-live').addEventListener('click', () => setThermalMode('live'));
+$('tp-brew').addEventListener('click', () => setThermalMode('brew'));
+$('tp-window').addEventListener('change', (e) => {
+  machinePanel.setWindow(Number(e.target.value));
+  store.setSetting('tpWindow', machinePanel.windowSec).catch(() => {});
+  renderThermalPanel();
+});
+
+// ---- History → Temperatures and power: the kept records
+
+function thermalMatches(r) {
+  const q = tp.search.trim().toLowerCase();
+  return !q || [r.coffee, r.roaster, r.profile, r.note, r.machine, fmtDate(r.at)].filter(Boolean).join(' ').toLowerCase().includes(q);
+}
+const thermalSortValue = (r, key) => (key === 'coffee' || key === 'profile' ? (r[key] || '').toLowerCase() : key === 'at' ? r.at : Number.isFinite(r.summary?.[key]) ? r.summary[key] : -Infinity);
+
+function renderThermalList() {
+  const tbody = $('tp-rows');
+  if (!tbody) return;
+  const rows = tp.list.filter(thermalMatches);
+  const dir = tp.dir === 'asc' ? 1 : -1;
+  rows.sort((a, b) => {
+    const x = thermalSortValue(a, tp.sort);
+    const y = thermalSortValue(b, tp.sort);
+    return (x < y ? -1 : x > y ? 1 : 0) * dir || b.at - a.at;
+  });
+  document.querySelectorAll('#tp-table th[data-sort]').forEach((th) => th.setAttribute('aria-sort', th.dataset.sort === tp.sort ? (tp.dir === 'asc' ? 'ascending' : 'descending') : 'none'));
+  const total = tp.list.length;
+  $('tp-count').textContent = total ? (rows.length === total ? `(${total})` : `(${rows.length} of ${total})`) : '';
+  $('tp-empty').hidden = total > 0;
+  $('hist-thermal-note').textContent = total ? `${total} kept record${total === 1 ? '' : 's'} — compare, analyze, export or delete the ticked ones.` : 'The temperatures, heater and motor power kept with a brew.';
+  tbody.innerHTML = '';
+  for (const r of rows) {
+    const s = r.summary || {};
+    const when = new Date(r.at);
+    const shot = r.shotId ? state.shots.find((x) => x.id === r.shotId) : null;
+    const tr = document.createElement('tr');
+    tr.dataset.id = r.id;
+    if (tp.record?.id === r.id && tp.mode === 'brew') tr.classList.add('selected');
+    const hasBrew = s.brewSec > 0;
+    tr.innerHTML = `<td class="sel"><input type="checkbox" aria-label="Select record" ${tp.checked.has(r.id) ? 'checked' : ''} /></td>` +
+      `<td class="when">${esc(when.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }))}<small>${esc(when.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }))}${hasBrew ? '' : ' · no brew'}</small></td>` +
+      `<td class="coffee">${esc(r.coffee || 'no bean')}${r.roaster || r.note ? `<small>${esc([r.roaster, r.note].filter(Boolean).join(' · '))}</small>` : ''}</td>` +
+      `<td class="prof">${esc(r.profile || '–')}</td>` +
+      `<td class="num">${esc(tpValue(r, 'targetC'))}</td>` +
+      `<td class="num">${hasBrew && Number.isFinite(s.startStatusC) ? `${fmt(s.startStatusC, 1)} °C${Number.isFinite(s.startOffsetC) ? ` <small>${esc(tpValue(r, 'startOffsetC').replace(' °C', ''))}</small>` : ''}` : '–'}</td>` +
+      `<td class="num">${hasBrew && Number.isFinite(s.brewMeanC) ? `${fmt(s.brewMeanC, 1)} °C <small>${fmt(s.brewMinC, 1)}–${fmt(s.brewMaxC, 1)}</small>` : '–'}</td>` +
+      `<td class="num">${Number.isFinite(hasBrew ? s.heaterBrewPct : s.heaterMeanPct) ? `${fmt(hasBrew ? s.heaterBrewPct : s.heaterMeanPct, 0)} %` : '–'}</td>` +
+      `<td class="num">${esc(tpValue(r, 'warmupSec'))}</td>` +
+      `<td class="num">${esc(fmtSpan(s.spanSec))} <small>${Number(s.readings) || 0}</small></td>` +
+      `<td class="data">${shot ? '<span class="tag on" title="belongs to a brew under Brews">brew</span>' : '<span class="tag off" title="its brew is not under Brews (not recorded, or deleted)">no brew record</span>'}${r.source === 'demo' ? '<span class="tag off">demo</span>' : ''}</td>` +
+      `<td class="actions"><button class="btn small" data-act="open" title="Show this record's graphs on the Shots tab">Open</button><button class="btn small danger" data-act="delete">Delete</button></td>`;
+    tbody.appendChild(tr);
+  }
+  const n = tp.checked.size;
+  const label = (id, text, on) => {
+    $(id).disabled = !on;
+    $(id).textContent = n ? `${text} (${n})` : text;
+  };
+  label('tp-compare', 'Compare selected', n >= 2 && n <= THERMAL_MAX);
+  $('tp-compare').title = n > THERMAL_MAX ? `Up to ${THERMAL_MAX} records can be overlaid at once` : 'Overlay the ticked records, lined up at the moment each brew started (2–8)';
+  label('tp-analyze', 'Analyze selected', n >= 1 && n <= THERMAL_MAX);
+  label('tp-export', 'Export selected', n >= 1);
+  label('tp-delete-selected', 'Delete selected', n >= 1);
+  const all = $('tp-select-all');
+  all.checked = rows.length > 0 && rows.every((r) => tp.checked.has(r.id));
+  all.indeterminate = !all.checked && rows.some((r) => tp.checked.has(r.id));
+  if (tp.cmp.ids.length && tp.cmp.ids.some((id) => !tp.list.some((r) => r.id === id))) {
+    tp.cmp.ids = tp.cmp.ids.filter((id) => tp.list.some((r) => r.id === id));
+    if (tp.cmp.ids.length < 2) closeThermalCompare();
+    else renderThermalCompare().catch(() => {});
+  }
+  if (tp.an.ids.length && tp.an.ids.some((id) => !tp.list.some((r) => r.id === id))) closeThermalAnalysis();
+}
+
+/** Show a kept record on the Shots tab — with its brew when the brew is still there. */
+async function openThermal(id) {
+  const rec = await store.getThermal(id);
+  if (!rec) return;
+  if (rec.shotId && state.shots.some((x) => x.id === rec.shotId && !x.inProgress)) await selectShot(rec.shotId);
+  else {
+    tp.record = rec;
+    tp.mode = 'brew';
+    renderThermalPanel();
+  }
+  showView('shots', { open: 'temps' });
+}
+
+async function deleteThermal(ids) {
+  ids = ids.filter((id) => tp.list.some((r) => r.id === id));
+  if (!ids.length) return;
+  const first = tp.list.find((r) => r.id === ids[0]);
+  const ok = await confirmDialog({
+    title: ids.length === 1 ? 'Delete these temperatures and power?' : `Delete ${ids.length} records?`,
+    body: ids.length === 1 ? `${thermalLabel(first)}: the kept readings are removed from this browser. The brew itself stays under Brews; files already exported stay where they are.` : `${ids.length} records of temperatures and power are removed from this browser. Their brews stay under Brews; files already exported stay where they are.`,
+    action: ids.length === 1 ? 'Delete record' : `Delete ${ids.length} records`,
+  });
+  if (!ok) return;
+  for (const id of ids) {
+    await store.deleteThermal(id);
+    tp.checked.delete(id);
+    if (tp.latest?.id === id) tp.latest = null;
+  }
+  log.info('thermal', `deleted ${ids.length} record(s): ${ids.join(', ')}`);
+  if (tp.record && ids.includes(tp.record.id)) {
+    tp.record = null;
+    tp.mode = 'live';
+  }
+  await refreshThermalList();
+  await syncThermalToShot();
+  toast(ids.length === 1 ? 'Record deleted.' : `${ids.length} records deleted.`);
+}
+
+$('tp-rows').addEventListener('click', (ev) => {
+  const tr = ev.target.closest('tr[data-id]');
+  if (!tr) return;
+  const id = tr.dataset.id;
+  if (ev.target.matches('input[type="checkbox"]')) {
+    if (ev.target.checked) tp.checked.add(id);
+    else tp.checked.delete(id);
+    return renderThermalList();
+  }
+  const act = ev.target.closest('button[data-act]')?.dataset.act;
+  if (act === 'open') return openThermal(id);
+  if (act === 'delete') return deleteThermal([id]);
+  // a click on the row ticks it, as a click on its box would
+  if (tp.checked.has(id)) tp.checked.delete(id);
+  else tp.checked.add(id);
+  renderThermalList();
+});
+$('tp-rows').addEventListener('dblclick', (ev) => {
+  const tr = ev.target.closest('tr[data-id]');
+  if (tr && !ev.target.closest('button, input')) openThermal(tr.dataset.id);
+});
+$('tp-select-all').addEventListener('change', (e) => {
+  for (const r of tp.list.filter(thermalMatches)) {
+    if (e.target.checked) tp.checked.add(r.id);
+    else tp.checked.delete(r.id);
+  }
+  renderThermalList();
+});
+$('tp-search').addEventListener('input', (e) => {
+  tp.search = e.target.value;
+  renderThermalList();
+});
+document.querySelectorAll('#tp-table th[data-sort]').forEach((th) =>
+  th.addEventListener('click', () => {
+    if (tp.sort === th.dataset.sort) tp.dir = tp.dir === 'asc' ? 'desc' : 'asc';
+    else {
+      tp.sort = th.dataset.sort;
+      tp.dir = th.dataset.sort === 'coffee' || th.dataset.sort === 'profile' ? 'asc' : 'desc';
+    }
+    renderThermalList();
+  }),
+);
+
+// ---- the two folding sections of History (Brews, Temperatures and power)
+
+const histSections = () => [...document.querySelectorAll('#view-history details.hist-section')];
+function openHistorySection(name) {
+  const d = histSections().find((x) => x.dataset.hist === name);
+  if (!d) return;
+  d.open = true;
+  d.closest('section').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+async function applyHistorySections() {
+  const saved = await store.getSetting('histOpen', null);
+  for (const d of histSections()) if (saved && typeof saved[d.dataset.hist] === 'boolean') d.open = saved[d.dataset.hist];
+}
+for (const d of histSections()) {
+  d.addEventListener('toggle', () => {
+    if (erasing) return;
+    store.setSetting('histOpen', Object.fromEntries(histSections().map((x) => [x.dataset.hist, x.open]))).catch(() => {});
+    if (d.open && d.dataset.hist === 'thermal') renderThermalList();
+  });
+}
+
+// ---- compare: the ticked records overlaid, each counted from the start of its brew
+
+async function loadThermal(ids) {
+  const out = [];
+  for (const id of ids) {
+    const r = await store.getThermal(id);
+    if (r) out.push(r);
+  }
+  return out;
+}
+
+async function openThermalCompare(ids) {
+  tp.cmp.ids = ids.slice(0, THERMAL_MAX);
+  $('tp-compare-panel').hidden = false;
+  await renderThermalCompare();
+  $('tp-compare-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  log.info('thermal', `comparing ${tp.cmp.ids.length} records: ${tp.cmp.ids.join(', ')}`);
+}
+
+function closeThermalCompare() {
+  tp.cmp.ids = [];
+  $('tp-compare-panel').hidden = true;
+  tpTempChart.setSeries([]);
+  tpPowerChart.setSeries([]);
+  $('tp-cmp-legend').innerHTML = '';
+}
+
+async function renderThermalCompare() {
+  const recs = await loadThermal(tp.cmp.ids);
+  $('tp-cmp-count').textContent = `(${recs.length})`;
+  const span = compareRange(recs, tp.cmp.range);
+  const draw = (chart, key) => {
+    const def = THERMAL_SERIES[key];
+    chart.setSeries(
+      recs.map((r, i) => ({ label: thermalLabel(r), color: COMPARE_COLORS[i % COMPARE_COLORS.length], ...seriesOf(r, key, span) })),
+      { xLabel: 'Time from the start of the brew (s)', xUnit: 's', xDigits: 1, yLabel: `${def.label.replace(/ \(.*\)$/, '')}${def.unit ? ` (${def.unit})` : ''}`, yUnit: def.unit, yDigits: def.digits },
+    );
+  };
+  draw(tpTempChart, tp.cmp.temp);
+  draw(tpPowerChart, tp.cmp.power);
+  $('tp-cmp-legend').innerHTML = '<thead><tr><th></th><th>Brew started</th><th>Coffee</th><th>Profile</th><th class="num">Target</th><th class="num">At start</th><th class="num">vs target</th><th class="num">Mean in brew</th><th class="num">Lowest–highest</th><th class="num">Heater in brew</th><th class="num">Warm-up</th><th></th></tr></thead><tbody>' +
+    recs.map((r, i) => {
+      const s = r.summary;
+      return `<tr data-id="${esc(r.id)}"><td><span class="swatch" style="background:${COMPARE_COLORS[i % COMPARE_COLORS.length]}"></span></td>` +
+        `<td>${esc(fmtDate(r.at))}${s.brewSec > 0 ? '' : '<br><small>no brew — drawn from its first reading</small>'}</td>` +
+        `<td class="coffee">${esc([r.coffee, r.roaster].filter(Boolean).join(' · ') || '–')}</td><td>${esc(r.profile || '–')}</td>` +
+        `<td class="num">${esc(tpValue(r, 'targetC'))}</td><td class="num">${esc(tpValue(r, 'startStatusC'))}</td><td class="num">${esc(tpValue(r, 'startOffsetC'))}</td>` +
+        `<td class="num">${esc(tpValue(r, 'brewMeanC'))}</td><td class="num">${Number.isFinite(s.brewMinC) ? `${fmt(s.brewMinC, 1)}–${fmt(s.brewMaxC, 1)} °C` : '–'}</td>` +
+        `<td class="num">${esc(tpValue(r, 'heaterBrewPct'))}</td><td class="num">${esc(tpValue(r, 'warmupSec'))}</td>` +
+        '<td><button class="linkish" data-act="open">Open</button></td></tr>';
+    }).join('') + '</tbody>';
+}
+
+for (const [id, keys] of [['tp-cmp-temp', TEMP_KEYS], ['tp-cmp-power', POWER_KEYS]]) $(id).innerHTML = keys.map((k) => `<option value="${k}">${esc(THERMAL_SERIES[k].label)}</option>`).join('');
+$('tp-cmp-temp').addEventListener('change', (e) => { tp.cmp.temp = e.target.value; renderThermalCompare(); });
+$('tp-cmp-power').addEventListener('change', (e) => { tp.cmp.power = e.target.value; renderThermalCompare(); });
+$('tp-cmp-range').addEventListener('change', (e) => { tp.cmp.range = e.target.value; renderThermalCompare(); });
+$('tp-cmp-close').addEventListener('click', closeThermalCompare);
+$('tp-cmp-legend').addEventListener('click', (e) => {
+  const tr = e.target.closest('tr[data-id]');
+  if (tr && e.target.closest('[data-act="open"]')) openThermal(tr.dataset.id);
+});
+$('tp-cmp-jpeg').addEventListener('click', async () => {
+  if (!tpTempChart.u && !tpPowerChart.u) return toast('Nothing to save: the selected records have no readings for these graphs.', 'error');
+  try {
+    const charts = [[tpTempChart, tp.cmp.temp], [tpPowerChart, tp.cmp.power]].filter(([c]) => c.u).map(([c, key]) => ({ u: c.u, caption: `${THERMAL_SERIES[key].label}${THERMAL_SERIES[key].unit ? ` (${THERMAL_SERIES[key].unit})` : ''} — time from the start of each brew` }));
+    const image = await heatingJpeg(charts, { title: 'Temperatures and power — comparison', lines: [`${tp.cmp.ids.length} records, lined up at the start of each brew · ${fmtDate(Date.now())}`] });
+    await deliver(`temperatures-comparison-${stamp(Date.now())}.jpg`, image.blob, 'image/jpeg', 'reports', exportsVia());
+  } catch (err) {
+    toast(`Could not save the comparison: ${err?.message || err}`, 'error');
+  }
+});
+
+// ---- analyze: the ticked records' numbers side by side, and what stands out
+
+async function openThermalAnalysis(ids) {
+  tp.an.abort?.abort();
+  tp.an.ids = ids.slice(0, THERMAL_MAX);
+  tp.an.records = await loadThermal(tp.an.ids);
+  tp.an.markdown = '';
+  $('tp-analysis-panel').hidden = false;
+  renderThermalAnalysis();
+  $('tp-analysis-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  log.info('thermal', `analysing ${tp.an.ids.length} record(s)`);
+}
+
+function closeThermalAnalysis() {
+  tp.an.abort?.abort();
+  tp.an.ids = [];
+  tp.an.records = [];
+  tp.an.markdown = '';
+  $('tp-analysis-panel').hidden = true;
+}
+
+function renderThermalAnalysis() {
+  const { rows, findings, fields } = analyzeRecords(tp.an.records, { labelOf: thermalShortLabel(tp.an.records) });
+  $('tp-an-count').textContent = `(${rows.length})`;
+  // the numbers side by side: one column per record; the lowest and highest of a row are marked when they differ
+  const head = `<thead><tr><th></th>${rows.map((r) => `<th class="num">${esc(fmtDate(r.record.at))}<small>${esc([r.record.coffee, r.record.profile].filter(Boolean).join(' · ') || 'no bean')}</small></th>`).join('')}</tr></thead>`;
+  const body = fields.map((f) => {
+    const vals = rows.map((r) => (Number.isFinite(r.s[f.key]) ? Number(r.s[f.key].toFixed(f.digits)) : null)); // compared as they are shown
+    const have = vals.filter(Number.isFinite);
+    if (!have.length) return '';
+    const lo = Math.min(...have);
+    const hi = Math.max(...have);
+    const marked = have.length > 1 && hi > lo && f.key !== 'readings';
+    return `<tr><th>${esc(f.label)}</th>${vals.map((v, i) => `<td class="num${marked && v === lo ? ' lo' : marked && v === hi ? ' hi' : ''}">${esc(fmtSummary(f, rows[i].s[f.key]))}</td>`).join('')}</tr>`;
+  }).join('');
+  $('tp-an-table').innerHTML = `${head}<tbody>${body}</tbody>`;
+  $('tp-an-findings').innerHTML = findings.length ? findings.map((x) => `<li>${esc(x)}</li>`).join('') : '<li>These records hold too few readings to say anything about them.</li>';
+  renderThermalAi();
+}
+
+function renderThermalAi() {
+  const { key, provider } = aiConfig();
+  const label = PROVIDERS[provider].label.replace(/ \(.*\)$/, '');
+  $('tp-an-ai').textContent = `Ask ${label}…`;
+  $('tp-an-ai').disabled = tp.an.running || !tp.an.records.length;
+  $('tp-an-ai').title = key ? `Send these numbers to ${label} and show its reading of them` : 'Add an API key under Settings → AI review first';
+  $('tp-an-stop').hidden = !tp.an.running;
+  const el = $('tp-an-report');
+  el.hidden = !tp.an.markdown && !tp.an.running;
+  if (!el.hidden) el.innerHTML = renderMarkdown(tp.an.markdown) + (tp.an.running ? '<p class="streaming">…</p>' : '');
+}
+
+function thermalAnalysisText() {
+  const { rows, findings, fields } = analyzeRecords(tp.an.records, { labelOf: thermalLabel });
+  const lines = ['Temperatures and power — analysis', ''];
+  for (const r of rows) lines.push(r.label, ...fields.map((f) => `  ${f.label}: ${fmtSummary(f, r.s[f.key])}`), '');
+  if (findings.length) lines.push('What stands out', ...findings.map((x) => `- ${x}`));
+  return lines.join('\n');
+}
+
+async function askThermalAi() {
+  if (tp.an.running || !tp.an.records.length) return;
+  const cfg = aiConfig();
+  const status = $('tp-an-status');
+  if (!cfg.key) {
+    status.textContent = `No API key for ${PROVIDERS[cfg.provider].label} yet — add one under Settings → AI review.`;
+    return;
+  }
+  const ctrl = new AbortController();
+  tp.an.abort = ctrl;
+  tp.an.running = true;
+  tp.an.markdown = '';
+  status.textContent = `Asking ${PROVIDERS[cfg.provider].label} (${cfg.model})…`;
+  renderThermalAi();
+  let timer = null;
+  try {
+    await streamCompletion(
+      cfg.provider,
+      { key: cfg.key, model: cfg.model, baseUrl: cfg.baseUrl, system: THERMAL_AI_SYSTEM, user: thermalDigest(tp.an.records, { labelOf: thermalLabel }), maxTokens: 3000 },
+      {
+        signal: ctrl.signal,
+        onRetry: (err) => log.warn('ai', `${cfg.model} refused a sampling parameter (${err.detail || err.message}); retrying without it`),
+        onDelta: (d) => {
+          tp.an.markdown += d;
+          if (!timer) timer = setTimeout(() => { timer = null; renderThermalAi(); }, 150);
+        },
+      },
+    );
+    status.textContent = `${PROVIDERS[cfg.provider].label} · ${cfg.model} · ${fmtDate(Date.now())}`;
+    log.info('ai', `temperatures and power: ${tp.an.records.length} record(s) read by ${cfg.model}`);
+  } catch (err) {
+    status.textContent = ctrl.signal.aborted ? 'Stopped.' : `The AI request failed: ${err?.message || err}`;
+    if (!ctrl.signal.aborted) log.warn('ai', `temperatures and power request failed: ${err?.message || err}`);
+  } finally {
+    if (timer) clearTimeout(timer);
+    tp.an.running = false;
+    if (tp.an.abort === ctrl) tp.an.abort = null;
+    renderThermalAi();
+  }
+}
+
+$('tp-an-close').addEventListener('click', closeThermalAnalysis);
+$('tp-an-ai').addEventListener('click', askThermalAi);
+$('tp-an-stop').addEventListener('click', () => tp.an.abort?.abort());
+$('tp-an-copy').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(thermalAnalysisText() + (tp.an.markdown ? `\n\n---\n\n${tp.an.markdown}` : ''));
+    toast('Copied the analysis.');
+  } catch (err) {
+    toast(`Copy failed: ${err?.message || err}`, 'error');
+  }
+});
+$('tp-an-csv').addEventListener('click', () => deliver(`temperatures-analysis-${stamp(Date.now())}.csv`, rowsToCsv(thermalSummaryRows(tp.an.records)), 'text/csv', 'exports', exportsVia()));
+
+// ---- export: a zip of the ticked records
+
+async function exportThermal(ids) {
+  const recs = await loadThermal(ids);
+  if (!recs.length) return toast('None of the selected records is still here.');
+  const prog = $('tp-progress');
+  const out = {};
+  out['temperatures-summary.csv'] = rowsToCsv(thermalSummaryRows(recs));
+  out['README.txt'] = `portal-met-bridge export — temperatures and power — ${new Date().toString()} — ${recs.length} record${recs.length === 1 ? '' : 's'}\n\ntemperatures-summary.csv   one row per record: target, temperature at brew start and during the brew, heater and motor power, warm-up\n<record>/readings.csv      every reading; t_from_brew_start_s is 0 when the brew started, negative during the warm-up\n<record>/record.json       the record as the app keeps it (readings in columns, stage changes, summary)\n<record>/graphs.jpg        the temperature and power graphs\n\nTemperatures are the machine's own sensors, not a measurement in the coffee bed.\n`;
+  const was = { view: VIEWS.find((v) => !$(`view-${v}`).hidden), mode: tp.mode, record: tp.record };
+  showView('shots'); // the graphs are drawn where they can be seen, then photographed
+  let i = 0;
+  for (const rec of recs) {
+    i++;
+    prog.textContent = `Rendering ${i}/${recs.length}…`;
+    let dir = thermalFileBase(rec);
+    for (let k = 2; out[`${dir}/readings.csv`]; k++) dir = `${thermalFileBase(rec)}-${k}`;
+    out[`${dir}/readings.csv`] = rowsToCsv(thermalCsvRows(rec));
+    out[`${dir}/record.json`] = JSON.stringify(rec);
+    try {
+      machinePanel.showRecord(rec);
+      await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 30)));
+      const b = thermalDetails(rec);
+      out[`${dir}/graphs.jpg`] = (await heatingJpeg(thermalCharts(), { title: b.title, lines: b.lines })).blob;
+    } catch (err) {
+      out[`${dir}/ERROR.txt`] = String(err?.message || err);
+    }
+  }
+  tp.mode = was.mode;
+  tp.record = was.record;
+  if (tp.mode === 'brew' && tp.record) machinePanel.showRecord(tp.record);
+  renderThermalPanel();
+  showView(was.view || 'history');
+  prog.textContent = 'Zipping…';
+  try {
+    const blob = await buildZip(out);
+    await deliver(`portal-met-bridge-temperatures-${recs.length}-record${recs.length === 1 ? '' : 's'}-${stamp(Date.now())}.zip`, blob, 'application/zip', 'exports', exportsVia());
+    prog.textContent = `${recs.length} record${recs.length === 1 ? '' : 's'} exported.`;
+    log.info('export', `temperatures and power: ${recs.length} record(s) exported`);
+  } catch (err) {
+    toast('Zip failed: ' + (err.message || err), 'error');
+    prog.textContent = '';
+  }
+  setTimeout(() => (prog.textContent = ''), 6000);
+}
 
 // ----------------------------------------------------------- refractometer --
 // Settings → Refractometer: the guided calibration that follows a brew (zero
@@ -5111,7 +5694,7 @@ $('an-saved-rows').addEventListener('click', async (e) => {
   }
 });
 
-window.__pb = { refCandidate, renderRefractometer, state, store, portal, recorder, timeChart, massChart, calChart, compareChart, compare, machinePanel, settings, log, files, heat, hist, an, piston, communityConfig, communityCache, buildQuery, openQueryDialog, renderMaintenance, get maintenance() { return maintLog; }, get pistonLast() { return pistonLast; }, runAutoBackup, stopEverything, openStopDialog, openShotDialog, openWeightDialog, openRatingDialog, openCompare, openAnalysis, runReview, refreshShotList, recoverUnfinishedShots, backfillMachineRecords, autosaveShotFiles, refreshProfileTargets, get meticulous() { return meticulous; } };
+window.__pb = { tp, captureThermal, keepThermal, refreshThermalList, openThermalCompare, openThermalAnalysis, exportThermal, deleteThermal, tpTempChart, tpPowerChart, refCandidate, renderRefractometer, state, store, portal, recorder, timeChart, massChart, calChart, compareChart, compare, machinePanel, settings, log, files, heat, hist, an, piston, communityConfig, communityCache, buildQuery, openQueryDialog, renderMaintenance, get maintenance() { return maintLog; }, get pistonLast() { return pistonLast; }, runAutoBackup, stopEverything, openStopDialog, openShotDialog, openWeightDialog, openRatingDialog, openCompare, openAnalysis, runReview, refreshShotList, recoverUnfinishedShots, backfillMachineRecords, autosaveShotFiles, refreshProfileTargets, get meticulous() { return meticulous; } };
 
 init().catch((err) => {
   console.error(err);

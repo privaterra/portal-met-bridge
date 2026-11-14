@@ -2,7 +2,9 @@
 // (nickwilsonr/meticulous-addon) exposes as sensors, shown in one page.
 //
 //   Machine status      live state, stage, shot timer, brewing flag, voltage
-//   Temperatures        rolling chart of the socket "sensors" event
+//   Temperatures        the socket "sensors" event — its tiles and graphs live on
+//                       the Shots tab ("Temperatures and power"); this class feeds
+//                       them, live or from a kept record (js/thermal.js)
 //   Profiles            /profile/list with images, targets and variables
 //   Statistics          /history/stats by profile, mileage, last shot
 //   Device info         /machine (firmware, serial, colour, image channel …)
@@ -10,13 +12,14 @@
 //   Settings            /settings, read-only
 
 import uPlot from '../vendor/uPlot.esm.js';
-import { COLORS } from './charts.js?v=0.21.0';
-import { isEndStage } from './meticulous.js?v=0.21.0';
+import { COLORS } from './charts.js?v=0.22.0';
+import { isEndStage } from './meticulous.js?v=0.22.0';
 
 const $ = (id) => document.getElementById(id);
 const font = '12px "Avenir Next", Avenir, system-ui, -apple-system, sans-serif';
-export const WINDOW_SEC = 300; // temperature history kept in memory …
-export const WINDOW_SEC_SAVING = 1800; // … and while the heating graph can be saved (Settings → Heating), so a whole warm-up fits
+export const WINDOW_SEC = 300; // what the live graphs show unless another span is picked …
+export const BUFFER_SEC = 1800; // … and what is kept in memory, so a whole warm-up can be kept with its brew
+export const VIEW_SPANS = [300, 900, 1800];
 
 export class MachinePanel {
   constructor(root) {
@@ -30,8 +33,12 @@ export class MachinePanel {
     this.lastStatusAt = 0;
     this.refreshTimer = null;
     this.chartDirty = false;
-    this.windowSec = WINDOW_SEC;
-    this.events = []; // [{t, wall, name, state}] — the machine's stage changes inside the window
+    this.windowSec = WINDOW_SEC; // the span the live graphs show
+    this.view = { mode: 'live' }; // or { mode: 'record', record } — a kept record instead of the live readings
+    this.brewStartT = null; // page seconds at which the latest brew started and ended (null while none / still running)
+    this.brewEndT = null;
+    this.marks = null; // { from, to } in graph seconds: the brew, shaded
+    this.events = []; // [{t, wall, name, state}] — the machine's stage changes inside the buffer
     this.heatTargetC = null; // set by main.js: the loaded profile's temperature …
     this.heatReady = null; // … and whether the ready-to-brew rule is met
     this._buildCharts();
@@ -70,21 +77,37 @@ export class MachinePanel {
 
   // ------------------------------------------------------------ live data --
 
-  /** How much history the graphs keep: five minutes, or thirty while the heating graph can be saved. */
+  /** How much the live graphs show: the last five, fifteen or thirty minutes. */
   setWindow(sec) {
-    this.windowSec = sec > 0 ? sec : WINDOW_SEC;
-    const note = $('temps-note');
-    if (note) note.textContent = `Last ${this.windowSec >= 120 ? `${Math.round(this.windowSec / 60)} minutes` : `${this.windowSec} seconds`}. Toggle series in the legend.`;
+    this.windowSec = VIEW_SPANS.includes(Number(sec)) ? Number(sec) : WINDOW_SEC;
+    this.chartDirty = true;
+  }
+
+  /** Show the live readings again (after showRecord). */
+  showLive() {
+    this.view = { mode: 'live' };
+    this.chartDirty = true;
+    this._tick();
+  }
+
+  /** Show a kept record (js/thermal.js) instead of the live readings: time runs from its brew start. */
+  showRecord(record) {
+    this.view = { mode: 'record', record };
+    const c = record.cols;
+    this.marks = record.brewSec > 0 ? { from: 0, to: record.brewSec } : null;
+    this.tempChart.setData([c.t, c.status, c.target, c.ext1, c.ext2, c.barUp, c.barMid, c.barDown, c.tube, c.motor]);
+    this.powerChart.setData([c.t, c.heater, c.motorPower, c.motorPos]);
   }
 
   /**
-   * Everything the heating graph shows, for saving: one row per sensors sample
-   * (temperatures, power, piston, and the status that went with it) plus the
-   * stage changes. Times are seconds since the page opened and wall-clock ms.
+   * The readings in memory, for keeping: one row per sensors sample
+   * (temperatures, power, piston, and the status that went with it), the last
+   * `sinceSec` seconds or everything held. Times are wall-clock ms.
    */
-  heatingData() {
+  heatingData({ sinceSec = null } = {}) {
     const power = new Map(this.powerBuf.map((x) => [x.t, x]));
-    const rows = this.tempBuf.map((x) => ({ ...x, ...(power.get(x.t) || {}) }));
+    const cutoff = sinceSec && this.tempBuf.length ? this.tempBuf[this.tempBuf.length - 1].t - sinceSec : -Infinity;
+    const rows = this.tempBuf.filter((x) => x.t >= cutoff).map((x) => ({ ...x, ...(power.get(x.t) || {}) }));
     return { rows, events: this.events.slice(), windowSec: this.windowSec, lastStatus: this.lastStatus };
   }
 
@@ -114,9 +137,14 @@ export class MachinePanel {
     this.lastSensorsAt = performance.now();
     const t = (performance.now() - this.t0) / 1000;
     const st = this.lastStatus;
-    this.tempBuf.push({ t, wall: Date.now(), ext1: n(d.t_ext_1), ext2: n(d.t_ext_2), barUp: n(d.t_bar_up), barMid: avg(n(d.t_bar_mu), n(d.t_bar_md)), barDown: n(d.t_bar_down), tube: n(d.t_tube), motor: n(d.motor_temp ?? d.t_motor_temp), status: n(st?.temp), stage: st?.name ? String(st.name) : '', state: st?.state ? String(st.state) : '', profile: st?.profile ? String(st.profile) : '', target: n(this.heatTargetC), ready: this.heatReady });
+    const brewing = !!st?.extracting;
+    if (brewing && (this.brewStartT === null || this.brewEndT !== null)) {
+      this.brewStartT = t; // a brew has started: the graphs count from here
+      this.brewEndT = null;
+    } else if (!brewing && this.brewStartT !== null && this.brewEndT === null) this.brewEndT = t;
+    this.tempBuf.push({ t, wall: Date.now(), brewing, ext1: n(d.t_ext_1), ext2: n(d.t_ext_2), barUp: n(d.t_bar_up), barMid: avg(n(d.t_bar_mu), n(d.t_bar_md)), barDown: n(d.t_bar_down), tube: n(d.t_tube), motor: n(d.motor_temp ?? d.t_motor_temp), status: n(st?.temp), stage: st?.name ? String(st.name) : '', state: st?.state ? String(st.state) : '', profile: st?.profile ? String(st.profile) : '', target: n(this.heatTargetC), ready: this.heatReady });
     this.powerBuf.push({ t, heater: n(d.bh_pwr), motorPower: n(d.m_pwr), motorPos: n(d.m_pos) });
-    const cutoff = t - this.windowSec;
+    const cutoff = t - BUFFER_SEC;
     while (this.tempBuf.length && this.tempBuf[0].t < cutoff) this.tempBuf.shift();
     while (this.powerBuf.length && this.powerBuf[0].t < cutoff) this.powerBuf.shift();
     while (this.events.length && this.events[0].t < cutoff) this.events.shift();
@@ -139,12 +167,18 @@ export class MachinePanel {
   }
 
   _tick() {
-    if (this.chartDirty && this.root.offsetParent !== null) {
+    if (this.chartDirty && this.view.mode === 'live' && $('chart-temps').offsetParent !== null) {
       this.chartDirty = false;
-      const b = this.tempBuf;
-      this.tempChart.setData([b.map((x) => x.t), b.map((x) => x.ext1), b.map((x) => x.ext2), b.map((x) => x.barUp), b.map((x) => x.barMid), b.map((x) => x.barDown), b.map((x) => x.tube), b.map((x) => x.motor)]);
-      const p = this.powerBuf;
-      this.powerChart.setData([p.map((x) => x.t), p.map((x) => x.heater), p.map((x) => x.motorPower), p.map((x) => x.motorPos)]);
+      const now = this.tempBuf.length ? this.tempBuf[this.tempBuf.length - 1].t : 0;
+      const cutoff = now - this.windowSec;
+      // time runs from the start of the brew while one is in view; otherwise it counts back from now
+      const brewInView = this.brewStartT !== null && this.brewStartT >= cutoff;
+      const zero = brewInView ? this.brewStartT : now;
+      this.marks = brewInView ? { from: 0, to: (this.brewEndT ?? now) - zero } : null;
+      const b = this.tempBuf.filter((x) => x.t >= cutoff);
+      this.tempChart.setData([b.map((x) => x.t - zero), b.map((x) => x.status), b.map((x) => x.target), b.map((x) => x.ext1), b.map((x) => x.ext2), b.map((x) => x.barUp), b.map((x) => x.barMid), b.map((x) => x.barDown), b.map((x) => x.tube), b.map((x) => x.motor)]);
+      const p = this.powerBuf.filter((x) => x.t >= cutoff);
+      this.powerChart.setData([p.map((x) => x.t - zero), p.map((x) => x.heater), p.map((x) => x.motorPower), p.map((x) => x.motorPos)]);
     }
     const now = performance.now();
     const age = this.lastStatusAt ? (now - this.lastStatusAt) / 1000 : null;
@@ -314,17 +348,37 @@ export class MachinePanel {
   _buildCharts() {
     const el = $('chart-temps');
     const w = () => Math.max(320, el.clientWidth || 640);
+    // the brew, shaded behind the lines, with a rule where it started
+    const shade = (u) => {
+      const m = this.marks;
+      if (!m || !(m.to > m.from)) return;
+      const { ctx, bbox } = u;
+      const x0 = Math.max(bbox.left, Math.min(bbox.left + bbox.width, u.valToPos(m.from, 'x', true)));
+      const x1 = Math.max(bbox.left, Math.min(bbox.left + bbox.width, u.valToPos(m.to, 'x', true)));
+      if (!(x1 > x0)) return;
+      ctx.save();
+      ctx.fillStyle = 'rgba(36, 71, 184, 0.07)';
+      ctx.fillRect(x0, bbox.top, x1 - x0, bbox.height);
+      ctx.fillStyle = 'rgba(36, 71, 184, 0.45)';
+      ctx.fillRect(x0, bbox.top, Math.max(1, Math.round(devicePixelRatio || 1)), bbox.height);
+      ctx.restore();
+    };
+    const clock = (v) => (v == null ? '–' : `${v < 0 ? '−' : ''}${Math.floor(Math.abs(v) / 60)}:${Math.floor(Math.abs(v) % 60).toString().padStart(2, '0')}`);
+    const xAxis = (label) => ax('x', 2, label, COLORS.axis, { incrs: [1, 2, 5, 10, 15, 30, 60, 120, 300, 600], values: (u, vals) => vals.map((v) => (Math.abs(v) >= 120 ? clock(v) : v.toFixed(0).replace('-', '−'))) });
     const ax = (scale, side, label, color, extra = {}) => ({ scale, side, label, labelFont: font, font, stroke: color, labelSize: 18, size: 44, gap: 4, grid: { stroke: COLORS.grid, width: 1 }, ticks: { stroke: COLORS.grid, width: 1, size: 4 }, ...extra });
     this.tempChart = new uPlot(
       {
         width: w(),
         height: 260,
-        padding: [8, 8, 0, 0],
+        padding: [8, 8 + 62, 0, 0], // as wide as the power graph's right-hand axis, so the two time axes line up
         cursor: { drag: { x: true, y: false } },
         legend: { live: true, font },
+        hooks: { drawClear: [shade] },
         scales: { x: { time: false }, y: { range: (u, mn, mx) => [Math.floor(((mn ?? 20) - 2) / 5) * 5, Math.ceil(((mx ?? 100) + 2) / 5) * 5] } },
         series: [
-          { label: 'time', value: (u, v) => (v == null ? '–' : `${(v % 3600 / 60).toFixed(0).padStart(2, '0')}:${(v % 60).toFixed(0).padStart(2, '0')}`) },
+          { label: 'time', value: (u, v) => (v == null ? '–' : `${clock(v)} (${v.toFixed(0)} s)`) },
+          { label: 'Status', stroke: COLORS.ec ?? '#2447B8', width: 2, value: fmtv(1, ' °C'), spanGaps: true, points: { show: false } },
+          { label: 'Target', stroke: '#2E7D32', width: 1, dash: [6, 4], value: fmtv(1, ' °C'), spanGaps: true, points: { show: false } },
           { label: 'External 1', stroke: COLORS.oxblood ?? '#8A1C2B', width: 1.75, value: fmtv(1, ' °C'), spanGaps: true, points: { show: false } },
           { label: 'External 2', stroke: '#C2552F', width: 1.5, value: fmtv(1, ' °C'), spanGaps: true, points: { show: false } },
           { label: 'Bar up', stroke: '#C98A14', width: 1.25, value: fmtv(1, ' °C'), spanGaps: true, points: { show: false } },
@@ -333,9 +387,9 @@ export class MachinePanel {
           { label: 'Tube', stroke: COLORS.teal ?? '#0E7C7B', width: 1.25, value: fmtv(1, ' °C'), spanGaps: true, points: { show: false } },
           { label: 'Motor', stroke: COLORS.weight ?? '#5B6470', width: 1, dash: [4, 3], value: fmtv(1, ' °C'), spanGaps: true, points: { show: false } },
         ],
-        axes: [ax('x', 2, 'seconds since the page opened', COLORS.axis, { incrs: [1, 2, 5, 10, 15, 30, 60, 120, 300], values: (u, vals) => vals.map((v) => v.toFixed(0)) }), ax('y', 3, '°C', COLORS.axis)],
+        axes: [xAxis('time from the start of the brew (seconds, then min:sec) — counted back from now when no brew is in view'), ax('y', 3, '°C', COLORS.axis)],
       },
-      [[], [], [], [], [], [], [], []],
+      [[], [], [], [], [], [], [], [], [], []],
       el,
     );
     const el2 = $('chart-power');
@@ -346,14 +400,15 @@ export class MachinePanel {
         padding: [8, 8, 0, 0],
         cursor: { drag: { x: true, y: false } },
         legend: { live: true, font },
+        hooks: { drawClear: [shade] },
         scales: { x: { time: false }, y: { range: [0, 100] }, pos: { range: (u, mn, mx) => [0, Math.max(10, Math.ceil(((mx ?? 10) + 1) / 10) * 10)] } },
         series: [
-          { label: 'time', value: (u, v) => (v == null ? '–' : v.toFixed(0) + ' s') },
+          { label: 'time', value: (u, v) => (v == null ? '–' : `${clock(v)} (${v.toFixed(0)} s)`) },
           { label: 'Heater power', scale: 'y', stroke: '#C98A14', fill: 'rgba(201,138,20,0.12)', width: 1.25, value: fmtv(0, ' %'), spanGaps: true, points: { show: false } },
           { label: 'Motor power', scale: 'y', stroke: COLORS.ec, width: 1.25, value: fmtv(0, ' %'), spanGaps: true, points: { show: false } },
           { label: 'Piston position', scale: 'pos', stroke: COLORS.weight ?? '#5B6470', width: 1, dash: [4, 3], value: fmtv(1, ''), spanGaps: true, points: { show: false } },
         ],
-        axes: [ax('x', 2, '', COLORS.axis, { incrs: [1, 2, 5, 10, 15, 30, 60, 120, 300], values: (u, vals) => vals.map((v) => v.toFixed(0)) }), ax('y', 3, '%', COLORS.axis), ax('pos', 1, 'position', COLORS.weight ?? '#5B6470', { grid: { show: false } })],
+        axes: [xAxis(''), ax('y', 3, '%', COLORS.axis), ax('pos', 1, 'position', COLORS.weight ?? '#5B6470', { grid: { show: false } })],
       },
       [[], [], [], []],
       el2,
@@ -371,6 +426,7 @@ export class MachinePanel {
     this.tempChart.setSize({ width: w, height: 260 });
     this.powerChart.setSize({ width: w, height: 160 });
     this.chartDirty = true;
+    if (this.view.mode === 'live') this._tick();
   }
 }
 

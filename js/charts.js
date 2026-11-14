@@ -262,10 +262,11 @@ export const COMPARE_COLORS = ['#2447B8', '#8A1C2B', '#0E7C7B', '#C98A14', '#6B3
  * of series changes with the selection, and uPlot is cheap to construct.
  */
 export class CompareChart {
-  constructor(el) {
+  constructor(el, height = 340) {
     this.el = el;
+    this.height = height;
     this.u = null;
-    this._resize = () => this.u?.setSize(size(el, 340));
+    this._resize = () => this.u?.setSize(size(el, this.height));
     window.addEventListener('resize', this._resize);
   }
 
@@ -282,7 +283,7 @@ export class CompareChart {
     const usable = series.filter((s) => s.xs.length > 1);
     if (!usable.length) return;
     const joined = uPlot.join(usable.map((s) => [s.xs, s.ys]));
-    const { width, height } = size(this.el, 340);
+    const { width, height } = size(this.el, this.height);
     const opts = {
       ...baseOpts('', width, height),
       scales: { x: { time: false }, y: {} },

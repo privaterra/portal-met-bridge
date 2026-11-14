@@ -116,32 +116,18 @@ try {
   await page.dispatchEvent('#ctx-bean', 'change');
   await page.waitForTimeout(300);
   check('picking a previous bean fills in its roaster and origin', (await page.inputValue('#ctx-roaster')) === 'E2E roaster' && (await page.inputValue('#ctx-origin')) === 'Colombia, Huila');
-  // Settings sections fold (v0.20): compact by default, a click opens one, and how they open is a setting
+  // Settings sections fold (v0.20) and open compact by default. This run works in open sections; the choice is made
+  // here without the save-bar flash or any waiting, because the mock machine starts its scripted shot three seconds
+  // after it boots and every second spent before connecting is Portal coverage lost. The folding is checked further down.
+  const layoutDefault = await page.evaluate(async () => {
+    const was = window.__pb.settings.settingsLayout;
+    window.__pb.settings.settingsLayout = 'detailed';
+    await window.__pb.store.setSetting('settingsLayout', 'detailed');
+    document.querySelector('#set-layout').value = 'detailed';
+    return was;
+  });
+  check('Settings opens compact by default', layoutDefault === 'compact', layoutDefault);
   await page.click('.view-tab[data-view="settings"]');
-  await page.waitForTimeout(250);
-  const openSections = () => page.evaluate(() => [...document.querySelectorAll('#view-settings details.set-section')].filter((d) => d.open).map((d) => d.dataset.section).join(','));
-  const compact = await page.evaluate(() => ({ layout: window.__pb.settings.settingsLayout, names: [...document.querySelectorAll('#view-settings details.set-section > summary h2')].map((h) => h.textContent).join('|'), rule: document.querySelector('#set-heat-rule').closest('details').dataset.section, lists: document.querySelector('#list-roaster').closest('details').dataset.section }));
-  check('Settings opens compact: every section closed, names only — Heating after Machine, Brew Prep. after AI review', compact.layout === 'compact' && (await openSections()) === '' && !(await page.isVisible('#meticulous-host')) && compact.names === 'Machine|Heating|Recording|Files and folders|Estimates|AI review|Brew Prep.|Backup and restore|Logging and debug|Start over|About', JSON.stringify(compact));
-  check('Ready to brew lives under Heating and the pick-lists under Brew Prep.', compact.rule === 'heating' && compact.lists === 'prep', JSON.stringify(compact));
-  await page.click('details[data-section="recording"] > summary');
-  check('clicking a section name opens that section', (await openSections()) === 'recording' && (await page.isVisible('#settle-sec')));
-  await page.click('.view-tab[data-view="shots"]');
-  await page.click('.addr [data-goto="settings"]');
-  await page.waitForTimeout(250);
-  check('compact closes them again on the next visit; the rail\'s "change" link opens Machine', (await openSections()) === 'machine' && (await page.isVisible('#meticulous-host')), await openSections());
-  await page.selectOption('#set-layout', 'remember');
-  await page.click('details[data-section="heating"] > summary');
-  await page.waitForTimeout(250);
-  await page.click('.view-tab[data-view="shots"]');
-  await page.click('.view-tab[data-view="settings"]');
-  await page.waitForTimeout(250);
-  check('"as I left them" brings back the sections that were open', (await openSections()) === 'machine,heating', await openSections());
-  await page.click('#set-collapse-all');
-  check('Collapse all closes every section', (await openSections()) === '');
-  await page.selectOption('#set-layout', 'detailed');
-  await page.waitForTimeout(250);
-  check('detailed opens every section, now and on the next visit', (await openSections()).split(',').length === 11 && (await page.evaluate(() => window.__pb.settings.settingsLayout)) === 'detailed');
-  await page.waitForTimeout(4200); // let the "Saved …" flash run out so the next save is counted on its own
   // Machine address lives under Settings; typing + Enter saves it and the rail follows.
   await page.click('#meticulous-host');
   await page.keyboard.press('Control+A');
@@ -850,6 +836,33 @@ try {
   const zip = await dl('#dl-zip');
   check('zip of everything downloads (from History)', zip.bytes > 30000 && /export-.*\.zip$/.test(zip.name), `${zip.name} ${zip.bytes} B`);
   await page.click('.view-tab[data-view="shots"]');
+
+  // ---- v0.20: Settings sections fold — compact, a click opens one, and how they open is a setting
+  await page.click('.view-tab[data-view="settings"]');
+  await page.selectOption('#set-layout', 'compact');
+  await page.waitForTimeout(250);
+  const openSections = () => page.evaluate(() => [...document.querySelectorAll('#view-settings details.set-section')].filter((d) => d.open).map((d) => d.dataset.section).join(','));
+  const compact = await page.evaluate(() => ({ layout: window.__pb.settings.settingsLayout, names: [...document.querySelectorAll('#view-settings details.set-section > summary h2')].map((h) => h.textContent).join('|'), rule: document.querySelector('#set-heat-rule').closest('details').dataset.section, lists: document.querySelector('#list-roaster').closest('details').dataset.section }));
+  check('compact: every section closed, names only — Heating after Machine, Brew Prep. after AI review', compact.layout === 'compact' && (await openSections()) === '' && !(await page.isVisible('#meticulous-host')) && compact.names === 'Machine|Heating|Recording|Files and folders|Estimates|AI review|Brew Prep.|Backup and restore|Logging and debug|Start over|About', JSON.stringify(compact));
+  check('Ready to brew lives under Heating and the pick-lists under Brew Prep.', compact.rule === 'heating' && compact.lists === 'prep', JSON.stringify(compact));
+  await page.click('details[data-section="recording"] > summary');
+  check('clicking a section name opens that section', (await openSections()) === 'recording' && (await page.isVisible('#settle-sec')));
+  await page.click('.view-tab[data-view="shots"]');
+  await page.click('.addr [data-goto="settings"]');
+  await page.waitForTimeout(250);
+  check('compact closes them again on the next visit; the rail\'s "change" link opens Machine', (await openSections()) === 'machine' && (await page.isVisible('#meticulous-host')), await openSections());
+  await page.selectOption('#set-layout', 'remember');
+  await page.click('details[data-section="heating"] > summary');
+  await page.waitForTimeout(250);
+  await page.click('.view-tab[data-view="shots"]');
+  await page.click('.view-tab[data-view="settings"]');
+  await page.waitForTimeout(250);
+  check('"as I left them" brings back the sections that were open', (await openSections()) === 'machine,heating', await openSections());
+  await page.click('#set-collapse-all');
+  check('Collapse all closes every section', (await openSections()) === '');
+  await page.selectOption('#set-layout', 'detailed');
+  await page.waitForTimeout(250);
+  check('detailed opens every section, now and on the next visit', (await openSections()).split(',').length === 11 && (await page.evaluate(() => window.__pb.settings.settingsLayout)) === 'detailed');
 
   // ---- v0.20: the query window, report sections, brew prep, shot edit/delete in the picker
   await page.click('.view-tab[data-view="analysis"]');

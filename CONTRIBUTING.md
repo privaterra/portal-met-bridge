@@ -4,7 +4,7 @@ Thanks for looking. This is a small, vibe-coded tool (see "How this was built" i
 
 ## Most useful things right now
 
-1. **Run it against a real Belka Portal** and report what you see: does the Chrome chooser list it, do notifications arrive at the expected cadence, what does the status byte do as the battery drains, do the show/hide-graph commands work. Attach a CSV export (Files → CSV) of one shot.
+1. **Run it against your own Belka Portal** and report what you see. The driver is tested on the author's Portal and works there; reports from other units, firmware and computers are what is missing: does the Chrome chooser list it, do notifications arrive at the expected cadence, what does the status byte do as the battery drains, do the show/hide-graph commands work. Attach a CSV export (Files → CSV) of one shot.
 2. **Compare estimates with your refractometer** over 5–10 shots of one coffee, then share the calibration numbers from the Calibration panel (k, LOOCV error, EC/g range). That tells everyone whether a proportional model is enough.
 3. **Try it on a different Meticulous firmware** (stable channel, older ESP firmware). The endpoints are documented in `docs/NOTES.md` against 0.2.24-beta; anything that differs is worth an issue.
 4. **Beanconqueror imports** — confirm the deep link lands correctly on iOS and Android, and which fields show up.
@@ -38,7 +38,7 @@ Please keep these invariants:
 - EC is never displayed as TDS without a calibration, and estimates always carry their flags — including which pool (bean / roaster / roast level / all) they were borrowed from.
 - `js/export.js` and `js/analysis.js` stay free of DOM access beyond canvases, so exports can be scripted.
 - New user-facing options go through the `SETTINGS` table in `js/main.js` (one line: key, default, input id) plus a label in `SETTING_LABELS`, so they are persisted, exported, imported, reset and shown in the save bar together. Typed inputs are saved by Enter / ⌘S / *Save settings* / leaving the tab, never by blur alone; toggles and selects save on change.
-- Nothing is sent anywhere but the machine on the LAN and the Portal over BLE.
+- Nothing is sent anywhere but the machine on the LAN and the Portal over BLE — except what the user switches on: an AI review goes to the provider they configured, and with it the coffee, roaster and grinder names asked of Meticulous Community (SECURITY.md).
 - The app never sends `/api/v1/action/*` commands unless a future feature explicitly adds a control panel with confirmation.
 - Deleting shots (History) always goes through the confirm dialog; *Start over* stays behind a typed confirmation, lists what it deletes, and touches nothing on disk outside the app's own `portal-met-bridge/` subfolder.
 - A shot in progress is checkpointed to IndexedDB under its final id (`inProgress: true`); anything that writes a finished shot must await the in-flight checkpoint (`checkpointPromise`) so a late checkpoint can never overwrite the final record. `finalizeCheckpoint()` in `js/recorder.js` is the single place that turns a leftover checkpoint into a shot.

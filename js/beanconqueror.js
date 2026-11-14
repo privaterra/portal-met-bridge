@@ -5,7 +5,7 @@
 //   payload = base64url(gzip(JSON envelope)), unpadded, split into 400-char chunks.
 // Works in the browser and in Node ≥ 18 (CompressionStream is global in both).
 
-import { downsample, beverageOf } from './analysis.js?v=0.20.0';
+import { downsample, beverageOf } from './analysis.js?v=0.21.0';
 
 export const CHUNK = 400;
 export const MAX_SINGLE_INFLATED = 524_288;
@@ -96,7 +96,7 @@ export function buildEnvelope(shot, analysis, estimate, ctx = {}, opts = {}) {
 
   const envelope = {
     v: 1,
-    app: { name: 'portal-met-bridge', version: '0.20.0' },
+    app: { name: 'portal-met-bridge', version: '0.21.0' },
     brew: {
       date: new Date(shot.startedAt ?? Date.now()).toISOString(),
       waterIn: { value: clamp(totalWaterMl || beverageG, 0, 100000), unit: 'ml' },

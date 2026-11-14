@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.21.0
+
+- Matches portal-met-bridge v0.21.0. **Settings → Refractometer**: a guided calibration that follows a brew (zero the refractometer, take the sample, pair the reading with the Portal's conductivity for that brew), the procedure as text, and a history of every reading that can be edited or deleted, with each coffee's calibration.
+- The Portal driver is now **tested on a physical Belka Portal by the author**; the notes that said otherwise are updated.
+- Security check for this release: no open advisories for the shipped libraries (all current), none for the development tools.
+
 ## 0.20.0
 
 - Matches portal-met-bridge v0.20.0. **Settings sections fold** (compact by default; a picker chooses compact, detailed or as left), with new sections **Heating** (the ready-to-brew rule moved here, plus an option to save the Machine tab's temperature graphs as JPEG, PDF and CSV with the brew they belong to) and **Brew Prep.** (grind prep checklist, the water you brew with, the pick-lists).

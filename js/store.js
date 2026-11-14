@@ -3,7 +3,7 @@
 // context so calibration can be rebuilt from the shot list alone; the beans
 // store is the pick-list of coffees you have entered before.
 
-import { mergeMaintenanceLogs, cleanMaintenanceLog } from './maintenance.js?v=0.20.0';
+import { mergeMaintenanceLogs, cleanMaintenanceLog } from './maintenance.js?v=0.21.0';
 
 const DB_NAME = 'portal-met-bridge';
 const DB_VERSION = 4;

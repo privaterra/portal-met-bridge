@@ -1,23 +1,24 @@
 // main.js — wires the devices, the recorder, storage, charts and export together.
 
-import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.20.0';
-import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, machineBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.20.0';
-import { MachinePanel, WINDOW_SEC, WINDOW_SEC_SAVING } from './machine-panel.js?v=0.20.0';
-import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.20.0';
-import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.20.0';
-import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.20.0';
-import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, profileFinalWeight, setBeveragePreference, grindMicrons, measuredEy, DEFAULTS } from './analysis.js?v=0.20.0';
-import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, approxTokens, reviewProfileOf, ratingOf, ratingMaxOf, REVIEW_SECTIONS, PREP_STEPS } from './review.js?v=0.20.0';
-import { PROVIDERS, streamCompletion, listModels, testKey, maskKey, maxTokensFor, endpointRisk, isConnectorRejection } from './ai.js?v=0.20.0';
-import { COMMUNITY, subjectKey, communityMode, communityHow, communitySubjects, gatherCommunity, communityInstructions, communityMention, communityBlock, communityConnector, mcpCall } from './community.js?v=0.20.0';
-import { MAINTENANCE_SOURCE, MAINTENANCE_TASKS, MAINTENANCE_ROUTINE, MAINTENANCE_WARNINGS, MAINTENANCE_GREASE, cleanMaintenanceLog, recordMaintenance, undoMaintenance, mergeMaintenanceLogs, maintenanceStatus, maintenanceReminder, daysText, PistonMonitor, cleanPistonResult } from './maintenance.js?v=0.20.0';
-import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.20.0';
-import { makeDemoShot } from './demo.js?v=0.20.0';
-import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug, loadJsPdf, heatingJpeg, heatingCsv, heatingPdf } from './export.js?v=0.20.0';
-import { REVIEW_FORMATS, reviewFile, reviewMarkdownFile } from './review-export.js?v=0.20.0';
-import { log, formatLine } from './log.js?v=0.20.0';
-import { files, Files, FILE_KINDS, DEFAULT_ROOT, cleanDirName } from './files.js?v=0.20.0';
-import { HeatMonitor, HEAT_RULES, HEAT_SENSORS, sensorTemp } from './heat.js?v=0.20.0';
+import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.21.0';
+import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, machineBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.21.0';
+import { MachinePanel, WINDOW_SEC, WINDOW_SEC_SAVING } from './machine-panel.js?v=0.21.0';
+import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.21.0';
+import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.21.0';
+import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.21.0';
+import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, profileFinalWeight, setBeveragePreference, grindMicrons, measuredEy, DEFAULTS } from './analysis.js?v=0.21.0';
+import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, approxTokens, reviewProfileOf, ratingOf, ratingMaxOf, REVIEW_SECTIONS, PREP_STEPS } from './review.js?v=0.21.0';
+import { PROVIDERS, streamCompletion, listModels, testKey, maskKey, maxTokensFor, endpointRisk, isConnectorRejection } from './ai.js?v=0.21.0';
+import { COMMUNITY, subjectKey, communityMode, communityHow, communitySubjects, gatherCommunity, communityInstructions, communityMention, communityBlock, communityConnector, mcpCall } from './community.js?v=0.21.0';
+import { MAINTENANCE_SOURCE, MAINTENANCE_TASKS, MAINTENANCE_ROUTINE, MAINTENANCE_WARNINGS, MAINTENANCE_GREASE, cleanMaintenanceLog, recordMaintenance, undoMaintenance, mergeMaintenanceLogs, maintenanceStatus, maintenanceReminder, daysText, PistonMonitor, cleanPistonResult } from './maintenance.js?v=0.21.0';
+import { CALIBRATION_WINDOW_MIN, ZERO_WITH, READING_SPREAD_WARN, refractometerOf, refractometerGuide, netWater, netTds, calibrationCandidate, averageReadings, buildReading, editReading, calibrationImpact, impactText, readingRows, coffeeCalibrations } from './refractometer.js?v=0.21.0';
+import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.21.0';
+import { makeDemoShot } from './demo.js?v=0.21.0';
+import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug, loadJsPdf, heatingJpeg, heatingCsv, heatingPdf } from './export.js?v=0.21.0';
+import { REVIEW_FORMATS, reviewFile, reviewMarkdownFile } from './review-export.js?v=0.21.0';
+import { log, formatLine } from './log.js?v=0.21.0';
+import { files, Files, FILE_KINDS, DEFAULT_ROOT, cleanDirName } from './files.js?v=0.21.0';
+import { HeatMonitor, HEAT_RULES, HEAT_SENSORS, sensorTemp } from './heat.js?v=0.21.0';
 import qrcode from '../vendor/qrcode.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -43,7 +44,10 @@ function showView(name, { open = null } = {}) {
   const enteringSettings = name === 'settings' && $('view-settings').hidden;
   for (const v of VIEWS) $(`view-${v}`).hidden = v !== name;
   // Settings opens the way the user chose (compact, detailed, or as left); a link to one section opens that section.
-  if (enteringSettings) applySettingsLayout().then(() => open && openSettingsSection(open));
+  if (enteringSettings) {
+    applySettingsLayout().then(() => open && openSettingsSection(open));
+    renderRefState();
+  }
   else if (name === 'settings' && open) openSettingsSection(open);
   document.querySelectorAll('.view-tab').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.view === name)));
   if (name === 'machine') {
@@ -115,6 +119,8 @@ const SETTINGS = {
   autoSaveFiles: { def: true, el: 'set-autosave-files', bool: true },
   autoBackup: { def: true, el: 'set-auto-backup', bool: true },
   minCalibrationShots: { def: 5, el: 'set-min-cal', num: true, min: 2, max: 20 },
+  refWindowMin: { def: 30, el: 'set-ref-window', num: true, min: 5, max: 240 },
+  refModel: { def: 'r2extract', el: 'set-ref-model' },
   estimatePool: { def: 'auto', el: 'est-pool' },
   aiProvider: { def: 'anthropic', el: 'set-ai-provider' },
   aiKeyAnthropic: { def: '', el: 'set-ai-key-anthropic', secret: true },
@@ -244,6 +250,13 @@ function applySetting(key, v) {
     case 'estimatePool':
     case 'minCalibrationShots':
       if (state.selected) renderShot();
+      renderRefractometer();
+      break;
+    case 'refWindowMin':
+      renderRefState();
+      break;
+    case 'refModel':
+      renderRefGuide();
       break;
     case 'beverageDefault':
       setBeveragePreference(v);
@@ -409,7 +422,7 @@ const SETTING_LABELS = {
   secVerdict: 'report: Verdict', secCompared: 'report: Shots compared', secStages: 'report: Stages', secStandsOut: 'report: What stands out', secHelped: 'report: What helped', secCommunity: 'report: Community comparison',
   secChanges: 'report: Suggested changes', secQuestions: 'report: Open questions', secSources: 'report: Sources', sendProfile: 'send the brewed profile', sendTrace: 'send the trace', sendRating: 'send rating and comment',
   aiEditQuery: 'edit the query before sending', prepRdt: 'RDT', prepWdt: 'WDT', prepDistribution: 'distribution tool', prepScreen: 'filter screen', prepTamper: 'tamper', prepSingleDose: 'single-dose grinder',
-  water: 'water', waterDefault: 'water by default',
+  water: 'water', waterDefault: 'water by default', refWindowMin: 'calibration window', refModel: 'refractometer',
 };
 
 /** Read an input's current value in the setting's type, without persisting. */
@@ -515,13 +528,14 @@ async function init() {
   store.onChange = (kind) => scheduleAutoBackup(kind);
   await loadMaintenance();
   renderMaintenanceExtra();
+  renderRefGuide();
   applyHeatSettings();
   applyHeatSave();
   await probeAppServer().catch(() => {});
   renderMachineVia();
   renderLogStatus();
-  $('about-version').textContent = 'v0.20.0';
-  log.info('app', `portal-met-bridge v0.20.0 started · ${navigator.userAgent}`);
+  $('about-version').textContent = 'v0.21.0';
+  log.info('app', `portal-met-bridge v0.21.0 started · ${navigator.userAgent}`);
 
   const env = await environmentCheck();
   renderPortalSteps({ secure: env.secure, api: env.api, adapter: env.adapter });
@@ -794,6 +808,7 @@ recorder.addEventListener('state', (e) => {
   ind.dataset.state = d.state;
   $('rec-text').textContent = d.state === 'recording' ? 'Recording' : d.state === 'settling' ? 'Pump stopped — catching the last drips' : 'Waiting for a shot';
   $('rec-manual').textContent = d.state === 'idle' ? 'Start recording now' : 'Stop and save';
+  renderRefState();
   if (d.state === 'recording') {
     applyProfileTarget(d.shot);
     $('shot-title').textContent = 'Live shot';
@@ -1069,6 +1084,7 @@ async function refreshShotList() {
   renderHistory();
   updateShotNav();
   renderMaintenance(); // "brews since" and the reminder follow every brew
+  renderRefractometer(); // the readings, each coffee's calibration, and whether a brew is fresh enough to calibrate with
   if (!$('view-beans').hidden) renderBeans();
   else $('beans-tab-count').textContent = (() => { const k = new Set(); for (const x of state.beans || []) k.add(x.key); for (const x of state.shots) if (!x.inProgress && coffeeKey(x.context?.beanName)) k.add(coffeeKey(x.context.beanName)); return k.size ? `(${k.size})` : ''; })();
 }
@@ -1694,7 +1710,7 @@ async function saveShotDialog() {
   const tds = Number($('e-tds').value);
   if (tds > 0 && tds < 30) {
     // EY is recomputed wherever it is shown (measuredEy), so the beverage setting can change later; the value here is a snapshot for exports.
-    shot.refractometer = { tdsPct: tds, eyPct: extractionYield(tds, beverageOf(shot), shot.context.doseG), at: shot.refractometer?.at || Date.now() };
+    shot.refractometer = editReading(shot.refractometer, { tdsPct: tds, beverageG: beverageOf(shot), doseG: shot.context.doseG }); // what a guided calibration recorded with it is kept
   } else {
     delete shot.refractometer;
   }
@@ -1856,8 +1872,8 @@ async function saveRefractometer() {
   if (typed > 0 && typed < 5000) shot.beverageG = Math.round(typed * 10) / 10; // a weighed cup entered with the reading is kept on the shot
   else delete shot.beverageG;
   const dose = Number(shot.context?.doseG) || 0;
-  shot.refractometer = { tdsPct: tds, eyPct: extractionYield(tds, beverageOf(shot), dose), at: Date.now() };
   shot.analysisCache = summarize(state.analysis);
+  shot.refractometer = buildReading({ tdsPct: tds, beverageG: beverageOf(shot), doseG: dose, at: Date.now(), method: 'typed', meanEcPerG: shot.analysisCache?.meanEcPerG });
   await store.putShot(shot);
   await refreshShotList();
   renderShot();
@@ -3604,6 +3620,7 @@ function openSettingsSection(name) {
 for (const d of settingsSections()) {
   d.addEventListener('toggle', () => {
     if (d.open && d.dataset.section === 'logging') renderLogTail();
+    if (d.open && d.dataset.section === 'refractometer') renderRefractometer();
     if (!erasing) store.setSetting('settingsOpen', settingsSections().filter((x) => x.open).map((x) => x.dataset.section)).catch(() => {});
   });
 }
@@ -3848,6 +3865,328 @@ async function saveHeating(kind) {
 $('heat-save-jpeg').addEventListener('click', () => saveHeating('jpeg'));
 $('heat-save-pdf').addEventListener('click', () => saveHeating('pdf'));
 $('heat-save-csv').addEventListener('click', () => saveHeating('csv'));
+
+// ----------------------------------------------------------- refractometer --
+// Settings → Refractometer: the guided calibration that follows a brew (zero
+// the refractometer, take the sample, pair the reading with the Portal's
+// conductivity for that brew), the procedure as text, and the history of
+// readings. The reading lives on its shot (shot.refractometer); the fit per
+// coffee is analysis.js's, the same one the Shots tab's Calibration panel shows.
+
+const refWindowMin = () => Number(settings.refWindowMin) || CALIBRATION_WINDOW_MIN;
+function refCandidate() {
+  // History fills in the cached analysis of the rows it shows; the newest brew must have it whatever History is filtered to
+  const newest = state.shots.find((x) => !x.inProgress);
+  if (newest && !newest.analysisCache && newest.portal?.length) recomputeCache(newest);
+  return calibrationCandidate(state.shots, { now: Date.now(), windowMin: refWindowMin(), recording: recorder.isRecording });
+}
+const brewLine = (s) => `${fmtDate(s.startedAt)} · ${s.context?.beanName || 'unnamed coffee'}${s.profileName ? ` · ${s.profileName}` : ''}${s.source === 'demo' ? ' (demo shot)' : ''}`;
+
+/** The line that says whether a calibration can start now, and the button beside it. */
+function renderRefState() {
+  const el = $('refcal-state');
+  if (!el) return;
+  const c = refCandidate();
+  const win = refWindowMin();
+  const ago = (min) => (min < 1 ? 'just now' : min < 90 ? `${Math.round(min)} min ago` : min < 48 * 60 ? `${Math.round(min / 60)} h ago` : `${Math.round(min / 1440)} days ago`);
+  let text;
+  let level = '';
+  if (c.state === 'recording') text = 'A shot is being recorded — the calibration can start as soon as it is saved.';
+  else if (c.state === 'none') text = 'No brew yet. Pull a shot with the Portal connected, then come back here: the calibration follows a brew.';
+  else if (c.state === 'no-portal') text = `The last brew (${brewLine(c.shot)}, ${ago(c.ageMin)}) has no Portal data, so there is nothing to calibrate. Connect the Portal and brew again.`;
+  else if (c.state === 'old') text = `The last brew (${brewLine(c.shot)}) finished ${ago(c.ageMin)} — too long ago for a fresh sample (a brew counts as just taken for ${win} min). Brew again to calibrate; a reading you already took can be typed on the Shots tab.`;
+  else {
+    level = c.state === 'ready' ? 'ok' : 'warn';
+    text = `${c.state === 'ready' ? 'Ready' : 'Possible, with a caveat'}: ${brewLine(c.shot)}, finished ${ago(c.ageMin)} — mean EC/g ${fmt(c.shot.analysisCache?.meanEcPerG, 3)}, Portal coverage ${fmt((c.shot.analysisCache?.coverageRatio || 0) * 100, 0)} %. ${Math.max(1, Math.round(c.leftMin))} min left to start.${c.state === 'poor-portal' ? ' The Portal covered only part of this brew: the reading will be kept on the brew but left out of the coffee\'s calibration.' : ''}${c.hasReading ? ` This brew already has a reading (${fmt(Number(c.shot.refractometer.tdsPct), 2)} % TDS); calibrating again replaces it.` : ''}`;
+  }
+  el.textContent = text;
+  el.dataset.level = level;
+  const can = c.state === 'ready' || c.state === 'poor-portal';
+  $('refcal-start').disabled = !can;
+  $('refcal-start').textContent = can && c.hasReading ? 'Calibrate again with the last brew…' : 'Calibrate with the last brew…';
+}
+
+const zeroText = (r) => (r.zeroWith === 'none' ? 'not zeroed' : r.zeroWith ? `zeroed with ${r.zeroWith === 'distilled' ? 'distilled water' : 'the brewing water'}` : '');
+
+function renderRefractometer() {
+  if (!$('ref-history-rows')) return;
+  renderRefState();
+  const rows = readingRows(state.shots);
+  const coffees = coffeeCalibrations(allCalibrationPoints(), rows, { minShots: settings.minCalibrationShots });
+  setText('set-ref-note', rows.length ? `${rows.length} reading${rows.length === 1 ? '' : 's'} · ${coffees.filter((c) => c.calibrated).length} coffee${coffees.filter((c) => c.calibrated).length === 1 ? '' : 's'} calibrated` : 'no readings yet');
+  $('refcal-coffees-wrap').hidden = !coffees.length;
+  $('refcal-coffees-rows').innerHTML = coffees
+    .map(
+      (c) =>
+        `<tr><td>${esc(c.name)}</td><td class="num">${Number(c.readings)}${c.shots !== c.readings ? ` <small>(${Number(c.shots)} used)</small>` : ''}</td><td class="num">${c.calibrated ? fmt(c.k, 3) : '–'}</td><td class="num">${c.loocv !== null ? `± ${fmt(c.loocv, 2)}` : '–'}</td><td class="num">${c.calibrated ? `${fmt(c.minX, 3)} – ${fmt(c.maxX, 3)}` : '–'}</td><td>${c.calibrated ? `<span class="maint-badge" data-state="${c.preliminary ? 'soon' : 'ok'}">${c.preliminary ? 'preliminary' : 'calibrated'}</span>${c.calibrated && c.model === 'affine' ? ' <small>affine model</small>' : ''}` : '<span class="maint-badge" data-state="never">Portal data not usable</span>'}</td><td>${c.lastAt ? esc(fmtDate(c.lastAt)) : '–'}</td></tr>`,
+    )
+    .join('');
+  $('ref-history-wrap').hidden = !rows.length;
+  $('ref-history-empty').hidden = rows.length > 0;
+  $('ref-history-rows').innerHTML = rows
+    .map((r) => {
+      const how = [r.method === 'guided' ? 'guided calibration' : 'typed', r.device, zeroText(r), r.waterTdsPct ? `less ${fmt(r.waterTdsPct, 2)} for the water` : '', r.filtered ? 'filtered sample' : ''].filter(Boolean).join(' · ');
+      const tds = `${fmt(r.tdsPct, 2)} %${r.readings.length > 1 ? `<br><small>mean of ${r.readings.length}${r.spread !== null ? ` · spread ${fmt(r.spread, 2)}` : ''}</small>` : ''}`;
+      return `<tr data-id="${esc(r.id)}"><td>${esc(fmtDate(r.at))}</td><td>${esc(r.bean || 'unnamed coffee')}${r.demo ? ' <small>(demo)</small>' : ''}<br><small>${esc([fmtDate(r.shotAt), r.profile].filter(Boolean).join(' · '))}</small></td><td class="num">${tds}</td><td class="num">${r.doseG ? fmt(r.doseG, 1) : '?'} → ${r.beverageG ? fmt(r.beverageG, 1) : '?'} g</td><td class="num">${r.eyPct ? `${fmt(r.eyPct, 1)} %` : '–'}</td><td class="num">${r.meanEcPerG ? fmt(r.meanEcPerG, 3) : '<span class="muted">no Portal</span>'}</td><td class="num">${r.ratio ? fmt(r.ratio, 3) : '–'}${r.meanEcPerG && !r.portalOk ? '<br><small>not used</small>' : ''}</td><td>${esc(how)}${r.note ? `<br><small>${esc(r.note)}</small>` : ''}</td><td class="actions"><button class="btn small" data-act="open" title="Show this brew on the Shots tab">Open</button> <button class="btn small" data-act="edit">Edit</button> <button class="btn small danger" data-act="delete">Delete</button></td></tr>`;
+    })
+    .join('');
+}
+
+/** The procedure under Detail, and the same steps inside the guided calibration, for the refractometer chosen. */
+function renderRefGuide() {
+  const dev = refractometerOf(settings.refModel);
+  const guide = refractometerGuide(settings.refModel);
+  $('ref-guide').innerHTML = guide.map((g) => `<li><b>${esc(g.title)}.</b> ${esc(g.text)}<ul>${g.points.map((p) => `<li>${esc(p)}</li>`).join('')}</ul></li>`).join('');
+  for (const g of guide) {
+    const ul = $(`rc-points-${g.id}`);
+    if (ul) ul.innerHTML = g.points.map((p) => `<li>${esc(p)}</li>`).join('');
+  }
+  // our own markup around constants from refractometer.js; the links are fixed https addresses
+  $('ref-device').innerHTML = dev.specs
+    ? `${esc(dev.name)}: ${esc(dev.specs)}. The steps below follow <a href="${esc(dev.guideUrl)}" target="_blank" rel="noopener noreferrer">DiFluid's guide ↗</a> as read on ${esc(new Date(`${dev.retrieved}T12:00:00`).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' }))}. Readings are typed in from its screen.`
+    : 'General steps for a digital coffee refractometer; follow your own instrument\'s manual where it differs.';
+  setText('rc-device', dev.specs ? `${dev.name} — ${dev.specs}` : '');
+  setText('rc-zeroed-label', dev.zeroedLabel);
+}
+
+// ---- the guided calibration
+const RC_STEPS = ['brew', 'zero', 'sample', 'calibrate'];
+const rc = { shotId: null, step: 0, zeroedAt: null };
+const rcReadings = () => averageReadings([$('rc-tds1').value, $('rc-tds2').value, $('rc-tds3').value]);
+const rcWater = () => netWater($('rc-zero-with').value, $('rc-water').value);
+/** The coffee's TDS as the dialog stands: the mean of the readings, less the brewing water's own after a distilled-water zero. */
+const rcTds = () => (rcReadings().n ? netTds(rcReadings().mean, rcWater()) : null);
+
+/** The brew as it would be with what is typed in the dialog (a weighed beverage counts). */
+function rcShotNow() {
+  const shot = state.shots.find((s) => s.id === rc.shotId);
+  if (!shot) return null;
+  const typed = Number($('rc-bev').value);
+  return typed > 0 && typed < 5000 ? { ...shot, beverageG: Math.round(typed * 10) / 10 } : shot;
+}
+
+async function openRefCal() {
+  const c = refCandidate();
+  if (!(c.state === 'ready' || c.state === 'poor-portal')) {
+    renderRefState();
+    return toast('The calibration follows a brew: pull a shot with the Portal connected first.', 'error');
+  }
+  rc.shotId = c.shot.id;
+  rc.step = 0;
+  rc.zeroedAt = null;
+  for (const id of ['rc-tds1', 'rc-tds2', 'rc-tds3', 'rc-bev', 'rc-note', 'rc-water']) $(id).value = '';
+  $('rc-zeroed').checked = false;
+  $('rc-filtered').checked = false;
+  $('rc-zero-with').value = refractometerOf(settings.refModel).defaultZero;
+  const def = beverageOf(c.shot);
+  $('rc-bev').placeholder = Number.isFinite(def) && def > 0 ? `${fmt(def, 1)} (${BEVERAGE_SOURCE_LABEL[beverageSource(c.shot)] || 'final weight'})` : 'not known yet';
+  renderRefCal();
+  $('refcal-dialog').showModal();
+}
+
+function renderRefCal() {
+  const shot = rcShotNow();
+  if (!shot) return;
+  const step = RC_STEPS[rc.step];
+  document.querySelectorAll('#refcal-dialog .rc-step').forEach((el) => (el.hidden = el.dataset.step !== step));
+  $('rc-steps').textContent = `Step ${rc.step + 1} of ${RC_STEPS.length} — ${['the brew', 'zero the refractometer', 'take the sample', 'calibrate'][rc.step]}`;
+  $('rc-back').disabled = rc.step === 0;
+  $('rc-next').textContent = rc.step === RC_STEPS.length - 1 ? 'Save calibration' : 'Next';
+  $('rc-error').textContent = '';
+  const c = shot.context || {};
+  const cache = shot.analysisCache || {};
+  const dose = Number(c.doseG) || 0;
+  const bev = beverageOf(shot);
+  if (step === 'brew') {
+    const rows = [
+      ['Brew', brewLine(shot)],
+      ['In → out', `${dose ? `${fmt(dose, 1)} g` : 'no dose recorded'} → ${Number.isFinite(bev) && bev > 0 ? `${fmt(bev, 1)} g` : 'final weight not known'} in ${fmt(shot.durationSec, 1)} s`],
+      ['Portal', `mean EC/g ${fmt(cache.meanEcPerG, 3)} mS/cm per g · covered ${fmt((cache.coverageRatio || 0) * 100, 0)} % of the cup · ${Number(shot.portal?.length) || 0} samples`],
+    ];
+    $('rc-brew').innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
+    const notes = [];
+    if (!coffeeKey(c.beanName)) notes.push('This brew has no bean name. Readings are grouped by bean, so name the coffee (History → Edit) for this one to count towards a coffee\'s calibration.');
+    if (cache.status && cache.status !== 'ok') notes.push('The Portal covered only part of this brew: the reading will be kept on the brew but left out of the calibration.');
+    if (!dose) notes.push('No dose is recorded, so extraction yield cannot be worked out (the calibration itself does not need it).');
+    if (Number(shot.refractometer?.tdsPct) > 0) notes.push(`This brew already has a reading of ${fmt(Number(shot.refractometer.tdsPct), 2)} % TDS; saving replaces it.`);
+    $('rc-brew-note').textContent = notes.join(' ');
+  } else if (step === 'zero') {
+    renderRefCalZero();
+  } else if (step === 'sample') {
+    $('rc-water-row').hidden = $('rc-zero-with').value !== 'distilled';
+    renderRefCalMean();
+  } else if (step === 'calibrate') {
+    const avg = rcReadings();
+    const water = rcWater();
+    const tds = rcTds();
+    const ey = extractionYield(tds, bev, dose);
+    const impact = calibrationImpact(allCalibrationPoints(), coffeeIdentity(shot), { id: shot.id, meanEcPerG: cache.meanEcPerG, tdsPct: tds, reliable: !cache.status || cache.status === 'ok' }, { minShots: settings.minCalibrationShots });
+    const zw = $('rc-zero-with').value;
+    const rows = [
+      ['Brew', brewLine(shot)],
+      ['TDS', `${fmt(tds, 2)} %${avg.n > 1 ? ` — mean of ${avg.values.map((v) => fmt(v, 2)).join(', ')}` : ''}${water > 0 ? `${avg.n > 1 ? ',' : ' —'} less ${fmt(water, 2)} for the brewing water` : ''}`],
+      ['Beverage', Number.isFinite(bev) && bev > 0 ? `${fmt(bev, 1)} g (${BEVERAGE_SOURCE_LABEL[beverageSource(shot)] || 'final weight'})` : 'not known'],
+      ['Extraction yield', ey ? `${fmt(ey, 1)} % at ${fmt(dose, 1)} g in` : 'needs a dose and a final weight'],
+      ['Portal mean EC/g', `${fmt(cache.meanEcPerG, 3)} mS/cm per g`],
+      ['This brew: TDS ÷ EC', impact.ratio ? `${fmt(impact.ratio, 3)} % TDS per mS/cm` : '–'],
+      ['Refractometer', `${refractometerOf(settings.refModel).specs ? `${refractometerOf(settings.refModel).name} · ` : ''}zeroed with ${ZERO_WITH[zw] || 'not recorded'}${$('rc-filtered').checked ? ' · filtered sample' : ''}`.replace('zeroed with not zeroed this time', 'not zeroed this time')],
+    ];
+    $('rc-result').innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
+    $('rc-impact').textContent = coffeeKey(c.beanName) ? impactText(impact, c.beanName) : 'No bean name on this brew, so the reading is stored but belongs to no coffee\'s calibration yet.';
+  }
+}
+
+/** What the choice of baseline water means for the reading (shown under "Zeroed with"). */
+function renderRefCalZero() {
+  const zw = $('rc-zero-with').value;
+  $('rc-zero-hint').textContent = zw === 'brewing' ? 'The water\'s own minerals are zeroed out: the reading afterwards is what the coffee alone added.' : zw === 'distilled' ? 'A true zero. The next step asks for the brewing water\'s own reading, which is subtracted from the coffee\'s.' : 'Without a zero the reading carries whatever the last zero left; it is recorded as such.';
+}
+
+function renderRefCalMean() {
+  const avg = rcReadings();
+  const el = $('rc-mean');
+  el.dataset.level = avg.n && !avg.steady ? 'warn' : '';
+  const water = rcWater();
+  const less = water > 0 ? ` Less ${fmt(water, 2)} for the brewing water: ${fmt(rcTds(), 2)} % from the coffee.` : '';
+  el.textContent = !avg.n ? 'Enter at least one reading between 0 and 30 % TDS.' : avg.n === 1 ? `TDS ${fmt(avg.mean, 2)} % from one reading — a second and a third, each from a fresh sample, make it safer.${less}` : avg.steady ? `TDS ${fmt(avg.mean, 2)} % — the mean of ${avg.n} readings, ${fmt(avg.spread, 2)} apart.${less}` : `TDS ${fmt(avg.mean, 2)} % — but the readings are ${fmt(avg.spread, 2)} apart (more than ${READING_SPREAD_WARN}). A sample was probably still settling or evaporating: take a fresh one and read again.${less}`;
+}
+
+async function refCalNext() {
+  const step = RC_STEPS[rc.step];
+  const err = $('rc-error');
+  err.textContent = '';
+  if (step === 'zero') {
+    if ($('rc-zero-with').value !== 'none' && !$('rc-zeroed').checked) return (err.textContent = 'Zero the refractometer and tick the box — or choose "not zeroed this time" if you are deliberately skipping it.');
+    if ($('rc-zero-with').value !== 'none' && !rc.zeroedAt) rc.zeroedAt = Date.now();
+    if ($('rc-zero-with').value === 'none') rc.zeroedAt = null;
+  }
+  if (step === 'sample' && !rcReadings().n) return (err.textContent = 'Enter at least one reading between 0 and 30 % TDS.');
+  if (step === 'sample' && !(rcTds() > 0)) return (err.textContent = 'The brewing water\'s reading is larger than the coffee\'s — check the two.');
+  if (step === 'sample' && $('rc-water').value.trim() && $('rc-zero-with').value === 'distilled' && !(rcWater() > 0)) return (err.textContent = 'The brewing water\'s own reading should be a small number, under 1 % TDS (typically 0.01–0.05). Leave it blank if you did not measure it.');
+  if (step !== 'calibrate') {
+    rc.step++;
+    renderRefCal();
+    if (RC_STEPS[rc.step] === 'sample') $('rc-tds1').focus();
+    return;
+  }
+  // save: the reading goes on the brew, the coffee's calibration follows from it
+  $('rc-next').disabled = true;
+  try {
+    const shot = await store.getShot(rc.shotId);
+    if (!shot) throw new Error('That brew is no longer there.');
+    const typed = Number($('rc-bev').value);
+    if (typed > 0 && typed < 5000) shot.beverageG = Math.round(typed * 10) / 10;
+    recomputeCache(shot);
+    const avg = rcReadings();
+    const reading = buildReading({ readings: avg.values, beverageG: beverageOf(shot), doseG: Number(shot.context?.doseG) || 0, zeroWith: $('rc-zero-with').value, zeroedAt: rc.zeroedAt, filtered: $('rc-filtered').checked, note: $('rc-note').value, at: Date.now(), method: 'guided', meanEcPerG: shot.analysisCache?.meanEcPerG, waterTdsPct: $('rc-water').value, device: refractometerOf(settings.refModel).specs ? refractometerOf(settings.refModel).name : '' });
+    if (!reading) throw new Error('No valid reading.');
+    shot.refractometer = reading;
+    await store.putShot(shot);
+    log.info('refractometer', `calibrated with ${shot.id}: ${reading.tdsPct} % TDS (${avg.n} reading${avg.n === 1 ? '' : 's'}), EC/g ${fmt(shot.analysisCache?.meanEcPerG, 3)}`);
+    await refreshShotList();
+    if (state.selected?.id === shot.id) await selectShot(shot.id);
+    if (shot.files && settings.autoSaveFiles) autosaveShotFiles(shot).catch(() => {});
+    $('refcal-dialog').close();
+    renderRefractometer();
+    toast(`Calibration saved: ${fmt(reading.tdsPct, 2)} % TDS for ${shot.context?.beanName || 'this brew'}.`);
+  } catch (e) {
+    err.textContent = `Could not save: ${e?.message || e}`;
+  } finally {
+    $('rc-next').disabled = false;
+  }
+}
+
+$('refcal-start').addEventListener('click', () => openRefCal().catch((e) => toast(`Could not start the calibration: ${e?.message || e}`, 'error')));
+$('rc-next').addEventListener('click', refCalNext);
+$('rc-back').addEventListener('click', () => {
+  if (rc.step > 0) rc.step--;
+  renderRefCal();
+});
+$('rc-cancel').addEventListener('click', () => $('refcal-dialog').close());
+for (const id of ['rc-tds1', 'rc-tds2', 'rc-tds3', 'rc-water']) $(id).addEventListener('input', renderRefCalMean);
+$('rc-zero-with').addEventListener('change', renderRefCalZero);
+$('refcal-dialog').addEventListener('keydown', (e) => {
+  // Enter moves on (a form inside a dialog would otherwise close it)
+  if (e.key === 'Enter' && e.target.tagName === 'INPUT' && e.target.type !== 'checkbox') {
+    e.preventDefault();
+    refCalNext();
+  }
+});
+
+// ---- history: edit and delete
+let refEditingId = null;
+async function openRefEdit(id) {
+  const shot = await store.getShot(id);
+  if (!shot?.refractometer) return;
+  refEditingId = id;
+  const r = shot.refractometer;
+  $('re-sub').textContent = `${brewLine(shot)} — ${r.method === 'guided' ? 'from a guided calibration' : 'typed'}${[r.tds1, r.tds2, r.tds3].filter((v) => Number(v) > 0).length > 1 ? `, mean of ${[r.tds1, r.tds2, r.tds3].filter((v) => Number(v) > 0).map((v) => fmt(Number(v), 2)).join(', ')}` : ''}`;
+  $('re-tds').value = r.tdsPct ?? '';
+  $('re-bev').value = Number(shot.beverageG) > 0 ? shot.beverageG : '';
+  const def = beverageDefaultOf(shot);
+  $('re-bev').placeholder = Number.isFinite(def) ? fmt(def, 1) : '';
+  $('re-at').value = localInputValue(Number(r.at) > 0 ? Number(r.at) : shot.startedAt || Date.now());
+  $('re-at').max = localInputValue(Date.now());
+  $('re-zero-with').value = r.zeroWith in ZERO_WITH ? r.zeroWith : '';
+  $('re-filtered').checked = r.filtered === true;
+  $('re-note').value = typeof r.note === 'string' ? r.note : '';
+  $('re-hint').textContent = `The Portal's mean EC/g for this brew is ${fmt(shot.analysisCache?.meanEcPerG, 3)}; the coffee's calibration is refitted when the reading changes.`;
+  $('re-error').textContent = '';
+  $('refedit-dialog').showModal();
+  $('re-tds').focus();
+}
+
+async function saveRefEdit() {
+  const err = $('re-error');
+  err.textContent = '';
+  const tds = Number($('re-tds').value);
+  if (!(tds > 0 && tds < 30)) return (err.textContent = 'Enter the TDS as a percentage between 0 and 30, e.g. 9.2.');
+  const at = new Date($('re-at').value).getTime();
+  if (!Number.isFinite(at)) return (err.textContent = 'Enter the date and time of the calibration.');
+  if (at > Date.now() + 60000) return (err.textContent = 'That date is in the future.');
+  try {
+    const shot = await store.getShot(refEditingId);
+    if (!shot) throw new Error('That brew is no longer there.');
+    const bev = Number($('re-bev').value);
+    if (bev > 0 && bev < 5000) shot.beverageG = Math.round(bev * 10) / 10;
+    else delete shot.beverageG; // blank → back to the profile target or the machine's scale
+    recomputeCache(shot);
+    shot.refractometer = editReading(shot.refractometer, { tdsPct: tds, beverageG: beverageOf(shot), doseG: Number(shot.context?.doseG) || 0, at, zeroWith: $('re-zero-with').value, filtered: $('re-filtered').checked, note: $('re-note').value });
+    await store.putShot(shot);
+    log.info('refractometer', `reading of ${shot.id} edited: ${shot.refractometer.tdsPct} % TDS`);
+    await refreshShotList();
+    if (state.selected?.id === shot.id) await selectShot(shot.id);
+    if (shot.files && settings.autoSaveFiles) autosaveShotFiles(shot).catch(() => {});
+    $('refedit-dialog').close();
+    renderRefractometer();
+    toast('Reading updated; calibration refitted.');
+  } catch (e) {
+    err.textContent = `Could not save: ${e?.message || e}`;
+  }
+}
+$('re-save').addEventListener('click', saveRefEdit);
+$('re-cancel').addEventListener('click', () => $('refedit-dialog').close());
+
+$('ref-history-rows').addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-act]');
+  const tr = e.target.closest('tr[data-id]');
+  if (!btn || !tr) return;
+  const id = tr.dataset.id;
+  if (btn.dataset.act === 'open') return selectShot(id, { show: true });
+  if (btn.dataset.act === 'edit') return openRefEdit(id);
+  const shot = await store.getShot(id);
+  if (!shot?.refractometer) return;
+  const ok = await confirmDialog({ title: 'Delete this reading?', body: `${fmt(Number(shot.refractometer.tdsPct), 2)} % TDS for ${brewLine(shot)} is removed from the brew and from the coffee's calibration. The brew itself stays.`, action: 'Delete reading' });
+  if (!ok) return;
+  delete shot.refractometer;
+  await store.putShot(shot);
+  log.info('refractometer', `reading of ${id} deleted`);
+  await refreshShotList();
+  if (state.selected?.id === id) await selectShot(id);
+  renderRefractometer();
+  toast('Reading deleted.');
+});
+setInterval(() => !state.stopped && !$('view-settings').hidden && renderRefState(), 20000); // "finished 4 min ago" moves on by itself
 
 // -------------------------------------------------------------- brew prep --
 // Settings → Brew Prep.: how the puck is prepared and the water brewed with.
@@ -4772,7 +5111,7 @@ $('an-saved-rows').addEventListener('click', async (e) => {
   }
 });
 
-window.__pb = { state, store, portal, recorder, timeChart, massChart, calChart, compareChart, compare, machinePanel, settings, log, files, heat, hist, an, piston, communityConfig, communityCache, buildQuery, openQueryDialog, renderMaintenance, get maintenance() { return maintLog; }, get pistonLast() { return pistonLast; }, runAutoBackup, stopEverything, openStopDialog, openShotDialog, openWeightDialog, openRatingDialog, openCompare, openAnalysis, runReview, refreshShotList, recoverUnfinishedShots, backfillMachineRecords, autosaveShotFiles, refreshProfileTargets, get meticulous() { return meticulous; } };
+window.__pb = { refCandidate, renderRefractometer, state, store, portal, recorder, timeChart, massChart, calChart, compareChart, compare, machinePanel, settings, log, files, heat, hist, an, piston, communityConfig, communityCache, buildQuery, openQueryDialog, renderMaintenance, get maintenance() { return maintLog; }, get pistonLast() { return pistonLast; }, runAutoBackup, stopEverything, openStopDialog, openShotDialog, openWeightDialog, openRatingDialog, openCompare, openAnalysis, runReview, refreshShotList, recoverUnfinishedShots, backfillMachineRecords, autosaveShotFiles, refreshProfileTargets, get meticulous() { return meticulous; } };
 
 init().catch((err) => {
   console.error(err);

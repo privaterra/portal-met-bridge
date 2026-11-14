@@ -10,8 +10,8 @@
 // packets update the readouts and the connection check, a live shot from the
 // mock machine is recorded with Portal samples, the analysis reaches status
 // "ok" with high coverage, the show/hide-graph bytes are written, and the
-// JPEG / PDF / zip exports produce files. It does not prove a physical Portal
-// behaves the same — that is issue #1.
+// JPEG / PDF / zip exports produce files. The Portal here is simulated; the
+// driver itself is also tested on a physical Portal by the author (issue #6).
 
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -843,7 +843,7 @@ try {
   await page.waitForTimeout(250);
   const openSections = () => page.evaluate(() => [...document.querySelectorAll('#view-settings details.set-section')].filter((d) => d.open).map((d) => d.dataset.section).join(','));
   const compact = await page.evaluate(() => ({ layout: window.__pb.settings.settingsLayout, names: [...document.querySelectorAll('#view-settings details.set-section > summary h2')].map((h) => h.textContent).join('|'), rule: document.querySelector('#set-heat-rule').closest('details').dataset.section, lists: document.querySelector('#list-roaster').closest('details').dataset.section }));
-  check('compact: every section closed, names only — Heating after Machine, Brew Prep. after AI review', compact.layout === 'compact' && (await openSections()) === '' && !(await page.isVisible('#meticulous-host')) && compact.names === 'Machine|Heating|Recording|Files and folders|Estimates|AI review|Brew Prep.|Backup and restore|Logging and debug|Start over|About', JSON.stringify(compact));
+  check('compact: every section closed, names only — Heating after Machine, Refractometer after Estimates, Brew Prep. after AI review', compact.layout === 'compact' && (await openSections()) === '' && !(await page.isVisible('#meticulous-host')) && compact.names === 'Machine|Heating|Recording|Files and folders|Estimates|Refractometer|AI review|Brew Prep.|Backup and restore|Logging and debug|Start over|About', JSON.stringify(compact));
   check('Ready to brew lives under Heating and the pick-lists under Brew Prep.', compact.rule === 'heating' && compact.lists === 'prep', JSON.stringify(compact));
   await page.click('details[data-section="recording"] > summary');
   check('clicking a section name opens that section', (await openSections()) === 'recording' && (await page.isVisible('#settle-sec')));
@@ -862,7 +862,7 @@ try {
   check('Collapse all closes every section', (await openSections()) === '');
   await page.selectOption('#set-layout', 'detailed');
   await page.waitForTimeout(250);
-  check('detailed opens every section, now and on the next visit', (await openSections()).split(',').length === 11 && (await page.evaluate(() => window.__pb.settings.settingsLayout)) === 'detailed');
+  check('detailed opens every section, now and on the next visit', (await openSections()).split(',').length === 12 && (await page.evaluate(() => window.__pb.settings.settingsLayout)) === 'detailed');
 
   // ---- v0.20: the query window, report sections, brew prep, shot edit/delete in the picker
   await page.click('.view-tab[data-view="analysis"]');
@@ -1012,6 +1012,82 @@ try {
   await page.click('.view-tab[data-view="settings"]');
   await page.check('#set-maintenance');
   await page.uncheck('#set-heat-save');
+  await page.click('.view-tab[data-view="shots"]');
+
+  // ---- v0.21: Settings → Refractometer — the calibration that follows a brew, the procedure, the history
+  await page.evaluate(async () => {
+    const { makeDemoShot } = await import('./js/demo.js?v=' + document.querySelector('script[src*="main.js"]').src.split('v=')[1]);
+    await window.__pb.store.putShot({ ...makeDemoShot({ seed: 31 }), id: 'refcal-shot', source: 'live', startedAt: Date.now() - 50000, profileName: 'Blooming Espresso (demo)', context: { beanName: 'Refcal coffee', roaster: 'E2E roaster', doseG: 18, grindSize: '420 µm' } });
+    await window.__pb.refreshShotList();
+  });
+  await page.click('.view-tab[data-view="settings"]');
+  await page.waitForTimeout(400);
+  const ref0 = await page.evaluate(() => ({ heads: [...document.querySelectorAll('details[data-section="refractometer"] h3')].map((h) => h.textContent).join('|'), guide: [...document.querySelectorAll('#ref-guide > li > b')].map((b) => b.textContent).join('|'), detail: document.querySelector('details[data-section="refractometer"]').textContent, state: document.querySelector('#refcal-state').textContent, level: document.querySelector('#refcal-state').dataset.level, start: document.querySelector('#refcal-start').disabled, label: document.querySelector('#refcal-start').textContent, model: document.querySelector('#set-ref-model').value, history: [...document.querySelectorAll('#ref-history-rows tr')].map((tr) => tr.textContent.replace(/\s+/g, ' ')), cand: window.__pb.refCandidate().state }));
+  check('Settings → Refractometer has Portal calibration, Detail and History; Detail gives the DiFluid R2 Extract\'s procedure and says it takes place after a brew', ref0.heads === 'Portal calibration|Detail|History' && ref0.guide === 'Pull the shot with the Portal connected.|Zero the R2 Extract.|Take the coffee sample.|Calibrate the Portal\'s readings.' && /The whole process takes place after a brew/.test(ref0.detail) && /DiFluid R2 Extract: range 0–30 % TDS · accuracy ±0\.03 %/.test(ref0.detail) && /until the screen says Zeroing/.test(ref0.detail) && /Stir the cup thoroughly/.test(ref0.detail) && ref0.model === 'r2extract', JSON.stringify({ heads: ref0.heads, guide: ref0.guide }));
+  check('a brew that has just taken place can be calibrated with; the earlier typed reading is in the history', ref0.cand === 'ready' && /^Ready: .*Refcal coffee.*mean EC\/g \d\.\d{3}, Portal coverage \d+ %\. \d+ min left to start\./.test(ref0.state) && ref0.level === 'ok' && !ref0.start && ref0.label === 'Calibrate with the last brew…' && ref0.history.length === 1 && /E2E coffee \(edited\).*\d\.\d\d %.*typedOpen Edit Delete$/.test(ref0.history[0].trim()), JSON.stringify({ state: ref0.state, history: ref0.history }));
+  await page.click('#refcal-start');
+  await page.waitForSelector('#refcal-dialog[open]');
+  const rcStep = () => page.evaluate(() => ({ step: [...document.querySelectorAll('#refcal-dialog .rc-step')].find((el) => !el.hidden)?.dataset.step, steps: document.querySelector('#rc-steps').textContent, next: document.querySelector('#rc-next').textContent, back: document.querySelector('#rc-back').disabled, error: document.querySelector('#rc-error').textContent }));
+  const rc1 = await rcStep();
+  const rcBrew = await page.textContent('#rc-brew');
+  check('the calibration opens on the brew: what was brewed and what the Portal measured', rc1.step === 'brew' && /^Step 1 of 4/.test(rc1.steps) && rc1.back && /Refcal coffee/.test(rcBrew) && /18\.0 g → 38\.0 g|18\.0 g → 40\.0 g/.test(rcBrew) && /mean EC\/g \d\.\d{3}/.test(rcBrew), `${JSON.stringify(rc1)} ${rcBrew}`);
+  await page.click('#rc-next');
+  await page.click('#rc-next');
+  const rc2 = await rcStep();
+  check('step 2 zeroes the R2 Extract — the brewing water by default — and does not move on until that is confirmed', rc2.step === 'zero' && /Zero the refractometer and tick the box/.test(rc2.error) && /hold the second press until the screen says Zeroing/.test(await page.textContent('#rc-points-zero')) && (await page.inputValue('#rc-zero-with')) === 'brewing' && /what the coffee alone added/.test(await page.textContent('#rc-zero-hint')) && /R2 Extract is zeroed: its screen read 0\.00 %/.test(await page.textContent('#rc-zeroed-label')) && !(await page.isVisible('#rc-water')), JSON.stringify(rc2));
+  await page.selectOption('#rc-zero-with', 'distilled');
+  check('a distilled-water zero says the brewing water\'s own reading will be subtracted', /brewing water's own reading, which is subtracted/.test(await page.textContent('#rc-zero-hint')));
+  await page.check('#rc-zeroed');
+  await page.click('#rc-next');
+  await page.click('#rc-next');
+  const rc3 = await rcStep();
+  check('step 3 takes the coffee sample and needs a reading', rc3.step === 'sample' && /Enter at least one reading/.test(rc3.error) && /Stir the cup thoroughly/.test(await page.textContent('#rc-points-sample')), JSON.stringify(rc3));
+  await page.fill('#rc-tds1', '9.20');
+  await page.fill('#rc-tds2', '9.24');
+  await page.fill('#rc-tds3', '9.22');
+  check('several readings are averaged and their agreement is shown', /^TDS 9\.22 % — the mean of 3 readings, 0\.04 apart\.$/.test(await page.textContent('#rc-mean')), await page.textContent('#rc-mean'));
+  await page.fill('#rc-tds3', '9.60');
+  check('readings that disagree are called out', /0\.40 apart \(more than 0\.1\)/.test(await page.textContent('#rc-mean')) && (await page.getAttribute('#rc-mean', 'data-level')) === 'warn');
+  await page.fill('#rc-tds3', '9.22');
+  await page.fill('#rc-water', '0.02');
+  check('after a distilled-water zero the brewing water\'s own reading comes off the coffee\'s', (await page.isVisible('#rc-water')) && /the mean of 3 readings, 0\.04 apart\. Less 0\.02 for the brewing water: 9\.20 % from the coffee\.$/.test(await page.textContent('#rc-mean')), await page.textContent('#rc-mean'));
+  await page.fill('#rc-bev', '39.5');
+  await page.check('#rc-filtered');
+  await page.click('#rc-next');
+  const rc4 = await rcStep();
+  const rcResult = await page.textContent('#rc-result');
+  const rcImpact = await page.textContent('#rc-impact');
+  check('step 4 pairs the reading with the Portal\'s conductivity: TDS, yield, this brew\'s ratio and the coffee\'s new calibration', rc4.step === 'calibrate' && rc4.next === 'Save calibration' && /TDS9\.20 % — mean of 9\.20, 9\.24, 9\.22, less 0\.02 for the brewing water/.test(rcResult) && /Beverage39\.5 g \(weighed by hand\)/.test(rcResult) && /Extraction yield20\.2 % at 18\.0 g in/.test(rcResult) && /TDS ÷ EC\d+\.\d{3} % TDS per mS\/cm/.test(rcResult) && /DiFluid R2 Extract · zeroed with distilled or deionised water · filtered sample/.test(rcResult) && /^Refcal coffee: k = \d+\.\d{3} % TDS per mS\/cm from 1 paired brew \(the first reading\) — preliminary\.$/.test(rcImpact), `${rcResult} | ${rcImpact}`);
+  await page.fill('#rc-note', 'E2E refractometer <b>note</b>');
+  await page.click('#rc-next');
+  await page.waitForFunction(() => !document.querySelector('#refcal-dialog').open, null, { timeout: 5000 });
+  await page.waitForTimeout(300);
+  const ref1 = await page.evaluate(async () => { const s = await window.__pb.store.getShot('refcal-shot'); return { r: s.refractometer, bev: s.beverageG, first: document.querySelector('#ref-history-rows tr').textContent.replace(/\s+/g, ' '), firstId: document.querySelector('#ref-history-rows tr').dataset.id, rows: document.querySelectorAll('#ref-history-rows tr').length, coffees: [...document.querySelectorAll('#refcal-coffees-rows tr')].map((tr) => tr.textContent.replace(/\s+/g, ' ')), injected: document.querySelectorAll('#ref-history-rows b').length, state: document.querySelector('#refcal-state').textContent, label: document.querySelector('#refcal-start').textContent, note: document.querySelector('#set-ref-note').textContent }; });
+  check('Save stores the reading on the brew with what was recorded: the coffee\'s TDS, the three readings, the refractometer, the zeroing, the water subtracted, the filter, the Portal\'s EC', ref1.r.tdsPct === 9.2 && ref1.r.waterTdsPct === 0.02 && ref1.r.device === 'DiFluid R2 Extract' && ref1.r.method === 'guided' && ref1.r.tds1 === 9.2 && ref1.r.tds2 === 9.24 && ref1.r.tds3 === 9.22 && ref1.r.zeroWith === 'distilled' && ref1.r.zeroedAt > 0 && ref1.r.filtered === true && ref1.r.meanEcPerG > 0 && Math.abs(ref1.r.eyPct - (9.2 * 39.5) / 18) < 1e-9 && ref1.bev === 39.5 && ref1.r.note === 'E2E refractometer <b>note</b>', JSON.stringify(ref1.r));
+  check('the history lists it first with the date, the brew and how it was calibrated; the note is shown as text', ref1.rows === 2 && ref1.firstId === 'refcal-shot' && /Refcal coffee.*9\.20 %mean of 3 · spread 0\.04.*18\.0 → 39\.5 g.*20\.2 %.*guided calibration · DiFluid R2 Extract · zeroed with distilled water · less 0\.02 for the water · filtered sample.*E2E refractometer <b>note<\/b>/.test(ref1.first) && ref1.injected === 0, ref1.first);
+  check('each coffee\'s calibration is listed, and the state line says the brew now has a reading', ref1.coffees.some((c) => /^Refcal coffee1\d+\.\d{3}–.*preliminary/.test(c.trim())) && /already has a reading \(9\.20 % TDS\); calibrating again replaces it/.test(ref1.state) && ref1.label === 'Calibrate again with the last brew…' && /^2 readings · 2 coffees calibrated$/.test(ref1.note), JSON.stringify({ coffees: ref1.coffees, state: ref1.state, note: ref1.note }));
+  await page.click('#ref-history-rows tr[data-id="refcal-shot"] button[data-act="edit"]');
+  await page.waitForSelector('#refedit-dialog[open]');
+  const reForm = await page.evaluate(() => ({ tds: document.querySelector('#re-tds').value, bev: document.querySelector('#re-bev').value, zero: document.querySelector('#re-zero-with').value, filtered: document.querySelector('#re-filtered').checked, note: document.querySelector('#re-note').value, sub: document.querySelector('#re-sub').textContent }));
+  check('Edit opens the reading with what was recorded', reForm.tds === '9.2' && reForm.bev === '39.5' && reForm.zero === 'distilled' && reForm.filtered && reForm.note === 'E2E refractometer <b>note</b>' && /from a guided calibration, mean of 9\.20, 9\.24, 9\.22/.test(reForm.sub), JSON.stringify(reForm));
+  await page.fill('#re-tds', '45');
+  await page.click('#re-save');
+  check('a reading that cannot be a TDS is refused', /between 0 and 30/.test(await page.textContent('#re-error')) && (await page.evaluate(() => document.querySelector('#refedit-dialog').open)));
+  await page.fill('#re-tds', '9.30');
+  await page.fill('#re-note', 'corrected');
+  await page.click('#re-save');
+  await page.waitForFunction(() => !document.querySelector('#refedit-dialog').open, null, { timeout: 5000 });
+  await page.waitForTimeout(300);
+  const ref2 = await page.evaluate(async () => { const s = await window.__pb.store.getShot('refcal-shot'); return { r: s.refractometer, row: document.querySelector('#ref-history-rows tr[data-id="refcal-shot"]').textContent.replace(/\s+/g, ' ') }; });
+  check('an edited reading is saved: the new TDS and note, the zeroing kept, the single readings dropped because they no longer add up', ref2.r.tdsPct === 9.3 && ref2.r.note === 'corrected' && ref2.r.zeroWith === 'distilled' && ref2.r.filtered === true && ref2.r.method === 'guided' && ref2.r.device === 'DiFluid R2 Extract' && !('tds1' in ref2.r) && !('waterTdsPct' in ref2.r) && Math.abs(ref2.r.eyPct - (9.3 * 39.5) / 18) < 1e-9 && /9\.30 %/.test(ref2.row) && !/mean of 3/.test(ref2.row) && /corrected/.test(ref2.row), JSON.stringify(ref2));
+  await page.click('#ref-history-rows tr[data-id="refcal-shot"] button[data-act="delete"]');
+  await page.waitForSelector('#confirm-dialog[open]');
+  const delText = await page.textContent('#confirm-body');
+  await page.click('#confirm-go');
+  await page.waitForFunction(() => document.querySelectorAll('#ref-history-rows tr').length === 1, null, { timeout: 5000 });
+  const ref3 = await page.evaluate(async () => { const s = await window.__pb.store.getShot('refcal-shot'); return { shot: !!s, reading: 'refractometer' in s, coffees: [...document.querySelectorAll('#refcal-coffees-rows tr')].map((tr) => tr.textContent).join('|'), label: document.querySelector('#refcal-start').textContent }; });
+  check('Delete removes the reading from the brew and from the coffee\'s calibration; the brew stays', /9\.30 % TDS for .*Refcal coffee.*The brew itself stays/.test(delText) && ref3.shot && !ref3.reading && !/Refcal coffee/.test(ref3.coffees) && ref3.label === 'Calibrate with the last brew…', JSON.stringify(ref3));
+  await page.evaluate(async () => { await window.__pb.store.deleteShot('refcal-shot'); await window.__pb.refreshShotList(); });
   await page.click('.view-tab[data-view="shots"]');
 
   // Disconnect path

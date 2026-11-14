@@ -285,6 +285,11 @@ try {
   await narrow.locator('#files-panel').screenshot({ path: join(docs, 'screenshot-files.png') });
   await narrow.evaluate(() => { document.querySelector('#savebar').style.visibility = ''; });
   console.log('  wrote docs/screenshot-files.png');
+  // Settings → Refractometer: the state line for the brew just pulled, each coffee's calibration, the procedure, the history
+  await narrow.evaluate(() => { document.querySelector('#toast').hidden = true; document.querySelector('#savebar').style.visibility = 'hidden'; window.__pb.renderRefractometer(); });
+  await narrow.locator('#set-ref-panel').screenshot({ path: join(docs, 'screenshot-refractometer.png') });
+  await narrow.evaluate(() => { document.querySelector('#savebar').style.visibility = ''; });
+  console.log('  wrote docs/screenshot-refractometer.png');
   await narrow.locator('#set-ai-panel').screenshot({ path: join(docs, 'screenshot-settings-ai.png') });
   console.log('  wrote docs/screenshot-settings-ai.png');
   await narrow.locator('#about-version').locator('xpath=ancestor::section[1]').screenshot({ path: join(docs, 'screenshot-about.png') });

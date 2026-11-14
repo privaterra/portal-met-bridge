@@ -614,3 +614,26 @@ table.maint input.maint-when { border: 1px solid var(--rule); border-radius: 3px
 @media (max-width: 720px) {
   table.maint td.actions { white-space: normal; }
 }
+
+/* ---- v0.21: Settings → Refractometer (calibration state, per-coffee table, the procedure, history, the guided dialog) ---- */
+table.refcal { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.refcal th, table.refcal td { padding: 6px 9px; border-bottom: 1px solid var(--paper-3); text-align: left; vertical-align: top; }
+table.refcal th { font-size: 11.5px; color: var(--ink-2); font-weight: 600; white-space: nowrap; }
+table.refcal .num { text-align: right; white-space: nowrap; }
+table.refcal small, table.refcal .muted { color: var(--ink-3); }
+table.refcal td.actions { white-space: nowrap; text-align: right; }
+.inline-field input[type="number"] { width: 64px; border: 1px solid var(--rule); border-radius: 3px; padding: 4px 6px; background: #fff; font: inherit; font-size: 12px; }
+#refcal-state:empty { display: none; }
+#refcal-state { padding: 7px 10px; border-left: 3px solid var(--ink-3); background: var(--paper-2); margin-top: 4px; }
+#refcal-state[data-level="ok"] { border-left-color: var(--ok); color: var(--ink); }
+#refcal-state[data-level="warn"] { border-left-color: var(--amber); background: #fff9ec; color: var(--ink); }
+.ref-guide { margin: 4px 0 6px; padding-left: 20px; font-size: 13px; color: var(--ink-2); }
+.ref-guide > li { margin: 6px 0; }
+.ref-guide > li > b { color: var(--ink); }
+.ref-guide ul, .rc-points { margin: 4px 0 6px; padding-left: 18px; font-size: 12.5px; color: var(--ink-2); }
+.ref-guide ul li, .rc-points li { margin: 2px 0; }
+.rc-steps { font-size: 12px; color: var(--ink-3); margin: 0 0 6px; }
+.rc-step h3 { margin-top: 6px; font-size: 14px; color: var(--ink); }
+.rc-step .kv { margin-top: 6px; }
+#refcal-dialog .status:empty, #refedit-dialog .status:empty { display: none; }
+#rc-brew-note, #rc-mean[data-level="warn"] { color: var(--warn); }

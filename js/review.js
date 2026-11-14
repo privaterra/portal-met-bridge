@@ -7,7 +7,7 @@
 //   reviewTemplate(...)              → the report outline from the sections switched on
 //   renderMarkdown(md)               → safe HTML for the report pane
 
-import { beverageOf, beverageSource, profileTargetOf, profileFinalWeight, measuredEy, grindMicrons } from './analysis.js?v=0.20.0';
+import { beverageOf, beverageSource, profileTargetOf, profileFinalWeight, measuredEy, grindMicrons } from './analysis.js?v=0.21.0';
 
 const r1 = (v) => (Number.isFinite(v) ? Math.round(v * 10) / 10 : null);
 const r2 = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : null);

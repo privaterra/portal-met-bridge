@@ -1593,11 +1593,14 @@ await test('heating graph (v0.20): the CSV has one row per reading with the stat
   // the page: every settings section folds, in the order asked for, with the options where they were moved to
   const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
   const sections = [...html.matchAll(/<details class="set-section" data-section="([a-z]+)">\s*<summary class="panel-head"><h2>([^<]+)<\/h2>/g)].map((m) => `${m[1]}:${m[2]}`);
-  assert.deepEqual(sections, ['machine:Machine', 'heating:Heating', 'recording:Recording', 'files:Files and folders', 'estimates:Estimates', 'ai:AI review', 'prep:Brew Prep.', 'backup:Backup and restore', 'logging:Logging and debug', 'startover:Start over', 'about:About']);
+  assert.deepEqual(sections, ['machine:Machine', 'heating:Heating', 'recording:Recording', 'files:Files and folders', 'estimates:Estimates', 'refractometer:Refractometer', 'ai:AI review', 'prep:Brew Prep.', 'backup:Backup and restore', 'logging:Logging and debug', 'startover:Start over', 'about:About']);
   const within = (id, section) => { const a = html.indexOf(`data-section="${section}"`); const b = html.indexOf('</details>\n      </section>', a); const i = html.indexOf(`id="${id}"`); return i > a && i < b; };
   assert.ok(within('set-heat-rule', 'heating') && within('set-heat-save', 'heating') && !within('set-heat-rule', 'machine'), 'Ready to brew moved to Heating');
   assert.ok(within('list-roaster', 'prep') && within('set-prep-rdt', 'prep') && within('set-water', 'prep'), 'Pick-lists, Grind Prep and Water under Brew Prep.');
   assert.ok(within('set-community', 'ai') && within('set-sec-verdict', 'ai') && within('set-ai-edit-query', 'ai') && within('set-maintenance', 'machine'));
+  assert.ok(within('refcal-start', 'refractometer') && within('ref-guide', 'refractometer') && within('ref-history', 'refractometer') && within('set-ref-window', 'refractometer'), 'Refractometer: portal calibration, detail and history (v0.21)');
+  const refHeads = html.slice(html.indexOf('data-section="refractometer"'), html.indexOf('data-section="ai"')).match(/<h3>[^<]+<\/h3>/g).map((h) => h.replace(/<\/?h3>/g, ''));
+  assert.deepEqual(refHeads, ['Portal calibration', 'Detail', 'History']);
   const checked = (id) => new RegExp(`id="${id}"[^>]*\\bchecked\\b`).test(html);
   assert.deepEqual(['set-prep-rdt', 'set-prep-wdt', 'set-prep-distribution', 'set-prep-screen', 'set-prep-tamper', 'set-prep-single-dose'].map(checked), [true, true, true, false, true, true], 'Grind Prep defaults');
   assert.ok(checked('set-community') && ['coffee', 'roaster', 'grinder', 'espresso', 'pourover', 'profiles'].every((k) => checked(`set-community-${k}`)) && !checked('set-heat-save') && !checked('set-ai-edit-query'));
@@ -1605,6 +1608,127 @@ await test('heating graph (v0.20): the CSV has one row per reading with the stat
   const main = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
   const bound = [...main.slice(main.indexOf('const SETTINGS = {'), main.indexOf('const settings = {};')).matchAll(/el: '([^']+)'/g)].map((m) => m[1]);
   assert.ok(bound.length > 70 && bound.every((id) => html.includes(`id="${id}"`)), bound.filter((id) => !html.includes(`id="${id}"`)).join(','));
+});
+
+// ------------------------------------------------------------------ v0.21 --
+const refr = await import('../js/refractometer.js');
+
+await test('refractometer (v0.21): a calibration follows a brew — which brew counts, the reading that is stored, what it does to the coffee\'s calibration', () => {
+  const { calibrationCandidate, shotEndedAt, averageReadings, buildReading, editReading, calibrationImpact, impactText, CALIBRATION_WINDOW_MIN, REFRACTOMETER_GUIDE, ZERO_WITH } = refr;
+  const now = Date.UTC(2026, 10, 14, 15, 0, 0);
+  const min = 60000;
+  const brew = (over = {}) => ({ id: 'b1', startedAt: now - 5 * min, durationSec: 30, portal: Array.from({ length: 200 }, (_, i) => ({ t: i / 8, ec: 2 })), analysisCache: { status: 'ok', meanEcPerG: 0.94, coverageRatio: 1 }, context: { beanName: 'Supernova', doseG: 18 }, ...over });
+  assert.equal(CALIBRATION_WINDOW_MIN, 30);
+  assert.equal(shotEndedAt(brew()), now - 5 * min + 30000);
+  assert.equal(shotEndedAt({ startedAt: 1000, endedAt: 9000, durationSec: 30 }), 9000);
+  // which brew counts
+  assert.equal(calibrationCandidate([], { now }).state, 'none');
+  const ready = calibrationCandidate([brew({ id: 'old', startedAt: now - 3 * 3600000 }), brew()], { now });
+  assert.deepEqual([ready.state, ready.shot.id, Math.round(ready.ageMin * 10) / 10, Math.round(ready.leftMin * 10) / 10, ready.hasReading], ['ready', 'b1', 4.5, 25.5, false], 'the newest finished brew, inside the window');
+  assert.equal(calibrationCandidate([brew()], { now, recording: true }).state, 'recording');
+  assert.equal(calibrationCandidate([brew({ startedAt: now - 45 * min })], { now }).state, 'old', 'past the window: brew again');
+  assert.equal(calibrationCandidate([brew({ startedAt: now - 45 * min })], { now, windowMin: 60 }).state, 'ready', 'the window is a setting');
+  assert.equal(calibrationCandidate([brew({ portal: [] })], { now }).state, 'no-portal');
+  assert.equal(calibrationCandidate([brew({ analysisCache: { status: 'ok', meanEcPerG: 0 } })], { now }).state, 'no-portal', 'no conductivity, nothing to calibrate');
+  assert.equal(calibrationCandidate([brew({ analysisCache: { status: 'low-coverage', meanEcPerG: 0.9 } })], { now }).state, 'poor-portal');
+  assert.equal(calibrationCandidate([brew(), brew({ id: 'live', startedAt: now, inProgress: true })], { now }).shot.id, 'b1', 'a recording in progress is not a brew yet');
+  assert.equal(calibrationCandidate([brew({ refractometer: { tdsPct: 9.1 } })], { now }).hasReading, true);
+  // the readings
+  assert.deepEqual(averageReadings(['9.20', '9.24', '']), { n: 2, mean: 9.22, spread: 0.04, values: [9.2, 9.24], steady: true });
+  assert.equal(averageReadings([9.2, 9.5, 9.3]).steady, false, 'more than 0.1 apart: the sample was still settling');
+  assert.deepEqual(averageReadings(['', 'abc', 0, -1, 31]), { n: 0, mean: null, spread: null, values: [], steady: true });
+  // what is stored: flat, bounded
+  const reading = buildReading({ readings: [9.2, 9.24, 9.22], beverageG: 38, doseG: 18, zeroWith: 'distilled', zeroedAt: now - min, filtered: true, note: '  Atago  PAL-COFFEE \n <b>x</b> ' + 'y'.repeat(400), at: now, meanEcPerG: 0.94123 });
+  assert.deepEqual({ ...reading, note: undefined }, { tdsPct: 9.22, eyPct: (9.22 * 38) / 18, at: now, method: 'guided', tds1: 9.2, tds2: 9.24, tds3: 9.22, zeroWith: 'distilled', zeroedAt: now - min, filtered: true, meanEcPerG: 0.9412, note: undefined });
+  assert.ok(reading.note.startsWith('Atago PAL-COFFEE <b>x</b> y') && reading.note.length === 300, 'the note is one bounded line (it is escaped where it is shown)');
+  assert.ok(Object.values(reading).every((v) => ['number', 'string', 'boolean'].includes(typeof v)), 'flat: a restored backup keeps every field');
+  assert.equal(buildReading({ readings: [] }), null);
+  assert.equal(buildReading({ tdsPct: 45 }), null);
+  const typed = buildReading({ tdsPct: 9.1, beverageG: 40, doseG: 18, method: 'typed', zeroWith: 'bogus', at: now });
+  assert.deepEqual(typed, { tdsPct: 9.1, eyPct: (9.1 * 40) / 18, at: now, method: 'typed' });
+  // an edit keeps what was recorded, except readings that no longer add up
+  const sameTds = editReading(reading, { tdsPct: 9.22, beverageG: 40, doseG: 18, note: 'weighed again' });
+  assert.deepEqual([sameTds.tds1, sameTds.tds3, sameTds.zeroWith, sameTds.filtered, sameTds.method, sameTds.note, sameTds.at], [9.2, 9.22, 'distilled', true, 'guided', 'weighed again', now]);
+  assert.equal(sameTds.eyPct, (9.22 * 40) / 18);
+  const changed = editReading(reading, { tdsPct: 9.5, beverageG: 38, doseG: 18, zeroWith: '', filtered: false, at: now + min });
+  assert.ok(!('tds1' in changed) && !('zeroWith' in changed) && !('filtered' in changed) && changed.tdsPct === 9.5 && changed.at === now + min);
+  assert.equal(editReading(reading, { tdsPct: 0 }), null);
+  assert.equal(editReading(undefined, { tdsPct: 9, beverageG: 38, doseG: 18 }).method, 'typed');
+  // what one more reading does to the coffee's calibration
+  const coffee = { coffeeKey: 'supernova', roasterKey: 'hatch', roastLevel: 'light' };
+  const pts = [0.9, 1.0, 1.1, 1.2].map((x, i) => ({ id: `p${i}`, meanEcPerG: x, tdsPct: 9.6 * x, reliable: true, coffeeKey: 'supernova' })).concat([{ id: 'other', meanEcPerG: 1, tdsPct: 5, reliable: true, coffeeKey: 'another coffee' }]);
+  const first = calibrationImpact([], coffee, { id: 'n', meanEcPerG: 0.94, tdsPct: 9.22 });
+  assert.deepEqual([first.before.calibrated, first.after.calibrated, first.after.shots, first.after.k, first.ratio, first.estimateBefore, first.after.preliminary], [false, true, 1, 9.8085, 9.8085, null, true], 'the first reading of a coffee gives a preliminary k');
+  assert.ok(/^Supernova: k = 9\.809 % TDS per mS\/cm from 1 paired brew \(the first reading\) — preliminary\.$/.test(impactText(first, 'Supernova')), impactText(first, 'Supernova'));
+  const fifth = calibrationImpact(pts, coffee, { id: 'n', meanEcPerG: 1.05, tdsPct: 10.3 }, { minShots: 5 });
+  assert.deepEqual([fifth.before.shots, fifth.after.shots, fifth.before.k, fifth.after.preliminary, fifth.estimateBefore, fifth.errorBefore], [4, 5, 9.6, false, 10.08, -0.22], 'other coffees do not count; the estimate before is the old fit at this EC');
+  assert.ok(fifth.after.k > 9.6 && fifth.after.k < 9.81 && /from 5 paired brews \(was 9\.600 from 4\)/.test(impactText(fifth)) && /would have estimated 10\.08 % TDS for the brew \(−0\.22\)/.test(impactText(fifth)), impactText(fifth));
+  assert.equal(calibrationImpact([...pts, { id: 'n', meanEcPerG: 2, tdsPct: 3, coffeeKey: 'supernova' }], coffee, { id: 'n', meanEcPerG: 1.05, tdsPct: 10.3 }).before.shots, 4, 'the brew being calibrated is never part of its own "before"');
+  const poor = calibrationImpact([], coffee, { id: 'n', meanEcPerG: 0.94, tdsPct: 9.22, reliable: false });
+  assert.ok(!poor.after.calibrated && /not good enough to calibrate with/.test(impactText(poor)), 'a brew the Portal covered poorly is left out of the fit');
+  // the procedure is the same text for the Detail section and the guided steps
+  assert.deepEqual(REFRACTOMETER_GUIDE.map((g) => g.id), ['brew', 'zero', 'sample', 'calibrate']);
+  assert.ok(REFRACTOMETER_GUIDE.every((g) => g.title && g.text && g.points.length >= 3) && /follows a brew/.test(REFRACTOMETER_GUIDE[0].text) && /distilled/i.test(REFRACTOMETER_GUIDE[1].points.join(' ')) && /Stir the cup/.test(REFRACTOMETER_GUIDE[2].points[0]));
+  // written for the DiFluid R2 Extract (its own guide), with general steps for any other refractometer
+  const { REFRACTOMETERS, GUIDES, refractometerGuide, refractometerOf, netWater, netTds } = refr;
+  assert.equal(REFRACTOMETER_GUIDE, GUIDES.r2extract);
+  assert.deepEqual([REFRACTOMETERS.r2extract.name, REFRACTOMETERS.r2extract.defaultZero, REFRACTOMETERS.other.defaultZero], ['DiFluid R2 Extract', 'brewing', 'distilled']);
+  assert.ok(/range 0–30 % TDS · accuracy ±0\.03 %/.test(REFRACTOMETERS.r2extract.specs) && REFRACTOMETERS.r2extract.guideUrl.startsWith('https://digitizefluid.com/'));
+  const r2 = GUIDES.r2extract.map((g) => g.points.join(' ')).join(' ');
+  assert.ok(/hold the second press until the screen says Zeroing/.test(r2) && /Zero Failed/.test(r2) && /0\.00 %/.test(r2) && /brewing water is the simple choice/.test(r2) && /between 5 and 40 °C/.test(r2) && /5–10 seconds/.test(r2) && /fresh sample each time/.test(r2) && /paper filter/.test(r2), 'the R2 Extract\'s own procedure');
+  assert.equal(GUIDES.r2extract[1].title, 'Zero the R2 Extract');
+  assert.deepEqual(refractometerGuide('other').map((g) => g.id), ['brew', 'zero', 'sample', 'calibrate']);
+  assert.ok(/press Zero/.test(refractometerGuide('other')[1].points.join(' ')) && refractometerGuide('nonsense') === GUIDES.r2extract && refractometerOf('nonsense') === REFRACTOMETERS.r2extract);
+  // a distilled-water zero leaves the brewing water's own minerals in the reading: they are subtracted
+  assert.deepEqual([netWater('distilled', '0.03'), netWater('brewing', 0.03), netWater('distilled', 2), netWater('distilled', ''), netWater('none', 0.03)], [0.03, 0, 0, 0, 0], 'only after a distilled zero, and only a plausible water reading');
+  assert.deepEqual([netTds(9.22, 0.03), netTds(9.22, 0), netTds('9.2')], [9.19, 9.22, 9.2]);
+  const net = buildReading({ readings: [9.2, 9.24, 9.22], beverageG: 38, doseG: 18, zeroWith: 'distilled', waterTdsPct: '0.03', device: 'DiFluid R2 Extract', at: now });
+  assert.deepEqual([net.tdsPct, net.waterTdsPct, net.device, net.tds1, net.tds3, net.eyPct], [9.19, 0.03, 'DiFluid R2 Extract', 9.2, 9.22, (9.19 * 38) / 18], 'the stored TDS is the coffee\'s; the readings and the water\'s are kept beside it');
+  assert.ok(!('waterTdsPct' in buildReading({ readings: [9.2], beverageG: 38, doseG: 18, zeroWith: 'brewing', waterTdsPct: 0.03, at: now })), 'a brewing-water zero has already taken it out');
+  assert.equal(buildReading({ readings: [0.02], zeroWith: 'distilled', waterTdsPct: 0.05 }), null, 'water reading above the coffee\'s: no reading');
+  assert.ok(!('waterTdsPct' in editReading(net, { tdsPct: 9.4, beverageG: 38, doseG: 18 })) && editReading(net, { tdsPct: 9.19, beverageG: 38, doseG: 18 }).waterTdsPct === 0.03 && editReading(net, { tdsPct: 9.4 }).device === 'DiFluid R2 Extract');
+  assert.deepEqual(Object.keys(ZERO_WITH), ['distilled', 'brewing', 'none']);
+});
+
+await test('refractometer (v0.21): the history lists every reading with what was recorded, and each coffee\'s calibration', () => {
+  const { readingRows, coffeeCalibrations } = refr;
+  const t = Date.UTC(2026, 10, 10, 9, 0, 0);
+  const day = 86400000;
+  const shot = (id, i, over = {}) => ({ id, startedAt: t + i * day, durationSec: 30, finalWeightG: 40, profileName: 'Blooming Espresso', context: { beanName: 'Supernova', roaster: 'Hatch', doseG: 18 }, analysisCache: { status: 'ok', meanEcPerG: Math.round((0.9 + i * 0.05) * 100) / 100 }, coffeeKey: 'supernova', ...over });
+  setBeveragePreference('scale');
+  const shots = [
+    shot('a', 0, { refractometer: { tdsPct: 8.7, at: t + 600000 } }),
+    shot('b', 1, { refractometer: { tdsPct: 9.2, at: t + day + 600000, method: 'guided', tds1: 9.18, tds2: 9.22, zeroWith: 'distilled', zeroedAt: t + day + 300000, filtered: true, waterTdsPct: 0.03, device: 'DiFluid R2 Extract', note: '<img src=x onerror=alert(1)>' } }),
+    shot('c', 2),
+    shot('d', 3, { beverageG: 37.5, analysisCache: { status: 'low-coverage', meanEcPerG: 1.0 }, refractometer: { tdsPct: 9.6, at: t + 3 * day + 600000 } }),
+    shot('e', 4, { portal: [], analysisCache: null, context: { beanName: 'Machine only', doseG: 0 }, coffeeKey: 'machine only', refractometer: { tdsPct: 8, at: t + 4 * day } }),
+    shot('f', 5, { inProgress: true, refractometer: { tdsPct: 9 } }),
+    shot('g', 6, { source: 'demo', context: { beanName: 'Demo coffee', doseG: 18 }, coffeeKey: 'demo coffee', refractometer: { tdsPct: 9.9, at: t + 6 * day, zeroWith: '<script>' } }),
+  ];
+  const rows = readingRows(shots);
+  assert.deepEqual(rows.map((r) => r.id), ['g', 'e', 'd', 'b', 'a'], 'newest calibration first; brews without a reading and recordings in progress are not listed');
+  const b = rows.find((r) => r.id === 'b');
+  const a0 = () => rows.find((r) => r.id === 'a');
+  assert.deepEqual([b.tdsPct, b.readings, b.spread, b.method, b.zeroWith, b.zeroedAt, b.filtered, b.beverageG, b.doseG, b.meanEcPerG, b.ratio, b.portalOk, b.bean, b.profile], [9.2, [9.18, 9.22], 0.04, 'guided', 'distilled', t + day + 300000, true, 40, 18, 0.95, 9.6842, true, 'Supernova', 'Blooming Espresso']);
+  assert.deepEqual([b.device, b.waterTdsPct, a0().device, a0().waterTdsPct], ['DiFluid R2 Extract', 0.03, '', null], 'the refractometer and the water reading subtracted are listed when recorded');
+  assert.equal(b.eyPct, (9.2 * 40) / 18);
+  assert.equal(b.note, '<img src=x onerror=alert(1)>', 'kept as text; the page escapes it');
+  const a = rows.find((r) => r.id === 'a');
+  assert.deepEqual([a.method, a.zeroWith, a.readings, a.spread, a.filtered], ['typed', '', [], null, false], 'a reading from before v0.21 is "typed"');
+  const d = rows.find((r) => r.id === 'd');
+  assert.deepEqual([d.beverageG, d.portalOk], [37.5, false], 'the weighed cup is used; a poorly covered brew is marked');
+  const e = rows.find((r) => r.id === 'e');
+  assert.deepEqual([e.meanEcPerG, e.ratio, e.eyPct, e.doseG], [null, null, null, null], 'a reading on a brew without Portal data is listed but calibrates nothing');
+  assert.deepEqual([rows[0].demo, rows[0].zeroWith], [true, ''], 'an unknown "zeroed with" is dropped');
+  // each coffee's calibration, from the same points the estimate uses
+  const points = shots.filter((s) => s.refractometer && s.analysisCache?.meanEcPerG > 0 && !s.inProgress).map((s) => ({ id: s.id, meanEcPerG: s.analysisCache.meanEcPerG, tdsPct: s.refractometer.tdsPct, reliable: s.analysisCache.status === 'ok', coffeeKey: s.coffeeKey, beanName: s.context.beanName }));
+  const coffees = coffeeCalibrations(points, rows, { minShots: 5 });
+  assert.deepEqual(coffees.map((c) => c.name), ['Demo coffee', 'Supernova'], 'most recently calibrated first');
+  const sn = coffees[1];
+  assert.deepEqual([sn.readings, sn.shots, sn.calibrated, sn.preliminary, sn.model, sn.lastAt, sn.minX, sn.maxX], [3, 2, true, true, 'proportional', t + 3 * day + 600000, 0.9, 0.95], 'three readings, two used (one brew was poorly covered)');
+  assert.ok(Math.abs(sn.k - (0.9 * 8.7 + 0.95 * 9.2) / (0.9 * 0.9 + 0.95 * 0.95)) < 1e-3);
+  assert.deepEqual(coffeeCalibrations([], []), []);
+  setBeveragePreference('profile');
 });
 
 console.log(`\n${passed} test group(s) passed in total${process.exitCode ? ', with failures' : ''}.`);

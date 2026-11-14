@@ -10,7 +10,7 @@
   <title>portal-met-bridge</title>
   <meta name="description" content="Meticulous & Belka Portal conductivity data visualization & analysis: records, visualizes and analyzes the data produced by a Meticulous espresso machine and a Belka Portal conductivity sensor, shot by shot.">
   <link rel="stylesheet" href="vendor/uPlot.min.css" />
-  <link rel="stylesheet" href="css/app.css?v=0.20.0" />
+  <link rel="stylesheet" href="css/app.css?v=0.21.0" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M4 26 L10 8 L16 20 L22 6 L28 26' fill='none' stroke='%232447B8' stroke-width='3' stroke-linejoin='round'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -369,6 +369,48 @@
         <div class="settings-grid">
           <label class="field narrow"><span>Reference shots before an estimate stops being "preliminary"</span><input id="set-min-cal" type="number" min="2" max="20" step="1" value="5" /></label>
           <p class="hint">Which shots an estimate may borrow from (this bean, same roaster, same roast level, all) is chosen on the Shots view next to the estimate.</p>
+        </div>
+        </details>
+      </section>
+
+      <section class="panel settings" id="set-ref-panel">
+        <details class="set-section" data-section="refractometer">
+          <summary class="panel-head"><h2>Refractometer</h2> <span class="panel-note" id="set-ref-note"></span></summary>
+        <div class="settings-grid">
+          <h3>Portal calibration</h3>
+          <p class="hint">The Portal measures conductivity; a refractometer measures what is dissolved. A reading taken right after a brew pairs the two for that coffee, and from then on the app can estimate TDS and extraction yield from the Portal alone. The calibration always follows a brew: pull a shot with the Portal connected, then start here.</p>
+          <p class="status" id="refcal-state" data-level=""></p>
+          <div class="row align-end">
+            <button id="refcal-start" class="btn primary small" type="button" disabled>Calibrate with the last brew…</button>
+            <label class="inline-field">A brew counts as just taken for
+              <input id="set-ref-window" type="number" min="5" max="240" step="5" value="30" /> min</label>
+          </div>
+          <div class="hist-wrap" id="refcal-coffees-wrap" hidden>
+            <table class="refcal" id="refcal-coffees">
+              <thead><tr><th>Coffee</th><th class="num">Paired brews</th><th class="num" title="% TDS per mS/cm of mean EC per gram">k</th><th class="num" title="leave-one-out error, % TDS">Error</th><th class="num" title="the range of mean EC per gram the readings cover">EC/g measured</th><th>Calibration</th><th>Last calibrated</th></tr></thead>
+              <tbody id="refcal-coffees-rows"></tbody>
+            </table>
+          </div>
+          <h3>Detail</h3>
+          <label class="field narrow"><span>Refractometer</span>
+            <select id="set-ref-model">
+              <option value="r2extract" selected>DiFluid R2 Extract</option>
+              <option value="other">another refractometer (general steps)</option>
+            </select>
+          </label>
+          <p class="hint" id="ref-device"></p>
+          <p class="hint">How to calibrate the refractometer and the Belka Portal together. The whole process takes place <b>after a brew</b>, while the cup is still fresh; <em>Calibrate with the last brew…</em> walks through the same steps and stores the result.</p>
+          <ol class="ref-guide" id="ref-guide"></ol>
+          <p class="hint">EC tracks ions and a refractometer everything dissolved, so the ratio between them belongs to a coffee, a water and a Portal. Keep the water and the Portal's mounting the same while you collect readings; five or more paired brews of a coffee make its estimate trustworthy inside the range you measured (<em>Estimates</em>, above, sets that number).</p>
+          <h3>History</h3>
+          <p class="hint">Every reading, newest first: when the refractometer and the Portal were calibrated, the brew it belongs to and what was recorded with it. <em>Edit</em> corrects a reading; <em>Delete</em> removes it from the brew and from the coffee's calibration (the brew itself stays).</p>
+          <div class="hist-wrap" id="ref-history-wrap" hidden>
+            <table class="refcal" id="ref-history">
+              <thead><tr><th>Calibrated</th><th>Brew</th><th class="num">TDS</th><th class="num" title="dose → beverage">In → out</th><th class="num">EY</th><th class="num" title="the Portal's mean EC per gram for the brew">EC/g</th><th class="num" title="this brew's % TDS per mS/cm">TDS ÷ EC</th><th>How</th><th class="actions"></th></tr></thead>
+              <tbody id="ref-history-rows"></tbody>
+            </table>
+          </div>
+          <p class="hint" id="ref-history-empty">No readings yet. After a brew, press <em>Calibrate with the last brew…</em> above, or type a reading under <em>Refractometer reading for this shot</em> on the Shots tab.</p>
         </div>
         </details>
       </section>
@@ -973,6 +1015,7 @@
             <button id="ref-clear" class="btn small" disabled>Remove</button>
             <span class="inline-note" id="ref-ey"></span>
           </div>
+          <p class="hint">Just brewed? <button class="linkish" data-goto="settings" data-open="refractometer">Settings → Refractometer</button> walks through zeroing the refractometer, taking the sample and calibrating the Portal, and lists every reading.</p>
         </div>
         <div>
           <h2>Calibration for <span id="cal-coffee">this coffee</span></h2>
@@ -1141,6 +1184,89 @@
     </form>
   </dialog>
 
+  <dialog id="refcal-dialog" class="modal wide">
+    <form method="dialog">
+      <h2 id="rc-title">Calibrate the Portal with the refractometer</h2>
+      <p class="hint" id="rc-device"></p>
+      <p class="rc-steps" id="rc-steps"></p>
+      <div class="rc-step" data-step="brew">
+        <h3>1 · The brew</h3>
+        <dl class="kv" id="rc-brew"></dl>
+        <ul class="rc-points" id="rc-points-brew"></ul>
+        <p class="status" id="rc-brew-note" data-level="warn"></p>
+      </div>
+      <div class="rc-step" data-step="zero" hidden>
+        <h3>2 · Zero the refractometer</h3>
+        <ul class="rc-points" id="rc-points-zero"></ul>
+        <label class="field narrow"><span>Zeroed with</span>
+          <select id="rc-zero-with">
+            <option value="distilled" selected>distilled or deionised water</option>
+            <option value="brewing">the brewing water</option>
+            <option value="none">not zeroed this time</option>
+          </select></label>
+        <p class="hint" id="rc-zero-hint"></p>
+        <label class="check"><input type="checkbox" id="rc-zeroed" /> <span id="rc-zeroed-label">The refractometer is zeroed: it reads 0.00 with water on the prism</span></label>
+      </div>
+      <div class="rc-step" data-step="sample" hidden>
+        <h3>3 · Take the coffee sample</h3>
+        <ul class="rc-points" id="rc-points-sample"></ul>
+        <div class="row two">
+          <label class="field"><span>Reading 1 (% TDS)</span><input id="rc-tds1" type="number" step="0.01" min="0" max="30" inputmode="decimal" placeholder="9.20" /></label>
+          <label class="field"><span>Reading 2 (optional)</span><input id="rc-tds2" type="number" step="0.01" min="0" max="30" inputmode="decimal" /></label>
+          <label class="field"><span>Reading 3 (optional)</span><input id="rc-tds3" type="number" step="0.01" min="0" max="30" inputmode="decimal" /></label>
+        </div>
+        <div class="row two">
+          <label class="field"><span>Beverage weighed (g) — blank uses the brew's final weight</span><input id="rc-bev" type="number" step="0.1" min="0" inputmode="decimal" /></label>
+          <label class="check tall"><input type="checkbox" id="rc-filtered" /> <span>The sample went through a filter (paper or syringe)</span></label>
+        </div>
+        <label class="field narrow" id="rc-water-row" hidden><span>The brewing water's own reading (% TDS) — zeroed with distilled water, so it is subtracted; blank = not measured</span><input id="rc-water" type="number" step="0.01" min="0" max="1" inputmode="decimal" placeholder="e.g. 0.02" /></label>
+        <p class="status" id="rc-mean"></p>
+      </div>
+      <div class="rc-step" data-step="calibrate" hidden>
+        <h3>4 · Calibrate the Portal</h3>
+        <dl class="kv" id="rc-result"></dl>
+        <p class="status" id="rc-impact"></p>
+        <label class="field"><span>Note (optional) — the refractometer, the water, anything unusual</span><input id="rc-note" type="text" maxlength="300" autocomplete="off" /></label>
+        <ul class="rc-points" id="rc-points-calibrate"></ul>
+      </div>
+      <p class="status" id="rc-error" data-level="bad"></p>
+      <div class="row end">
+        <button type="button" id="rc-cancel" class="btn">Cancel</button>
+        <button type="button" id="rc-back" class="btn" disabled>Back</button>
+        <button type="button" id="rc-next" class="btn primary">Next</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="refedit-dialog" class="modal">
+    <form method="dialog">
+      <h2>Edit reading</h2>
+      <p class="hint" id="re-sub"></p>
+      <div class="row two">
+        <label class="field"><span>TDS (%)</span><input id="re-tds" type="number" step="0.01" min="0" max="30" inputmode="decimal" /></label>
+        <label class="field"><span>Beverage weighed (g) — blank uses the default</span><input id="re-bev" type="number" step="0.1" min="0" inputmode="decimal" /></label>
+      </div>
+      <div class="row two">
+        <label class="field"><span>Calibrated on</span><input id="re-at" type="datetime-local" /></label>
+        <label class="field"><span>Zeroed with</span>
+          <select id="re-zero-with">
+            <option value="">not recorded</option>
+            <option value="distilled">distilled or deionised water</option>
+            <option value="brewing">the brewing water</option>
+            <option value="none">not zeroed that time</option>
+          </select></label>
+      </div>
+      <label class="check"><input type="checkbox" id="re-filtered" /> <span>The sample went through a filter (paper or syringe)</span></label>
+      <label class="field"><span>Note</span><input id="re-note" type="text" maxlength="300" autocomplete="off" /></label>
+      <p class="hint" id="re-hint"></p>
+      <p class="status" id="re-error" data-level="bad"></p>
+      <div class="row end">
+        <button type="button" id="re-cancel" class="btn">Cancel</button>
+        <button type="button" id="re-save" class="btn primary">Save reading</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="query-dialog" class="modal xwide">
     <form method="dialog">
       <h2>Query for the AI</h2>
@@ -1184,6 +1310,6 @@
   </dialog>
 
   <div class="toast" id="toast" hidden></div>
-  <script type="module" src="js/main.js?v=0.20.0"></script>
+  <script type="module" src="js/main.js?v=0.21.0"></script>
 </body>
 </html>

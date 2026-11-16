@@ -987,6 +987,14 @@ try {
   check('Delete removes the shot from the app and from the review', (await page.evaluate(() => window.__pb.an.ids.length === 0 && document.querySelector('#an-preflight').hidden && !document.querySelector('#an-list input[data-id="picker-shot"]'))));
 
   // ---- v0.20: cleaning & maintenance, the piston check, the heating graph
+  // (these first checks are about the dates themselves, so the schedule is put on "the calendar only"; v0.23's count by shots follows)
+  const basis0 = await page.evaluate(() => ({ basis: window.__pb.settings.maintenanceBasis, rate: window.__pb.settings.maintenanceShotsPerDay, sel: document.querySelector('#set-maint-basis').value }));
+  check('the cleaning schedule is counted by shots unless changed: two shots in a day of use', basis0.basis === 'shots' && basis0.rate === 2 && basis0.sel === 'shots', JSON.stringify(basis0));
+  await page.click('.view-tab[data-view="settings"]');
+  await page.selectOption('#set-maint-basis', 'days');
+  await page.waitForTimeout(200);
+  const basisDays = await page.evaluate(() => ({ note: document.querySelector('#maint-basis-note').textContent, rateOff: document.querySelector('#set-maint-rate').disabled }));
+  check('"by the calendar only" says the shots do not move the dates and greys the shots-per-day field', /^A job is due on its calendar date, however much the machine was used\. Shots are still counted and shown/.test(basisDays.note) && basisDays.rateOff, JSON.stringify(basisDays));
   await page.click('.view-tab[data-view="machine"]');
   await page.waitForTimeout(600);
   const maint0 = await page.evaluate(() => ({ shown: !document.querySelector('#maint-panel').hidden, rows: [...document.querySelectorAll('#maint-rows tr')].map((tr) => `${tr.dataset.task}:${tr.dataset.state}`).join(','), names: [...document.querySelectorAll('#maint-rows tr td:first-child b')].map((b) => b.textContent).join('|'), next: document.querySelector('#maint-next').textContent, rail: document.querySelector('#maint-reminder-text').textContent, source: document.querySelector('#maint-source a').href, routine: /Routine cleaning \(not tracked here\)/.test(document.querySelector('#maint-extra').textContent) }));
@@ -997,8 +1005,8 @@ try {
   await page.fill('#maint-rows tr[data-task="monthly"] .maint-when', tenDaysAgo);
   await page.click('#maint-rows tr[data-task="monthly"] button[data-act="save"]');
   await page.waitForTimeout(300);
-  const maint1 = await page.evaluate(() => ({ rows: [...document.querySelectorAll('#maint-rows tr')].map((tr) => `${tr.dataset.task}:${tr.dataset.state}`).join(','), next: document.querySelector('#maint-next').textContent, state: document.querySelector('#maint-next').dataset.state, rail: document.querySelector('#maint-reminder-text').textContent, brews: document.querySelector('#maint-rows tr[data-task="monthly"] td.num').textContent, stored: window.__pb.maintenance }));
-  check('entered dates give each job a next-due date; the reminder names the overdue one and counts the brews since', maint1.rows === 'weekly:ok,monthly:due,deep:never' && maint1.state === 'due' && /^Overdue: Chamber cleaning — it was due \d+ days ago/.test(maint1.next) && /brews? since it was last done/.test(maint1.next) && /No date yet for: deep cleaning/.test(maint1.next) && /^Overdue: chamber cleaning/.test(maint1.rail) && Number(maint1.brews) >= 1 && maint1.stored.weekly.length === 1 && maint1.stored.monthly.length === 1, JSON.stringify({ ...maint1, stored: undefined }));
+  const maint1 = await page.evaluate(() => ({ rows: [...document.querySelectorAll('#maint-rows tr')].map((tr) => `${tr.dataset.task}:${tr.dataset.state}`).join(','), next: document.querySelector('#maint-next').textContent, state: document.querySelector('#maint-next').dataset.state, rail: document.querySelector('#maint-reminder-text').textContent, brews: document.querySelector('#maint-rows tr[data-task="monthly"] td.used b').textContent, stored: window.__pb.maintenance }));
+  check('entered dates give each job a next-due date; the reminder names the overdue one and counts the brews since', maint1.rows === 'weekly:ok,monthly:due,deep:never' && maint1.state === 'due' && /^Overdue: Chamber cleaning — it was due \d+ days ago/.test(maint1.next) && /· \d+ shots? since it was last done\./.test(maint1.next) && /No date yet for: deep cleaning/.test(maint1.next) && /^Overdue: chamber cleaning/.test(maint1.rail) && Number(maint1.brews) >= 1 && maint1.stored.weekly.length === 1 && maint1.stored.monthly.length === 1, JSON.stringify({ ...maint1, stored: undefined }));
   await page.click('#maint-rows tr[data-task="deep"] button[data-act="now"]');
   await page.waitForTimeout(300);
   const maint2 = await page.evaluate(() => ({ rows: [...document.querySelectorAll('#maint-rows tr')].map((tr) => `${tr.dataset.task}:${tr.dataset.state}`).join(','), monthly: document.querySelector('#maint-rows tr[data-task="monthly"]').textContent, next: document.querySelector('#maint-next').textContent }));
@@ -1010,6 +1018,66 @@ try {
   check('the piston was checked after the brew: it travelled, came back to rest, all operating OK', pistonUi.last?.ok === true && pistonUi.last.returned && pistonUi.last.brewSec > 3 && pistonUi.badge === 'all operating OK' && /All operating OK/.test(pistonUi.text), JSON.stringify(pistonUi));
   const backupMaint = await page.evaluate(async () => (await window.__pb.store.exportAll()).maintenance);
   check('the cleaning dates travel in a backup', backupMaint.weekly.length === 1 && backupMaint.monthly.length === 1 && backupMaint.deep.length === 0, JSON.stringify(backupMaint));
+
+  // ---- v0.23 (issue #9): the schedule counted by the shots made, not only by the days passed
+  await page.click('.view-tab[data-view="settings"]');
+  await page.selectOption('#set-maint-basis', 'shots');
+  await page.waitForTimeout(200);
+  const sNote = await page.evaluate(() => ({ note: document.querySelector('#maint-basis-note').textContent, rateOff: document.querySelector('#set-maint-rate').disabled }));
+  check('by shots: Settings says what the schedule comes to — 14, 60 and 180 shots at two in a day of use', /With 2 shots in a day of use: internal cleaning every 14 shots \(7 days of use\), chamber cleaning every 60 shots \(30 days of use\), deep cleaning every 180 shots \(90 days of use\)\./.test(sNote.note) && !sNote.rateOff, sNote.note);
+  await page.click('.view-tab[data-view="machine"]');
+  await page.waitForTimeout(300);
+  const row = (id) => page.evaluate((task) => { const tr = document.querySelector(`#maint-rows tr[data-task="${task}"]`); return { state: tr.dataset.state, by: tr.dataset.by, used: tr.querySelector('td.used').innerText.replace(/\s+/g, ' ').trim(), due: tr.children[3].innerText.replace(/\s+/g, ' ').trim(), when: tr.querySelector('.maint-when-text').textContent, bar: tr.querySelector('.maint-bar i')?.style.width || '' }; }, id);
+  const own = await page.evaluate(() => window.__pb.state.shots.filter((x) => !x.inProgress && x.source !== 'demo').length);
+  const m1 = await row('monthly');
+  const w1 = await row('weekly');
+  check('the chamber cleaning done 40 days ago is not overdue by shots: only the brews made since count against its 60', m1.state === 'ok' && m1.by === 'shots' && new RegExp(`^${own} of 60 `).test(m1.used) && / of 30 days of use$/.test(m1.used) && new RegExp(`^after ${60 - own} more shots `).test(m1.due) && /— here: every 60 shots \(30 days of use\)$/.test(m1.when), JSON.stringify({ own, m1 }));
+  check('the internal cleaning done a moment ago has its 14 shots ahead of it', w1.state === 'ok' && w1.by === 'shots' && /^0 of 14 0\.0 of 7 days of use$/.test(w1.used) && /^after 14 more shots /.test(w1.due) && w1.bar === '0%', JSON.stringify(w1));
+  // sixteen shots pulled at the machine while the app was closed, over the last three days; the internal cleaning was three days ago
+  await page.click('#maint-rows tr[data-task="weekly"] button[data-act="undo"]');
+  await page.waitForTimeout(200);
+  const threeDaysAgo = await page.evaluate(() => new Date(Date.now() - 3 * 86400000 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16));
+  await page.fill('#maint-rows tr[data-task="weekly"] .maint-when', threeDaysAgo);
+  await page.click('#maint-rows tr[data-task="weekly"] button[data-act="save"]');
+  await page.waitForTimeout(300);
+  const known = await page.evaluate(async (port) => {
+    const t = Math.floor(Date.now() / 1000);
+    await fetch(`http://127.0.0.1:${port}/mock/dial`, { method: 'POST', body: JSON.stringify({ extraHistory: Array.from({ length: 16 }, (_, i) => t - (i + 1) * 4 * 3600) }) });
+    return window.__pb.refreshMachineShotTimes();
+  }, MOCK_PORT);
+  await page.waitForTimeout(300);
+  const w2 = await row('weekly');
+  const ui2 = await page.evaluate(() => ({ next: document.querySelector('#maint-next').textContent, state: document.querySelector('#maint-next').dataset.state, rail: document.querySelector('#maint-reminder-text').textContent, note: document.querySelector('#maint-note').textContent, stored: (window.__pb.machineShotTimes || []).length }));
+  const since = 16 + own; // the mock's own saved shot is one of the brews recorded here, counted once
+  check('shots in the machine\'s history count too: read when asked, kept, and counted once with the brews recorded here', known >= 16 && ui2.stored === known && new RegExp(`^${since} shots counted — ${own} recorded here, 16 more from the machine's history · your pace: \\d+(\\.\\d)? a day over the last 14 days$`).test(ui2.note), JSON.stringify({ known, note: ui2.note, own }));
+  check('with those shots the internal cleaning is overdue after three days — its 14 shots are used up', w2.state === 'due' && w2.by === 'shots' && new RegExp(`^${since} of 14 `).test(w2.used) && new RegExp(`^now — ${since - 14} shots over reached `).test(w2.due) && w2.bar === '100%' && ui2.state === 'due' && new RegExp(`^Overdue: Internal cleaning — ${since} shots since it was last done, ${since - 14} more than the 14 it is due after \\(reached `).test(ui2.next) && ui2.rail === `Overdue: internal cleaning (${since - 14} shots over)`, JSON.stringify({ w2, ui2 }));
+  // a busier household: ten shots in a day of use
+  await page.click('.view-tab[data-view="settings"]');
+  await page.fill('#set-maint-rate', '10');
+  await page.press('#set-maint-rate', 'Enter');
+  await page.waitForTimeout(300);
+  await page.click('.view-tab[data-view="machine"]');
+  await page.waitForTimeout(300);
+  const w3 = await row('weekly');
+  const ui3 = await page.evaluate(() => ({ next: document.querySelector('#maint-next').textContent, rail: document.querySelector('#maint-reminder-text').textContent, note: document.querySelector('#maint-basis-note').textContent }));
+  check('the shots in a day of use can be changed: at ten a day the same cleaning is 70 shots, with a date estimated from the pace', w3.state === 'ok' && new RegExp(`^${since} of 70 `).test(w3.used) && new RegExp(`^after ${70 - since} more shots about .* at \\d+(\\.\\d)? a day$`).test(w3.due) && new RegExp(`^Next: Internal cleaning — due after ${70 - since} more shots \\(${since} of 70 since it was last done\\) · about .* at your pace of `).test(ui3.next) && ui3.rail === `Next cleaning: internal cleaning after ${70 - since} more shots` && /With 10 shots in a day of use: internal cleaning every 70 shots/.test(ui3.note), JSON.stringify({ w3, ui3 }));
+  // shots or the calendar, whichever comes first
+  await page.click('.view-tab[data-view="settings"]');
+  await page.selectOption('#set-maint-basis', 'both');
+  await page.waitForTimeout(200);
+  await page.click('.view-tab[data-view="machine"]');
+  await page.waitForTimeout(300);
+  const m4 = await row('monthly');
+  const w4 = await row('weekly');
+  const ui4 = await page.evaluate(() => document.querySelector('#maint-next').textContent);
+  check('"shots or the calendar, whichever comes first": the chamber cleaning 40 days ago is overdue by its date, the internal one is nearer by its date than by its shots', m4.state === 'due' && m4.by === 'days' && /was due \d+ days ago · the calendar comes first: \d+ shots still to go$/.test(m4.due) && w4.state === 'ok' && w4.by === 'days' && /due in [34] days · the calendar comes first/.test(w4.due) && new RegExp(`^Overdue: Chamber cleaning — it was due \\d+ days ago \\([^)]+\\) · \\d+ of 300 shots\\.`).test(ui4), JSON.stringify({ m4, w4, ui4 }));
+  // back to the defaults for what follows
+  await page.click('.view-tab[data-view="settings"]');
+  await page.selectOption('#set-maint-basis', 'shots');
+  await page.fill('#set-maint-rate', '2');
+  await page.press('#set-maint-rate', 'Enter');
+  await page.waitForTimeout(300);
+  await page.evaluate(async (port) => { await fetch(`http://127.0.0.1:${port}/mock/dial`, { method: 'POST', body: JSON.stringify({ extraHistory: [] }) }); }, MOCK_PORT);
   // ---- v0.22: Temperatures and power — the Shots panel, History's two folding sections, compare / analyze / export / delete
   await page.click('.view-tab[data-view="settings"]');
   await page.uncheck('#set-maintenance');

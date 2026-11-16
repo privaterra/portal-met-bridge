@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.23.0
+
+- Matches portal-met-bridge v0.23.0. **The cleaning & maintenance schedule is counted by the shots made, not only by the days passed** ([#9](https://github.com/privaterra/portal-met-bridge/issues/9)): a day of use is a number of shots (2 unless changed under Settings → Machine), so the weekly cleaning is due after 14 shots, the chamber cleaning after 60 and the deep cleaning after 180. Shots in the machine's own history count too. The calendar can be kept as a second limit, or as the only one.
+- Security check for this release: no open advisories for the shipped libraries (all current), none for the development tools.
+
 ## 0.22.0
 
 - Matches portal-met-bridge v0.22.0. **Temperatures and power** moved from the Machine tab to the **Shots** tab: the graphs follow the brew as it runs, count time from the start of the brew, and keep the brew's readings on screen afterwards; *Save to History* keeps them as a record (or every brew's, under Settings → Heating).

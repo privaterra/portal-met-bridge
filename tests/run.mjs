@@ -1513,18 +1513,20 @@ await test('cleaning & maintenance (v0.20): the schedule, the dates, the reminde
   log = recordMaintenance(log, 'weekly', now, { now });
   const shots = [{ startedAt: now - 3600000 }, { startedAt: now + 60000 }, { startedAt: now + 120000 }, { startedAt: now + 180000, source: 'demo' }, { startedAt: now + 200000, inProgress: true }];
   const later = now + 3 * 86400000;
-  const w = taskStatus(MAINTENANCE_TASKS[0], log, { now: later, shots });
-  assert.deepEqual([w.state, w.dueInDays, w.brewsSince, w.dueAt], ['ok', 4, 2, at(2026, 11, 21)], 'brews since it was done are counted (not demo shots, not a recording in progress)');
-  assert.equal(taskStatus(MAINTENANCE_TASKS[0], log, { now: now + 6.5 * 86400000 }).state, 'soon');
-  assert.equal(taskStatus(MAINTENANCE_TASKS[0], log, { now: now + 8 * 86400000 }).state, 'due');
-  const r1 = maintenanceReminder(log, { now, shots });
-  assert.ok(/^Next: Internal cleaning — due in 7 days/.test(r1.text) && /No date yet for: chamber cleaning, deep cleaning\./.test(r1.text) && r1.state === 'ok', r1.text);
+  // by the calendar only (basis 'days'): the dates Meticulous gives, however much the machine was used
+  const days = { basis: 'days' };
+  const w = taskStatus(MAINTENANCE_TASKS[0], log, { now: later, shots, ...days });
+  assert.deepEqual([w.state, w.dueBy, w.dueInDays, w.brewsSince, w.shotsSince, w.dueAt], ['ok', 'days', 4, 2, 2, at(2026, 11, 21)], 'shots since it was done are counted (not demo shots, not a recording in progress)');
+  assert.equal(taskStatus(MAINTENANCE_TASKS[0], log, { now: now + 6.5 * 86400000, ...days }).state, 'soon');
+  assert.equal(taskStatus(MAINTENANCE_TASKS[0], log, { now: now + 8 * 86400000, ...days }).state, 'due');
+  const r1 = maintenanceReminder(log, { now, shots, ...days });
+  assert.ok(/^Next: Internal cleaning — due in 7 days \([^)]+\) · 0 shots since it was last done\. No date yet for: chamber cleaning, deep cleaning\.$/.test(r1.text) && r1.state === 'ok', r1.text);
   log = recordMaintenance(log, 'monthly', at(2026, 10, 1), { now });
-  const r2 = maintenanceReminder(log, { now, shots });
+  const r2 = maintenanceReminder(log, { now, shots, ...days });
   assert.ok(/^Overdue: Chamber cleaning — it was due 13 days ago/.test(r2.text) && r2.state === 'due', r2.text);
   // a deep cleaning covers the smaller jobs
   log = recordMaintenance(log, 'deep', now, { now });
-  const st = maintenanceStatus(log, { now });
+  const st = maintenanceStatus(log, { now, ...days });
   assert.deepEqual(st.tasks.map((t) => `${t.id}:${t.state}:${t.coveredBy || '-'}`), ['weekly:ok:-', 'monthly:ok:deep', 'deep:ok:-']);
   assert.equal(st.next.id, 'weekly');
   assert.equal(st.tasks[1].dueAt, at(2026, 12, 14));
@@ -1867,6 +1869,109 @@ await test('temperatures and power (v0.22): a record from a backup is checked re
   // the store keeps the records and a backup carries them
   const storeSrc = readFileSync(new URL('../js/store.js', import.meta.url), 'utf8');
   assert.ok(/const DB_VERSION = 5;/.test(storeSrc) && storeSrc.includes("createObjectStore('thermal', { keyPath: 'id' })") && /exportedAt: [^}]*\bthermal\b/.test(storeSrc) && storeSrc.includes('cleanImportedThermal(raw)'));
+});
+
+// ------------------------------------------------------------------ v0.23 --
+await test('cleaning schedule (v0.23, issue #9): a job is due by the shots made — a day of use is a number of shots — with the calendar as an optional second limit', () => {
+  const { MAINTENANCE_TASKS, MAINTENANCE_BASES, MAINTENANCE_BASIS_DEFAULT, SHOTS_PER_DAY_DEFAULT, PACE_WINDOW_DAYS, cleanBasis, cleanShotsPerDay, intervalDays, shotBudget, cleanShotTimes, shotTimes, recentPace, taskStatus, maintenanceStatus, maintenanceReminder, maintenanceShort, scheduleText, recordMaintenance } = maintenance;
+  const [weekly, monthly, deep] = MAINTENANCE_TASKS;
+  const DAY = 86400000;
+  const now = new Date(2026, 10, 14, 12).getTime();
+  const fmtDate = (ms) => new Date(ms).toISOString().slice(0, 10);
+  // the schedule in shots: a week is 7 days of use, a month 30, three months 90; a day of use is two shots unless changed
+  assert.deepEqual([MAINTENANCE_BASIS_DEFAULT, SHOTS_PER_DAY_DEFAULT, PACE_WINDOW_DAYS, Object.keys(MAINTENANCE_BASES).join()], ['shots', 2, 14, 'shots,both,days']);
+  assert.deepEqual([weekly, monthly, deep].map((t) => intervalDays(t.every)), [7, 30, 90]);
+  assert.deepEqual([weekly, monthly, deep].map((t) => shotBudget(t, 2)), [14, 60, 180]);
+  assert.deepEqual([shotBudget(weekly, 6), shotBudget(weekly, 0.5), shotBudget(weekly, 1), shotBudget(deep, 4.5)], [42, 4, 7, 405]);
+  assert.deepEqual([cleanShotsPerDay('3'), cleanShotsPerDay(2.26), cleanShotsPerDay(0), cleanShotsPerDay(99), cleanShotsPerDay('x'), cleanShotsPerDay(null)], [3, 2.3, 2, 2, 2, 2]);
+  assert.deepEqual([cleanBasis('both'), cleanBasis('days'), cleanBasis('constructor'), cleanBasis(undefined)], ['both', 'days', 'shots', 'shots']);
+  assert.equal(scheduleText(2), 'With 2 shots in a day of use: internal cleaning every 14 shots (7 days of use), chamber cleaning every 60 shots (30 days of use), deep cleaning every 180 shots (90 days of use).');
+  assert.ok(scheduleText(1).startsWith('With 1 shot in a day of use: internal cleaning every 7 shots'));
+  // every shot counts once: the app's brews (not demo, not in progress) and the machine's own history
+  const t0 = now - 3 * DAY;
+  const own = [{ startedAt: t0 + 3600e3 }, { startedAt: t0 + 7200e3 }, { startedAt: t0 + 9000e3, source: 'demo' }, { startedAt: t0 + 9500e3, inProgress: true }, { startedAt: 'x' }, null];
+  const machine = [t0 + 3600e3 + 20000, t0 + 5 * 3600e3, t0 + 6 * 3600e3, NaN, -5];
+  assert.deepEqual(shotTimes(own, machine), [t0 + 3600e3, t0 + 7200e3, t0 + 5 * 3600e3, t0 + 6 * 3600e3].sort((a, b) => a - b), 'the machine\'s record of a shot the app also recorded (20 s apart) is the same shot');
+  assert.deepEqual(shotTimes([], []), []);
+  assert.deepEqual(cleanShotTimes([5, 'x', now, now, now + 3 * DAY, -1, 7.4], { now }), [now, 7, 5]);
+  assert.equal(cleanShotTimes(Array.from({ length: 30 }, (_, i) => i + 1), { now, max: 10 }).length, 10);
+  // the pace: shots a day over the last 14 days — over fewer when the first known shot is more recent
+  assert.equal(recentPace([], { now }), 0);
+  assert.equal(recentPace([now - 20 * DAY], { now }), 0, 'nothing in the window');
+  assert.equal(recentPace([now - 40 * DAY, ...Array.from({ length: 28 }, (_, i) => now - (i + 0.5) * DAY / 2)], { now }), 2, 'two a day over the full fourteen days');
+  assert.equal(recentPace([now - 2 * DAY, now - DAY, now - 3600e3], { now }), 1.5, 'three shots since the first one two days ago');
+  assert.equal(recentPace([now - 3600e3], { now }), 1, 'never more than the shots made, over at least a day');
+  // by shots (the default): 9 shots in three days against a weekly cleaning done three days ago
+  const log = recordMaintenance(null, 'weekly', t0, { now });
+  const nine = Array.from({ length: 9 }, (_, i) => ({ startedAt: t0 + (i + 1) * 7 * 3600e3 }));
+  const w = taskStatus(weekly, log, { now, shots: nine });
+  assert.deepEqual([w.basis, w.dueBy, w.state, w.shotsSince, w.budget, w.shotsLeft, w.usedDays, w.intervalDays, w.leftDays, w.reachedAt], ['shots', 'shots', 'ok', 9, 14, 5, 4.5, 7, 2.5, null]);
+  assert.ok(Math.abs(w.pace - 9 / (2 + 17 / 24)) < 1e-9 && Math.abs(w.dueAt - (now + (5 / w.pace) * DAY)) < 1 && w.dueInDays === 2 && w.calendarDueAt === t0 + 7 * DAY, 'the date is an estimate: the shots left at the recent pace');
+  const r = maintenanceReminder(log, { now, shots: nine, fmtDate });
+  assert.equal(r.text, 'Next: Internal cleaning — due after 5 more shots (9 of 14 since it was last done) · about 2026-11-16 at your pace of 3.3 a day. No date yet for: chamber cleaning, deep cleaning.');
+  assert.equal(maintenanceShort(maintenanceStatus(log, { now, shots: nine })), 'Next cleaning: internal cleaning after 5 more shots');
+  // "soon" from a day of use before the limit (two shots at two a day); due when the limit is reached
+  const n = (k) => Array.from({ length: k }, (_, i) => ({ startedAt: t0 + (i + 1) * 4 * 3600e3 }));
+  assert.deepEqual([11, 12, 13, 14, 16].map((k) => taskStatus(weekly, log, { now, shots: n(k) }).state), ['ok', 'soon', 'soon', 'due', 'due']);
+  const over = taskStatus(weekly, log, { now, shots: n(16) });
+  assert.deepEqual([over.shotsLeft, over.reachedAt, over.dueAt, over.dueInDays], [-2, t0 + 14 * 4 * 3600e3, t0 + 14 * 4 * 3600e3, -1], 'due since the shot that used the last of the allowance');
+  assert.equal(maintenanceReminder(log, { now, shots: n(16), fmtDate }).text, 'Overdue: Internal cleaning — 16 shots since it was last done, 2 more than the 14 it is due after (reached 2026-11-13). No date yet for: chamber cleaning, deep cleaning.');
+  assert.ok(maintenanceReminder(log, { now, shots: n(14), fmtDate }).text.startsWith('Overdue: Internal cleaning — 14 shots since it was last done, the 14 it is due after (reached 2026-11-13).'));
+  assert.deepEqual([maintenanceShort(maintenanceStatus(log, { now, shots: n(16) })), maintenanceShort(maintenanceStatus(log, { now, shots: n(14) })), maintenanceShort(maintenanceStatus(null, { now }))], ['Overdue: internal cleaning (2 shots over)', 'Overdue: internal cleaning (due now)', 'Cleaning & maintenance: enter your dates']);
+  // a busier machine reaches the same cleaning sooner; a machine left alone is not nagged by the calendar
+  assert.equal(taskStatus(weekly, log, { now, shots: n(16), shotsPerDay: 6 }).state, 'ok', 'at six shots in a day of use the weekly cleaning is 42 shots away');
+  const idle = taskStatus(weekly, log, { now: t0 + 30 * DAY, shots: [] });
+  assert.deepEqual([idle.state, idle.shotsSince, idle.dueAt, idle.dueInDays, idle.pace], ['ok', 0, null, null, 0], 'no shots: not due, and no date to give');
+  assert.ok(maintenanceReminder(log, { now: t0 + 30 * DAY, shots: [] }).text.includes('due after 14 more shots (0 of 14 since it was last done) · no date: no shots in the last 14 days.'));
+  // shots made before the cleaning, or after "now", do not count against it
+  assert.equal(taskStatus(weekly, log, { now, shots: [{ startedAt: t0 - 600000 }, { startedAt: t0 + 600000 }, { startedAt: now + 600000 }] }).shotsSince, 1);
+  // the machine's history counts even when the app recorded nothing
+  const fromMachine = taskStatus(weekly, log, { now, shots: [], machineTimes: n(15).map((x) => x.startedAt) });
+  assert.deepEqual([fromMachine.shotsSince, fromMachine.state], [15, 'due']);
+  const stM = maintenanceStatus(log, { now, shots: n(3), machineTimes: n(15).map((x) => x.startedAt) });
+  assert.deepEqual(stM.counted, { total: 15, own: 3, machine: 12 });
+  // by shots or the calendar, whichever comes first
+  const b1 = taskStatus(weekly, log, { now, shots: nine, basis: 'both' }); // 5 shots = 2.5 days of use left; 4 days on the calendar
+  assert.deepEqual([b1.dueBy, b1.state, b1.leftDays], ['shots', 'ok', 2.5]);
+  assert.ok(maintenanceReminder(log, { now, shots: nine, basis: 'both', fmtDate }).text.includes('at your pace of 3.3 a day · 2026-11-18 at the latest.'));
+  const b2 = taskStatus(weekly, log, { now, shots: n(2), basis: 'both' }); // 12 shots = 6 days of use left; 4 days on the calendar
+  assert.deepEqual([b2.dueBy, b2.state, b2.dueAt, b2.dueInDays], ['days', 'ok', t0 + 7 * DAY, 4]);
+  assert.equal(maintenanceReminder(log, { now, shots: n(2), basis: 'both', fmtDate }).text, 'Next: Internal cleaning — due in 4 days (2026-11-18) · 2 of 14 shots. No date yet for: chamber cleaning, deep cleaning.');
+  const b3 = taskStatus(weekly, log, { now: t0 + 8 * DAY, shots: n(2), basis: 'both' });
+  assert.deepEqual([b3.dueBy, b3.state], ['days', 'due'], 'the calendar date passed first');
+  const b4 = taskStatus(weekly, log, { now, shots: n(16), basis: 'both' });
+  assert.deepEqual([b4.dueBy, b4.state], ['shots', 'due'], 'the shots ran out first');
+  const b5 = taskStatus(weekly, log, { now: t0 + 2 * DAY, shots: [], basis: 'both' });
+  assert.deepEqual([b5.dueBy, b5.dueAt], ['days', t0 + 7 * DAY], 'with nothing brewed the calendar is the nearer limit');
+  // the calendar only: the same shots change nothing
+  const d1 = taskStatus(weekly, log, { now, shots: n(16), basis: 'days' });
+  assert.deepEqual([d1.dueBy, d1.state, d1.shotsSince, d1.dueAt], ['days', 'ok', 16, t0 + 7 * DAY]);
+  // what comes next: an overdue job before one that is not, then the one with the least left
+  let all = recordMaintenance(log, 'monthly', now - 20 * DAY, { now });
+  all = recordMaintenance(all, 'deep', now - 80 * DAY, { now });
+  const forty = Array.from({ length: 40 }, (_, i) => ({ startedAt: now - 20 * DAY + (i + 1) * 11 * 3600e3 })); // one every eleven hours, the last of them forty hours ago
+  const st = maintenanceStatus(all, { now, shots: forty });
+  assert.deepEqual(st.tasks.map((t) => `${t.id}:${t.state}:${t.shotsSince}/${t.budget}`), ['weekly:ok:3/14', 'monthly:ok:40/60', 'deep:ok:40/180']);
+  assert.deepEqual([st.next.id, st.basis, st.shotsPerDay, Math.round(st.pace * 10) / 10], ['weekly', 'shots', 2, 1.9]);
+  const st3 = maintenanceStatus(all, { now, shots: forty, shotsPerDay: 1 });
+  assert.deepEqual(st3.tasks.map((t) => `${t.id}:${t.state}:${t.shotsSince}/${t.budget}`), ['weekly:ok:3/7', 'monthly:due:40/30', 'deep:ok:40/90']);
+  assert.equal(st3.next.id, 'monthly', 'the overdue job comes first');
+  assert.ok(/^Overdue: Chamber cleaning — 40 shots since it was last done, 10 more than the 30 it is due after/.test(maintenanceReminder(all, { now, shots: forty, shotsPerDay: 1 }).text));
+  // nothing entered: no numbers
+  const never = taskStatus(deep, log, { now, shots: nine });
+  assert.deepEqual([never.state, never.shotsSince, never.dueAt, never.budget], ['never', null, null, 180]);
+});
+
+await test('cleaning schedule (v0.23): the page has the two settings, the table counts shots, and the machine\'s history is read for it', () => {
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  const main = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+  const sect = html.slice(html.indexOf('data-section="machine"'), html.indexOf('data-section="heating"'));
+  assert.ok(sect.includes('id="set-maint-basis"') && sect.includes('id="set-maint-rate"') && sect.includes('id="maint-basis-note"'), 'under Settings → Machine');
+  assert.deepEqual([...sect.matchAll(/<option value="([a-z]+)"( selected)?>/g)].filter((m) => ['shots', 'both', 'days'].includes(m[1])).map((m) => `${m[1]}${m[2] ? '*' : ''}`), ['shots*', 'both', 'days'], 'by shots is the default');
+  assert.ok(/id="set-maint-rate" type="number" min="0\.5" max="30" step="0\.5" value="2"/.test(sect));
+  assert.ok(/<th[^>]*>Shots since<\/th><th>Next due<\/th>/.test(html) && !html.includes('Brews since'));
+  assert.ok(main.includes("maintenanceBasis: { def: 'shots', el: 'set-maint-basis' }") && main.includes("maintenanceShotsPerDay: { def: 2, el: 'set-maint-rate', num: true, min: 0.5, max: 30 }"));
+  assert.ok(main.includes('meticulous.history({ maxResults: 500, dumpData: false })') && main.includes("store.setSetting('machineShotTimes'"));
 });
 
 console.log(`\n${passed} test group(s) passed in total${process.exitCode ? ', with failures' : ''}.`);

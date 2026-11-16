@@ -1,25 +1,25 @@
 // main.js — wires the devices, the recorder, storage, charts and export together.
 
-import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.22.0';
-import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, machineBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.22.0';
-import { MachinePanel, WINDOW_SEC, VIEW_SPANS } from './machine-panel.js?v=0.22.0';
-import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.22.0';
-import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.22.0';
-import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.22.0';
-import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, profileFinalWeight, setBeveragePreference, grindMicrons, measuredEy, DEFAULTS } from './analysis.js?v=0.22.0';
-import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, approxTokens, reviewProfileOf, ratingOf, ratingMaxOf, REVIEW_SECTIONS, PREP_STEPS } from './review.js?v=0.22.0';
-import { PROVIDERS, streamCompletion, listModels, testKey, maskKey, maxTokensFor, endpointRisk, isConnectorRejection } from './ai.js?v=0.22.0';
-import { COMMUNITY, subjectKey, communityMode, communityHow, communitySubjects, gatherCommunity, communityInstructions, communityMention, communityBlock, communityConnector, mcpCall } from './community.js?v=0.22.0';
-import { MAINTENANCE_SOURCE, MAINTENANCE_TASKS, MAINTENANCE_ROUTINE, MAINTENANCE_WARNINGS, MAINTENANCE_GREASE, cleanMaintenanceLog, recordMaintenance, undoMaintenance, mergeMaintenanceLogs, maintenanceStatus, maintenanceReminder, daysText, PistonMonitor, cleanPistonResult } from './maintenance.js?v=0.22.0';
-import { CALIBRATION_WINDOW_MIN, ZERO_WITH, READING_SPREAD_WARN, refractometerOf, refractometerGuide, netWater, netTds, calibrationCandidate, averageReadings, buildReading, editReading, calibrationImpact, impactText, readingRows, coffeeCalibrations } from './refractometer.js?v=0.22.0';
-import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.22.0';
-import { makeDemoShot } from './demo.js?v=0.22.0';
-import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug, loadJsPdf, heatingJpeg, heatingPdf } from './export.js?v=0.22.0';
-import { THERMAL_SERIES, TEMP_KEYS, POWER_KEYS, SUMMARY_FIELDS, THERMAL_AI_SYSTEM, brewSpans, matchShot, buildRecord, seriesOf, compareRange, analyzeRecords, thermalCsvRows, thermalSummaryRows, thermalDigest, fmtSummary, fmtSpan, makeDemoThermalRows } from './thermal.js?v=0.22.0';
-import { REVIEW_FORMATS, reviewFile, reviewMarkdownFile } from './review-export.js?v=0.22.0';
-import { log, formatLine } from './log.js?v=0.22.0';
-import { files, Files, FILE_KINDS, DEFAULT_ROOT, cleanDirName } from './files.js?v=0.22.0';
-import { HeatMonitor, HEAT_RULES, HEAT_SENSORS, sensorTemp } from './heat.js?v=0.22.0';
+import { PortalBle, bluetoothSupported, environmentCheck, STEPS } from './portal-ble.js?v=0.23.0';
+import { MeticulousClient, machineSamplesFromSavedShot, normalizeBaseUrl, machineBaseUrl, extractionEndSec, DEFAULT_HOST } from './meticulous.js?v=0.23.0';
+import { MachinePanel, WINDOW_SEC, VIEW_SPANS } from './machine-panel.js?v=0.23.0';
+import { ShotRecorder, finalizeCheckpoint } from './recorder.js?v=0.23.0';
+import { Store, coffeeKey, deleteAllDatabases, LIST_KINDS } from './store.js?v=0.23.0';
+import { TimeChart, MassChart, CalibrationChart, CompareChart, COMPARE_COLORS } from './charts.js?v=0.23.0';
+import { analyzeShot, fitCalibration, fitForCoffee, estimateForShot, extractionYield, predictTds, beverageOf, beverageOverridden, beverageSource, beverageDefaultOf, profileTargetOf, profileFinalWeight, setBeveragePreference, grindMicrons, measuredEy, DEFAULTS } from './analysis.js?v=0.23.0';
+import { buildShotDigest, buildReviewMessages, compactProfile, renderMarkdown, reviewTitle, approxTokens, reviewProfileOf, ratingOf, ratingMaxOf, REVIEW_SECTIONS, PREP_STEPS } from './review.js?v=0.23.0';
+import { PROVIDERS, streamCompletion, listModels, testKey, maskKey, maxTokensFor, endpointRisk, isConnectorRejection } from './ai.js?v=0.23.0';
+import { COMMUNITY, subjectKey, communityMode, communityHow, communitySubjects, gatherCommunity, communityInstructions, communityMention, communityBlock, communityConnector, mcpCall } from './community.js?v=0.23.0';
+import { MAINTENANCE_SOURCE, MAINTENANCE_TASKS, MAINTENANCE_ROUTINE, MAINTENANCE_WARNINGS, MAINTENANCE_GREASE, cleanMaintenanceLog, recordMaintenance, undoMaintenance, mergeMaintenanceLogs, maintenanceStatus, maintenanceReminder, maintenanceShort, scheduleText, cleanShotTimes, intervalDays, daysText, MAINTENANCE_BASES, PACE_WINDOW_DAYS, PistonMonitor, cleanPistonResult } from './maintenance.js?v=0.23.0';
+import { CALIBRATION_WINDOW_MIN, ZERO_WITH, READING_SPREAD_WARN, refractometerOf, refractometerGuide, netWater, netTds, calibrationCandidate, averageReadings, buildReading, editReading, calibrationImpact, impactText, readingRows, coffeeCalibrations } from './refractometer.js?v=0.23.0';
+import { buildEnvelope, encodeHandoff, encodeForQr } from './beanconqueror.js?v=0.23.0';
+import { makeDemoShot } from './demo.js?v=0.23.0';
+import { chartToJpeg, legendOf, shotReportPdf, shotSamplesCsv, summaryRow, SUMMARY_COLUMNS, rowsToCsv, buildZip, download, stamp, slug, loadJsPdf, heatingJpeg, heatingPdf } from './export.js?v=0.23.0';
+import { THERMAL_SERIES, TEMP_KEYS, POWER_KEYS, SUMMARY_FIELDS, THERMAL_AI_SYSTEM, brewSpans, matchShot, buildRecord, seriesOf, compareRange, analyzeRecords, thermalCsvRows, thermalSummaryRows, thermalDigest, fmtSummary, fmtSpan, makeDemoThermalRows } from './thermal.js?v=0.23.0';
+import { REVIEW_FORMATS, reviewFile, reviewMarkdownFile } from './review-export.js?v=0.23.0';
+import { log, formatLine } from './log.js?v=0.23.0';
+import { files, Files, FILE_KINDS, DEFAULT_ROOT, cleanDirName } from './files.js?v=0.23.0';
+import { HeatMonitor, HEAT_RULES, HEAT_SENSORS, sensorTemp } from './heat.js?v=0.23.0';
 import qrcode from '../vendor/qrcode.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -98,6 +98,8 @@ const SETTINGS = {
   attachDelaySec: { def: 4, el: 'set-attach-delay', num: true, min: 1, max: 60 },
   machineVia: { def: 'auto', el: 'set-machine-via' },
   maintenanceShow: { def: true, el: 'set-maintenance', bool: true },
+  maintenanceBasis: { def: 'shots', el: 'set-maint-basis' },
+  maintenanceShotsPerDay: { def: 2, el: 'set-maint-rate', num: true, min: 0.5, max: 30 },
   settingsLayout: { def: 'compact', el: 'set-layout' },
   heatKeep: { def: false, el: 'set-heat-keep', bool: true },
   heatRule: { def: 'hold', el: 'set-heat-rule' },
@@ -326,6 +328,8 @@ function applySetting(key, v) {
       if (!$('view-settings').hidden) applySettingsLayout();
       break;
     case 'maintenanceShow':
+    case 'maintenanceBasis':
+    case 'maintenanceShotsPerDay':
       renderMaintenance();
       break;
     case 'heatKeep':
@@ -424,7 +428,7 @@ const SETTING_LABELS = {
   dirReviews: 'reviews folder', dirBackups: 'backups folder', dirLogs: 'logs folder', autoBackup: 'automatic backup',
   aiProvider: 'AI provider', aiKeyAnthropic: 'Anthropic key', aiModelAnthropic: 'Claude model', aiKeyOpenai: 'OpenAI key', aiModelOpenai: 'OpenAI model', aiBaseOpenai: 'OpenAI endpoint',
   aiKeyGoogle: 'Gemini key', aiModelGoogle: 'Gemini model', aiGrindStepUm: 'grinder step', aiDrink: 'usual drink', aiNotes: 'standing notes', reviewFormat: 'review file format',
-  aiKeyXai: 'xAI key', aiModelXai: 'Grok model', settingsLayout: 'how Settings opens', maintenanceShow: 'cleaning & maintenance', heatKeep: 'keep temperatures and power',
+  aiKeyXai: 'xAI key', aiModelXai: 'Grok model', settingsLayout: 'how Settings opens', maintenanceShow: 'cleaning & maintenance', maintenanceBasis: 'when a cleaning is due', maintenanceShotsPerDay: 'shots in a day of use', heatKeep: 'keep temperatures and power',
   communityEnabled: 'Meticulous Community', communityCoffee: 'Community: coffee', communityRoaster: 'Community: roaster', communityGrinder: 'Community: grinder', communityEspresso: 'Community: brews by origin and process',
   communityPourOver: 'Community: pour-over brews', communityProfiles: 'Community: brew profiles', communityVia: 'how Community reaches the AI',
   secVerdict: 'report: Verdict', secCompared: 'report: Shots compared', secStages: 'report: Stages', secStandsOut: 'report: What stands out', secHelped: 'report: What helped', secCommunity: 'report: Community comparison',
@@ -541,8 +545,8 @@ async function init() {
   await probeAppServer().catch(() => {});
   renderMachineVia();
   renderLogStatus();
-  $('about-version').textContent = 'v0.22.0';
-  log.info('app', `portal-met-bridge v0.22.0 started · ${navigator.userAgent}`);
+  $('about-version').textContent = 'v0.23.0';
+  log.info('app', `portal-met-bridge v0.23.0 started · ${navigator.userAgent}`);
 
   const env = await environmentCheck();
   renderPortalSteps({ secure: env.secure, api: env.api, adapter: env.adapter });
@@ -634,6 +638,7 @@ function connectMeticulous() {
     if (d.state === 'connected') {
       refreshProfileTargets().catch(() => {});
       setTimeout(() => backfillMachineRecords().catch(() => {}), 1500);
+      setTimeout(() => refreshMachineShotTimes().catch(() => {}), 2500); // the cleaning schedule counts every shot the machine made, not only those recorded here
     }
     $('brew-controls').hidden = d.state !== 'connected';
     if (d.state !== 'connected') {
@@ -3665,36 +3670,65 @@ $('set-collapse-all').addEventListener('click', () => setSectionsOpen(false));
 // settings store under 'maintenance' and travel in backups and settings files.
 
 let maintLog = cleanMaintenanceLog(null);
+let machineShotTimes = []; // when the machine's own history says a shot was made (ms) — shots pulled while this page was closed count too
 let pistonLast = null;
 const piston = new PistonMonitor();
 
 async function loadMaintenance() {
   maintLog = cleanMaintenanceLog(await store.getSetting('maintenance', null));
+  machineShotTimes = cleanShotTimes(await store.getSetting('machineShotTimes', null));
   pistonLast = cleanPistonResult(await store.getSetting('pistonLast', null));
+}
+
+/** Read the machine's shot history (times only) and keep it, so the cleaning schedule counts shots made without this page. */
+async function refreshMachineShotTimes() {
+  if (!meticulous?.connected) return 0;
+  let list;
+  try {
+    list = await meticulous.history({ maxResults: 500, dumpData: false });
+  } catch (err) {
+    log.warn('maintenance', `could not read the machine's shot history for the cleaning schedule: ${err?.message || err}`);
+    return 0;
+  }
+  const times = (Array.isArray(list) ? list : []).map((h) => Number(h?.time) * 1000);
+  const before = machineShotTimes.length;
+  machineShotTimes = cleanShotTimes([...machineShotTimes, ...times]);
+  await store.setSetting('machineShotTimes', machineShotTimes);
+  if (machineShotTimes.length !== before) log.info('maintenance', `${machineShotTimes.length} shots known from the machine's history (${machineShotTimes.length - before} new)`);
+  renderMaintenance();
+  return machineShotTimes.length;
 }
 
 const fmtDay = (ms) => new Date(ms).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
 /** A time as the value of an <input type="datetime-local"> (local wall clock, to the minute). */
 const localInputValue = (ms) => new Date(ms - new Date(ms).getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 const MAINT_STATE_LABEL = { never: 'no date entered', ok: 'on schedule', soon: 'due soon', due: 'overdue' };
+const maintOpts = () => ({ now: Date.now(), shots: state.shots, machineTimes: machineShotTimes, basis: settings.maintenanceBasis, shotsPerDay: settings.maintenanceShotsPerDay, fmtDate: fmtDay });
+const shotsWord = (n) => `${n} shot${n === 1 ? '' : 's'}`;
+const paceWord = (pace) => `${pace >= 10 ? pace.toFixed(0) : pace.toFixed(1)} a day`;
 
 function renderMaintenance() {
   const on = settings.maintenanceShow !== false;
   $('maint-panel').hidden = !on;
   const rail = $('maint-reminder');
+  const opts = maintOpts();
+  const st = maintenanceStatus(maintLog, opts);
+  // Settings → Machine: what the schedule comes to in shots
+  const byShots = st.basis !== 'days';
+  $('set-maint-rate').disabled = !byShots;
+  $('maint-basis-note').textContent = `${MAINTENANCE_BASES[st.basis].hint} ${byShots ? scheduleText(st.shotsPerDay) : 'Shots are still counted and shown, but they do not move the dates.'}`;
   if (!on) {
     rail.hidden = true;
     return;
   }
-  const opts = { now: Date.now(), shots: state.shots, fmtDate: fmtDay };
-  const st = maintenanceStatus(maintLog, opts);
   const reminder = maintenanceReminder(maintLog, opts);
   $('maint-next').textContent = reminder.text;
   $('maint-next').dataset.state = reminder.state;
   rail.hidden = false;
   rail.dataset.state = reminder.state;
-  $('maint-reminder-text').textContent = st.allNever ? 'Cleaning & maintenance: enter your dates' : reminder.state === 'due' ? `Overdue: ${st.next.task.name.toLowerCase()} (${daysText(st.next.dueInDays)})` : `Next cleaning: ${st.next.task.name.toLowerCase()} ${daysText(st.next.dueInDays)}`;
-  $('maint-note').textContent = `${state.shots.filter((x) => !x.inProgress && x.source !== 'demo').length} brews recorded by this app`;
+  $('maint-reminder-text').textContent = maintenanceShort(st);
+  const c = st.counted;
+  $('maint-note').textContent = `${shotsWord(c.total)} counted — ${c.own} recorded here${c.machine ? `, ${c.machine} more from the machine's history` : ''} · ${st.pace > 0 ? `your pace: ${paceWord(st.pace)} over the last ${PACE_WINDOW_DAYS} days` : `no shots in the last ${PACE_WINDOW_DAYS} days`}`;
   // do not redraw the table under someone typing a date into it
   if (!document.activeElement?.classList?.contains('maint-when')) {
     const nowValue = localInputValue(Date.now());
@@ -3702,20 +3736,39 @@ function renderMaintenance() {
       .map((t) => {
         const covered = t.coveredBy ? MAINTENANCE_TASKS.find((x) => x.id === t.coveredBy) : null;
         const last = t.lastAt == null ? '<span class="muted">not entered</span>' : `${esc(fmtDate(t.lastAt))}${covered ? `<br><small>done with the ${esc(covered.name.toLowerCase())}</small>` : ''}`;
-        const due = t.dueAt == null ? '<span class="muted">–</span>' : `${esc(fmtDay(t.dueAt))}<br><small>${esc(t.state === 'due' ? `was due ${daysText(t.dueInDays)}` : `due ${daysText(t.dueInDays)}`)}</small>`;
-        return `<tr data-task="${esc(t.task.id)}" data-state="${esc(t.state)}">
+        const pct = t.lastAt == null ? 0 : Math.max(0, Math.min(100, Math.round((100 * t.shotsSince) / t.budget)));
+        const used = t.lastAt == null
+          ? '<span class="muted">–</span>'
+          : byShots
+            ? `<b>${Number(t.shotsSince)}</b> of ${Number(t.budget)}<br><small>${esc(`${fmt(t.usedDays, 1)} of ${t.intervalDays} days of use`)}</small><div class="maint-bar" data-state="${esc(t.dueBy === 'shots' ? t.state : pct >= 100 ? 'due' : 'ok')}"><i style="width:${pct}%"></i></div>`
+            : `<b>${Number(t.shotsSince)}</b><br><small>not counted for the dates</small>`;
+        const calLine = t.calendarDueAt == null ? '' : `${t.calendarDueAt < Date.now() ? 'was due' : 'due'} ${daysText(calendarDaysTo(t.calendarDueAt))} by the calendar`;
+        let due = '<span class="muted">–</span>';
+        if (t.lastAt != null && t.dueBy === 'days') {
+          due = `${esc(fmtDay(t.dueAt))}<br><small>${esc(t.state === 'due' ? `was due ${daysText(t.dueInDays)}` : `due ${daysText(t.dueInDays)}`)}${st.basis === 'both' ? esc(` · the calendar comes first: ${t.shotsLeft > 0 ? `${shotsWord(t.shotsLeft)} still to go` : 'the shots are used up too'}`) : ''}</small>`;
+        } else if (t.lastAt != null) {
+          const head = t.shotsLeft > 0 ? `after ${t.shotsLeft} more shot${t.shotsLeft === 1 ? '' : 's'}` : t.shotsLeft === 0 ? 'now' : `now — ${shotsWord(-t.shotsLeft)} over`;
+          const when = t.shotsLeft <= 0 ? (t.reachedAt ? `reached ${fmtDate(t.reachedAt)}` : '') : t.shotsDueAt != null ? `about ${fmtDay(t.shotsDueAt)} at ${paceWord(t.pace)}` : `no date: no shots in the last ${PACE_WINDOW_DAYS} days`;
+          due = `${esc(head)}<br><small>${esc([when, st.basis === 'both' ? calLine : ''].filter(Boolean).join(' · '))}</small>`;
+        }
+        return `<tr data-task="${esc(t.task.id)}" data-state="${esc(t.state)}" data-by="${esc(t.dueBy || '')}">
           <td><b>${esc(t.task.name)}</b> <span class="maint-badge" data-state="${esc(t.state)}">${esc(MAINT_STATE_LABEL[t.state])}</span>
-            <div class="maint-when-text">${esc(t.task.when)}</div>
+            <div class="maint-when-text">${esc(t.task.when)}${byShots ? esc(` — here: every ${t.budget} shots (${intervalDays(t.task.every)} days of use)`) : ''}</div>
             <details class="maint-steps"><summary>What to do</summary><ol>${t.task.steps.map((x) => `<li>${esc(x)}</li>`).join('')}</ol>${t.task.warnings.map((x) => `<p class="maint-warn">⚠ ${esc(x)}</p>`).join('')}</details></td>
           <td>${last}</td>
+          <td class="used">${used}</td>
           <td>${due}</td>
-          <td class="num">${t.brewsSince == null ? '–' : Number(t.brewsSince)}</td>
           <td class="actions"><input type="datetime-local" class="maint-when" aria-label="When the ${esc(t.task.name.toLowerCase())} was done" value="${nowValue}" max="${nowValue}" /> <button class="btn small primary" data-act="save" title="Record that it was done at the date and time entered">Save date</button> <button class="btn small" data-act="now" title="Record that it was done just now">Done now</button>${t.ownAt != null ? ' <button class="btn small" data-act="undo" title="Remove the last date entered for this job">Undo</button>' : ''}</td>
         </tr>`;
       })
       .join('');
   }
   renderPiston();
+}
+/** Whole calendar days from today to `ms` (negative when it has passed). */
+function calendarDaysTo(ms) {
+  const day = (x) => { const d = new Date(x); return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()); };
+  return Math.round((day(ms) - day(Date.now())) / 86400000);
 }
 
 function renderPiston() {
@@ -3775,6 +3828,7 @@ $('maint-rows').addEventListener('click', async (e) => {
   }
 });
 setInterval(() => !state.stopped && renderMaintenance(), 30 * 60 * 1000); // "due in 2 days" moves on by itself
+setInterval(() => !state.stopped && refreshMachineShotTimes().catch(() => {}), 6 * 3600 * 1000); // shots made at the machine while this page sits open
 
 async function onPistonResult(r) {
   pistonLast = cleanPistonResult(r);
@@ -5694,7 +5748,7 @@ $('an-saved-rows').addEventListener('click', async (e) => {
   }
 });
 
-window.__pb = { tp, captureThermal, keepThermal, refreshThermalList, openThermalCompare, openThermalAnalysis, exportThermal, deleteThermal, tpTempChart, tpPowerChart, refCandidate, renderRefractometer, state, store, portal, recorder, timeChart, massChart, calChart, compareChart, compare, machinePanel, settings, log, files, heat, hist, an, piston, communityConfig, communityCache, buildQuery, openQueryDialog, renderMaintenance, get maintenance() { return maintLog; }, get pistonLast() { return pistonLast; }, runAutoBackup, stopEverything, openStopDialog, openShotDialog, openWeightDialog, openRatingDialog, openCompare, openAnalysis, runReview, refreshShotList, recoverUnfinishedShots, backfillMachineRecords, autosaveShotFiles, refreshProfileTargets, get meticulous() { return meticulous; } };
+window.__pb = { refreshMachineShotTimes, get machineShotTimes() { return machineShotTimes; }, tp, captureThermal, keepThermal, refreshThermalList, openThermalCompare, openThermalAnalysis, exportThermal, deleteThermal, tpTempChart, tpPowerChart, refCandidate, renderRefractometer, state, store, portal, recorder, timeChart, massChart, calChart, compareChart, compare, machinePanel, settings, log, files, heat, hist, an, piston, communityConfig, communityCache, buildQuery, openQueryDialog, renderMaintenance, get maintenance() { return maintLog; }, get pistonLast() { return pistonLast; }, runAutoBackup, stopEverything, openStopDialog, openShotDialog, openWeightDialog, openRatingDialog, openCompare, openAnalysis, runReview, refreshShotList, recoverUnfinishedShots, backfillMachineRecords, autosaveShotFiles, refreshProfileTargets, get meticulous() { return meticulous; } };
 
 init().catch((err) => {
   console.error(err);

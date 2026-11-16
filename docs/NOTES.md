@@ -307,6 +307,18 @@ The per-provider wording comes from the help page: ChatGPT is addressed as `@Met
 
 **Ask the AI…** sends `thermalDigest()`: the summary fields, the stage list, the findings, and status / external 1 / external 2 / tube / heater / motor power every 30 s before the brew (15 minutes at most) and every 2 s during it. About 5 kB per record.
 
+## The cleaning schedule counted in shots (v0.23, issue #9)
+
+Meticulous's schedule is in weeks and months; the request was that a job should come due by how much the machine was used. `maintenance.js` now measures a schedule interval in **days of use**: `intervalDays()` (a week 7, a month 30, three months 90) × the shots in a day of use (`maintenanceShotsPerDay`, default 2, 0.5–30) = `shotBudget()` — 14 / 60 / 180 shots at the default. `taskStatus()` counts the shots made since the job (or a bigger job that covers it) was last done; the job is *due* when the count reaches the budget and *soon* from the job's `soonDays` of use before that.
+
+*Which shots.* `shotTimes(shots, machineTimes)`: the app's brews (not demo, not in progress) merged with the machine's own history, counted once when two starts are within 45 s (the same window the machine-record backfill uses). `refreshMachineShotTimes()` in `main.js` reads `history({ maxResults: 500, dumpData: false })` 2.5 s after the socket connects and every six hours, and keeps the times in the settings store under `machineShotTimes` (numbers only, newest 5 000) so the count holds while the machine is off. They are not part of a backup: they are read again from the machine.
+
+*The date.* By shots there is no date to compute, only an estimate: shots left ÷ `recentPace()` (shots a day over the last 14 days, over fewer when the first known shot is more recent), or none when nothing was brewed in that time. Once due, `dueAt` is `reachedAt` — the moment of the shot that used the last of the allowance.
+
+*Basis* (`maintenanceBasis`): `shots` (default), `both` — the limit that is worse off decides, and when level the one with less left (days of use vs calendar days); `dueBy` says which — and `days`, the pre-0.23 behaviour. `maintenanceStatus()` puts overdue jobs first, then the least left.
+
+Not done: weighting shots (a long pour-over profile is not a ristretto), and reading the machine's lifetime counter (`mileage`) to notice shots that have dropped out of the history list.
+
 ## Ideas not done yet
 
 - Read the Portal's status byte on a real unit to decide whether it is a battery percentage.

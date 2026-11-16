@@ -296,6 +296,8 @@ try {
   await narrow.evaluate(async () => {
     const day = 86400000;
     await window.__pb.store.setSetting('maintenance', { weekly: [Date.now() - 5 * day], monthly: [Date.now() - 36 * day], deep: [Date.now() - 62 * day] });
+    // … and the shots the machine made while the app was closed: about one and a half a day for two months (the schedule counts shots, v0.23)
+    await window.__pb.store.setSetting('machineShotTimes', Array.from({ length: 90 }, (_, i) => Math.round(Date.now() - (i + 0.4) * 0.68 * day)));
   });
   await narrow.reload({ waitUntil: 'networkidle' });
   await narrow.evaluate(() => { window.__pb.settings.aiProvider = 'anthropic'; });

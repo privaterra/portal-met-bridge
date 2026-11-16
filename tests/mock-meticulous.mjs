@@ -99,7 +99,7 @@ const server = http.createServer((req, res) => {
     ? { totalSavedShots: '<img src=x onerror="window.__xss=(window.__xss||0)+1">', byProfile: [{ name: 'Evil <img src=x onerror="window.__xss=(window.__xss||0)+1">', count: '34<img src=x onerror="window.__xss=(window.__xss||0)+1">', profileVersions: '<b>3</b>' }, { name: 'Blooming Espresso', count: 14, profileVersions: 1 }], mileage: '<i onclick="1">109</i>' }
     : { totalSavedShots: 63, byProfile: [{ name: 'Blooming Espresso', count: 34, profileVersions: 3 }, { name: 'Blooming Espresso - Revolver', count: 14, profileVersions: 1 }], mileage: 109 });
   if (req.url === '/api/v1/history/last') { res.setHeader('Content-Type', 'application/json'); return res.end(saved ? JSON.stringify(saved).replace('"motor_speed": 1', '"motor_speed": NaN') : 'null'); }
-  if (req.url === '/api/v1/history') return json(res, { history: saved ? [saved] : [] });
+  if (req.url === '/api/v1/history') return json(res, { history: [...(saved ? [saved] : []), ...(dial.extraHistory || [])] });
   if (req.url === '/api/v1/machine') return json(res, { name: 'MeticulousMock', hostname: 'mock-000001', firmware: '0.2.24-mock', mainVoltage: 120, serial: '000001', color: 'BLACK', batch_number: '0047', build_date: '2026-06-14T06:25:10Z', software_version: '2026-10-31', image_build_channel: 'beta', image_version: '2026M1510-beta', disturbance_resilience: false, disturbance_resilience_supported: true, tare_behavior_supported: true, pour_over_profiles_supported: true, pour_over_profile_schema_version: 1, repository_info: { backend: { branch: 'beta', commit: '0044ec9 - mock' }, firmware: { branch: 'beta', commit: '1891448a - mock' } }, version_history: ['beta-20261031_225605'] });
   const getProfile = req.url.match(/^\/api\/v1\/profile\/get\/([0-9a-zA-Z-]+)$/);
   if (getProfile || req.url === '/api/v1/profile/list?full=true') {
@@ -160,6 +160,7 @@ const server = http.createServer((req, res) => {
         if (Number.isFinite(Number(o.temp))) dial.temp = Number(o.temp);
         if ('mcpDown' in o) dial.mcpDown = !!o.mcpDown; // Meticulous Community answers 503
         if (o.mcpReset) dial.mcpCalls = [];
+        if (Array.isArray(o.extraHistory)) dial.extraHistory = o.extraHistory.filter((t) => Number.isFinite(Number(t))).map((t, i) => ({ id: `extra-${i}`, time: Number(t), name: 'Blooming Espresso' })); // shots pulled while the app was closed: epoch seconds
         if ('hostile' in o) dial.hostile = !!o.hostile; // answer the Wi-Fi and statistics requests with markup in every string (and a string where a number belongs)
         json(res, dial);
       } catch (e) { res.statusCode = 400; json(res, { error: e.message }); }

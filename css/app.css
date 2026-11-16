@@ -648,7 +648,7 @@ table.refcal td.actions { white-space: nowrap; text-align: right; }
 .seg .btn:first-child { border-radius: 3px 0 0 3px; margin-left: 0; }
 .seg .btn:last-child { border-radius: 0 3px 3px 0; }
 .seg .btn[aria-pressed="true"] { background: var(--cobalt); border-color: var(--cobalt); color: #fff; }
-#heat-brew-info:empty, .inline-field[hidden], #tp-tiles[hidden] { display: none; }
+#heat-brew-info:empty, #maint-basis-note:empty, .inline-field[hidden], #tp-tiles[hidden] { display: none; }
 table.hist td.num small, table.hist th small { color: var(--ink-3); font-size: 11px; font-weight: 400; }
 table.hist td.data .tag { white-space: nowrap; }
 table.tp-analysis th small { display: block; white-space: normal; max-width: 180px; margin-left: auto; }
@@ -662,3 +662,11 @@ table.tp-analysis td.hi::after { content: " ▴"; font-size: 9px; }
 #tp-an-status:empty { display: none; }
 #tp-cmp-chart-temp { min-height: 300px; }
 #tp-cmp-chart-power { min-height: 220px; }
+
+/* ---- v0.23: the cleaning schedule counted in shots ---- */
+table.maint td.used { white-space: nowrap; min-width: 120px; }
+.maint-bar { height: 4px; margin-top: 5px; background: var(--paper-3); border-radius: 2px; overflow: hidden; max-width: 140px; }
+.maint-bar > i { display: block; height: 100%; background: var(--ok); }
+.maint-bar[data-state="soon"] > i { background: var(--amber); }
+.maint-bar[data-state="due"] > i { background: var(--bad); }
+table.maint td:nth-child(4) { min-width: 190px; }

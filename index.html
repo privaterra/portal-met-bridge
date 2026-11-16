@@ -10,7 +10,7 @@
   <title>portal-met-bridge</title>
   <meta name="description" content="Meticulous & Belka Portal conductivity data visualization & analysis: records, visualizes and analyzes the data produced by a Meticulous espresso machine and a Belka Portal conductivity sensor, shot by shot.">
   <link rel="stylesheet" href="vendor/uPlot.min.css" />
-  <link rel="stylesheet" href="css/app.css?v=0.22.0" />
+  <link rel="stylesheet" href="css/app.css?v=0.23.0" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M4 26 L10 8 L16 20 L22 6 L28 26' fill='none' stroke='%232447B8' stroke-width='3' stroke-linejoin='round'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -214,6 +214,16 @@
           <p class="hint" id="machine-via-note"></p>
           <h3>Cleaning &amp; maintenance</h3>
           <label class="check"><input type="checkbox" id="set-maintenance" checked /> <span>Show the Meticulous cleaning &amp; maintenance schedule — adds a <em>Cleaning &amp; maintenance</em> part to the <button class="linkish" data-goto="machine">Machine</button> tab, with the date of each cleaning, a reminder of the next one, and the state of the piston after every brew</span></label>
+          <label class="field"><span>A cleaning is due</span>
+            <select id="set-maint-basis">
+              <option value="shots" selected>by the shots made — the more the machine is used, the sooner</option>
+              <option value="both">by the shots made or by the calendar, whichever comes first</option>
+              <option value="days">by the calendar only (days passed)</option>
+            </select>
+          </label>
+          <label class="field narrow"><span>Shots in a day of use</span><input id="set-maint-rate" type="number" min="0.5" max="30" step="0.5" value="2" /></label>
+          <p class="hint" id="maint-basis-note"></p>
+          <p class="hint">Meticulous gives its schedule in weeks and months. Counted by shots, a week is seven <em>days of use</em> and a day of use is the number of shots entered above: at two a day the weekly cleaning is due after 14 shots, whether those take three days or three weeks. Every shot counts — the brews recorded here and, read when the machine connects, the ones in the machine's own history that were pulled while this page was closed. The date shown for a job is an estimate from your pace over the last 14 days.</p>
           <p class="hint">The schedule is the one Meticulous publishes under <a href="https://meticuloushome.com/pages/maintenance-and-repairs" target="_blank" rel="noopener noreferrer">Maintenance and Repairs</a> (weekly internal cleaning, monthly chamber cleaning, deep cleaning every three months). The routine wipe-down after every shot and the daily drip-tray and shower-screen flush are not tracked.</p>
         </div>
         </details>
@@ -789,7 +799,7 @@
         <p class="maint-next" id="maint-next" data-state="never"></p>
         <div class="hist-wrap">
           <table class="maint" id="maint-table">
-            <thead><tr><th>What and when</th><th>Last done</th><th>Next due</th><th class="num" title="Brews recorded by this app since it was last done">Brews since</th><th>Enter the date and time</th></tr></thead>
+            <thead><tr><th>What and when</th><th>Last done</th><th title="Shots made since it was last done — recorded here or found in the machine's history — against the number it is due after">Shots since</th><th>Next due</th><th>Enter the date and time</th></tr></thead>
             <tbody id="maint-rows"></tbody>
           </table>
         </div>
@@ -1409,6 +1419,6 @@
   </dialog>
 
   <div class="toast" id="toast" hidden></div>
-  <script type="module" src="js/main.js?v=0.22.0"></script>
+  <script type="module" src="js/main.js?v=0.23.0"></script>
 </body>
 </html>

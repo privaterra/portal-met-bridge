@@ -2,8 +2,15 @@
 // it was last done, the reminder of what comes next, and a check of the piston
 // after every brew. Pure: no DOM, no network, so it is unit-tested.
 //
-// The schedule is the one Meticulous publishes (MAINTENANCE_SOURCE). The
-// routine cleaning — after every shot, and the daily / as-required drip tray
+// The schedule is the one Meticulous publishes (MAINTENANCE_SOURCE), in weeks
+// and months. A machine that makes six shots a day needs its weekly cleaning
+// sooner than one that makes six a week, so the schedule is counted in use,
+// not only in days passed: a "day of use" is a number of shots (two unless
+// changed), a week is seven of those, and a job is due when that many shots
+// have been made since it was last done. The calendar can be kept as a second
+// limit, or as the only one (MAINTENANCE_BASES).
+//
+// The routine cleaning — after every shot, and the daily / as-required drip tray
 // and shower-screen flush — is shown for reference but not tracked: only the
 // weekly, monthly and three-monthly jobs have a date and a reminder.
 
@@ -125,12 +132,75 @@ export function addInterval(ms, every) {
   return d.getTime();
 }
 
+/** How a job's next date is worked out. */
+export const MAINTENANCE_BASES = {
+  shots: { label: 'by the shots made', hint: 'A job is due when the shots made since it was last done reach its number.' },
+  both: { label: 'by the shots made or by the calendar, whichever comes first', hint: 'A job is due when the shots made since it was last done reach its number, or on its calendar date if that comes first.' },
+  days: { label: 'by the calendar only', hint: 'A job is due on its calendar date, however much the machine was used.' },
+};
+export const MAINTENANCE_BASIS_DEFAULT = 'shots';
+/** The shots that count as one day of use, unless Settings says otherwise. */
+export const SHOTS_PER_DAY_DEFAULT = 2;
+/** The pace — shots a day — is taken over this many days. */
+export const PACE_WINDOW_DAYS = 14;
+const SAME_SHOT_MS = 45000; // the app's record of a shot and the machine's own are the same shot when they start this close together
+
+export const cleanBasis = (x) => (Object.prototype.hasOwnProperty.call(MAINTENANCE_BASES, x) ? x : MAINTENANCE_BASIS_DEFAULT);
+/** Shots in a day of use: a number from 0.5 to 30, else the default. */
+export function cleanShotsPerDay(x) {
+  const n = Number(x);
+  return Number.isFinite(n) && n >= 0.5 && n <= 30 ? Math.round(n * 10) / 10 : SHOTS_PER_DAY_DEFAULT;
+}
+/** The days of use a schedule interval stands for: a week is 7, a month 30, three months 90. */
+export const intervalDays = (every) => (every?.days || 0) + (every?.months || 0) * 30;
+/** The shots after which a job is due: its days of use × the shots in a day of use. */
+export const shotBudget = (task, shotsPerDay) => Math.max(1, Math.round(intervalDays(task.every) * cleanShotsPerDay(shotsPerDay)));
+
+/** Shot times from storage or the machine, brought to whole milliseconds: newest first, bounded, nothing from the future. */
+export function cleanShotTimes(raw, { now = Date.now(), max = 5000 } = {}) {
+  const xs = Array.isArray(raw) ? raw : [];
+  return [...new Set(xs.map((x) => Number(x)).filter((x) => Number.isFinite(x) && x > 0 && x <= now + DAY).map((x) => Math.round(x)))].sort((a, b) => b - a).slice(0, max);
+}
+
+/**
+ * When every shot was made, oldest first: the brews this app recorded (not
+ * demo shots, not a recording in progress) and the machine's own history,
+ * counted once where both know the same shot.
+ */
+export function shotTimes(shots, machineTimes = []) {
+  const own = (shots || []).filter((x) => x && !x.inProgress && x.source !== 'demo' && Number.isFinite(Number(x.startedAt)) && Number(x.startedAt) > 0).map((x) => Number(x.startedAt));
+  const all = [...own, ...(machineTimes || []).map(Number).filter((x) => Number.isFinite(x) && x > 0)].sort((a, b) => a - b);
+  const out = [];
+  for (const t of all) if (!out.length || t - out[out.length - 1] > SAME_SHOT_MS) out.push(t);
+  return out;
+}
+
+/** Shots a day over the last `windowDays` — over fewer days when the first known shot is more recent than that. 0 when there were none. */
+export function recentPace(times, { now = Date.now(), windowDays = PACE_WINDOW_DAYS } = {}) {
+  const from = now - windowDays * DAY;
+  const n = (times || []).filter((t) => t > from && t <= now).length;
+  if (!n) return 0;
+  const first = Math.min(...times);
+  return n / Math.min(windowDays, Math.max(1, (now - first) / DAY));
+}
+
+const RANK = { ok: 0, soon: 1, due: 2 };
+
 /**
  * Where one job stands. `lastAt` is the last time it — or a bigger job that
  * includes it (a deep cleaning covers the chamber and the internal cleaning) —
  * was done. state: 'never' (no date entered) | 'ok' | 'soon' | 'due' (overdue).
+ *
+ * opts: now · shots (the app's brews) · machineTimes (the machine's history, ms)
+ *       · basis ('shots' | 'both' | 'days') · shotsPerDay (the shots in a day of use)
+ *
+ * By shots: due once `budget` shots were made since lastAt; "soon" from the
+ * job's soonDays of use before that. `dueAt` is then an estimate — the shots
+ * left at the recent pace — or null when no shots were made lately; once the
+ * job is due it is the moment the last of those shots was made.
+ * `dueBy` says which limit the state and the date come from.
  */
-export function taskStatus(task, log, { now = Date.now(), shots = [] } = {}) {
+export function taskStatus(task, log, { now = Date.now(), shots = [], machineTimes = [], basis = MAINTENANCE_BASIS_DEFAULT, shotsPerDay = SHOTS_PER_DAY_DEFAULT, times = null } = {}) {
   const clean = cleanMaintenanceLog(log, { now });
   const own = clean[task.id][0] ?? null;
   let lastAt = own;
@@ -143,21 +213,62 @@ export function taskStatus(task, log, { now = Date.now(), shots = [] } = {}) {
       coveredBy = big.id;
     }
   }
-  if (lastAt == null) return { id: task.id, state: 'never', lastAt: null, ownAt: null, coveredBy: null, dueAt: null, daysLeft: null, dueInDays: null, brewsSince: null };
-  const dueAt = addInterval(lastAt, task.every);
-  const daysLeft = (dueAt - now) / DAY;
-  const dueInDays = calendarDays(now, dueAt); // whole days on the calendar: done now + a week reads "in 7 days"
-  const state = daysLeft < 0 ? 'due' : daysLeft <= (task.soonDays ?? 1) ? 'soon' : 'ok';
-  const brewsSince = (shots || []).filter((s) => Number(s?.startedAt) > lastAt && !s.inProgress && s.source !== 'demo').length;
-  return { id: task.id, state, lastAt, ownAt: own, coveredBy, dueAt, daysLeft, dueInDays, brewsSince };
+  basis = cleanBasis(basis);
+  const perDay = cleanShotsPerDay(shotsPerDay);
+  const budget = shotBudget(task, perDay);
+  const days = intervalDays(task.every);
+  const base = { id: task.id, basis, lastAt, ownAt: own, coveredBy, budget, shotsPerDay: perDay, intervalDays: days };
+  if (lastAt == null) return { ...base, state: 'never', dueAt: null, dueBy: null, daysLeft: null, dueInDays: null, leftDays: null, shotsSince: null, brewsSince: null, shotsLeft: null, usedDays: null, pace: null, reachedAt: null, calendarDueAt: null, shotsDueAt: null };
+  const all = times || shotTimes(shots, machineTimes);
+  const since = all.filter((t) => t > lastAt && t <= now);
+  const shotsSince = since.length;
+  const shotsLeft = budget - shotsSince;
+  const pace = recentPace(all, { now });
+  // the calendar
+  const calendarDueAt = addInterval(lastAt, task.every);
+  const calDaysLeft = (calendarDueAt - now) / DAY;
+  const calState = calDaysLeft < 0 ? 'due' : calDaysLeft <= (task.soonDays ?? 1) ? 'soon' : 'ok';
+  // the shots
+  const soonShots = Math.max(1, Math.round((task.soonDays ?? 1) * perDay));
+  const shotsState = shotsLeft <= 0 ? 'due' : shotsLeft <= soonShots ? 'soon' : 'ok';
+  const reachedAt = shotsLeft <= 0 ? since[budget - 1] : null; // the shot that used the last of the allowance
+  const shotsDueAt = shotsLeft <= 0 ? reachedAt : pace > 0 ? now + (shotsLeft / pace) * DAY : null;
+  const usageLeftDays = shotsLeft / perDay;
+  let dueBy = basis === 'days' ? 'days' : 'shots';
+  if (basis === 'both') {
+    // the limit that is worse off decides; level, the one with less left
+    if (RANK[calState] > RANK[shotsState] || (RANK[calState] === RANK[shotsState] && calDaysLeft < usageLeftDays)) dueBy = 'days';
+  }
+  const state = dueBy === 'days' ? calState : shotsState;
+  const dueAt = dueBy === 'days' ? calendarDueAt : (shotsDueAt ?? (basis === 'both' ? calendarDueAt : null));
+  return {
+    ...base,
+    state,
+    dueBy,
+    dueAt,
+    daysLeft: dueAt == null ? null : (dueAt - now) / DAY,
+    dueInDays: dueAt == null ? null : calendarDays(now, dueAt), // whole days on the calendar: done now + a week reads "in 7 days"
+    leftDays: dueBy === 'days' ? calDaysLeft : usageLeftDays, // what is left, in days (of the calendar or of use): the job with the least comes next
+    shotsSince,
+    brewsSince: shotsSince,
+    shotsLeft,
+    usedDays: Math.round((shotsSince / perDay) * 10) / 10,
+    pace,
+    reachedAt,
+    calendarDueAt,
+    shotsDueAt,
+  };
 }
 
-/** Every job's status plus the one that comes next (overdue first, then the earliest due date). */
+/** Every job's status plus the one that comes next (overdue first, then the one with the least left). */
 export function maintenanceStatus(log, opts = {}) {
-  const tasks = MAINTENANCE_TASKS.map((t) => ({ task: t, ...taskStatus(t, log, opts) }));
-  const dated = tasks.filter((t) => t.dueAt != null).sort((a, b) => a.dueAt - b.dueAt);
+  const times = opts.times || shotTimes(opts.shots, opts.machineTimes);
+  const now = opts.now ?? Date.now();
+  const tasks = MAINTENANCE_TASKS.map((t) => ({ task: t, ...taskStatus(t, log, { ...opts, times }) }));
+  const dated = tasks.filter((t) => t.lastAt != null).sort((a, b) => RANK[b.state] - RANK[a.state] || a.leftDays - b.leftDays);
   const never = tasks.filter((t) => t.state === 'never');
-  return { tasks, next: dated[0] || null, never, allNever: never.length === tasks.length };
+  const own = shotTimes(opts.shots).length;
+  return { tasks, next: dated[0] || null, never, allNever: never.length === tasks.length, basis: cleanBasis(opts.basis), shotsPerDay: cleanShotsPerDay(opts.shotsPerDay), pace: recentPace(times, { now }), counted: { total: times.length, own, machine: Math.max(0, times.length - own) } };
 }
 
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
@@ -181,17 +292,45 @@ export function daysText(days) {
   return n > 0 ? `in ${plural(n, 'day')}` : `${plural(-n, 'day')} ago`;
 }
 
+const paceText = (pace) => `${pace >= 10 ? pace.toFixed(0) : pace.toFixed(1)} a day`;
+
 /** The reminder line: { state, text } — what to do next, in a sentence. */
 export function maintenanceReminder(log, opts = {}) {
   const st = maintenanceStatus(log, opts);
   const fmtDate = opts.fmtDate || ((ms) => new Date(ms).toLocaleDateString());
   if (st.allNever) return { state: 'never', text: 'No cleaning dates entered yet — enter when you last did the weekly, monthly and deep cleaning to get reminders.' };
   const n = st.next;
-  const brews = n.brewsSince != null ? ` · ${plural(n.brewsSince, 'brew')} since it was last done` : '';
   const others = st.tasks.filter((t) => t !== n && t.state === 'due').map((t) => t.task.name.toLowerCase());
   const tail = `${others.length ? ` Also overdue: ${others.join(', ')}.` : ''}${st.never.length ? ` No date yet for: ${st.never.map((t) => t.task.name.toLowerCase()).join(', ')}.` : ''}`;
-  if (n.state === 'due') return { state: 'due', text: `Overdue: ${n.task.name} — it was due ${daysText(n.dueInDays)} (${fmtDate(n.dueAt)})${brews}.${tail}` };
-  return { state: n.state, text: `Next: ${n.task.name} — due ${daysText(n.dueInDays)} (${fmtDate(n.dueAt)})${brews}.${tail}` };
+  const since = `${plural(n.shotsSince, 'shot')} since it was last done`;
+  if (n.dueBy === 'days') {
+    const used = n.basis === 'both' ? ` · ${n.shotsSince} of ${n.budget} shots` : ` · ${since}`;
+    if (n.state === 'due') return { state: 'due', text: `Overdue: ${n.task.name} — it was due ${daysText(n.dueInDays)} (${fmtDate(n.dueAt)})${used}.${tail}` };
+    return { state: n.state, text: `Next: ${n.task.name} — due ${daysText(n.dueInDays)} (${fmtDate(n.dueAt)})${used}.${tail}` };
+  }
+  if (n.state === 'due') {
+    const over = n.shotsSince - n.budget;
+    return { state: 'due', text: `Overdue: ${n.task.name} — ${since}, ${over > 0 ? `${over} more than the ${n.budget}` : `the ${n.budget}`} it is due after${n.reachedAt ? ` (reached ${fmtDate(n.reachedAt)})` : ''}.${tail}` };
+  }
+  const when = n.shotsDueAt != null ? ` · about ${fmtDate(n.shotsDueAt)} at your pace of ${paceText(n.pace)}` : ` · no date: no shots in the last ${PACE_WINDOW_DAYS} days`;
+  const latest = n.basis === 'both' ? ` · ${fmtDate(n.calendarDueAt)} at the latest` : '';
+  return { state: n.state, text: `Next: ${n.task.name} — due after ${plural(n.shotsLeft, 'more shot')} (${n.shotsSince} of ${n.budget} since it was last done)${when}${latest}.${tail}` };
+}
+
+/** The same in a few words, for the rail. */
+export function maintenanceShort(st) {
+  if (st.allNever || !st.next) return 'Cleaning & maintenance: enter your dates';
+  const n = st.next;
+  const name = n.task.name.toLowerCase();
+  if (n.dueBy === 'days') return n.state === 'due' ? `Overdue: ${name} (${daysText(n.dueInDays)})` : `Next cleaning: ${name} ${daysText(n.dueInDays)}`;
+  const over = n.shotsSince - n.budget;
+  return n.state === 'due' ? `Overdue: ${name} (${over > 0 ? `${plural(over, 'shot')} over` : 'due now'})` : `Next cleaning: ${name} after ${plural(n.shotsLeft, 'more shot')}`;
+}
+
+/** What the schedule comes to in shots, as a sentence: "With 2 shots a day: internal cleaning every 14 shots, …". */
+export function scheduleText(shotsPerDay) {
+  const perDay = cleanShotsPerDay(shotsPerDay);
+  return `With ${perDay === 1 ? '1 shot' : `${perDay} shots`} in a day of use: ${MAINTENANCE_TASKS.map((t) => `${t.name.toLowerCase()} every ${shotBudget(t, perDay)} shots (${intervalDays(t.every)} days of use)`).join(', ')}.`;
 }
 
 // ------------------------------------------------------------------ piston --
